@@ -1,0 +1,147 @@
+'use client';
+
+/**
+ * Tarjeta de producto del catálogo.
+ *
+ * Muestra lo que de verdad decide una importación: cuánto cuesta traerlo, a
+ * cuánto se venderá con la regla de margen DEL USUARIO y cuánto gana por unidad.
+ * Si el artículo viene del catálogo de muestra, se dice con una etiqueta.
+ */
+import { Star, TrendingUp, Truck } from 'lucide-react';
+import { Badge as UiBadge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { formatCurrency, formatNumber, cn } from '@/lib/utils';
+import type { CatalogRow } from '@/lib/catalog';
+
+export function ProviderBadge({ provider }: { provider: string }) {
+  const map: Record<string, { label: string; className: string }> = {
+    CJ_DROPSHIPPING: { label: 'CJ', className: 'bg-sky-500/15 text-sky-300 border-sky-500/25' },
+    ALIEXPRESS: { label: 'AliExpress', className: 'bg-orange-500/15 text-orange-300 border-orange-500/25' },
+    AMAZON: { label: 'Amazon', className: 'bg-amber-500/15 text-amber-300 border-amber-500/25' },
+  };
+  const spec = map[provider] ?? { label: provider, className: 'bg-white/10 text-foreground border-white/15' };
+  return <span className={cn('rounded-md border px-1.5 py-0.5 text-[10px] font-semibold', spec.className)}>{spec.label}</span>;
+}
+
+export function CatalogCard({
+  item,
+  onOpen,
+  onImport,
+}: {
+  item: CatalogRow;
+  onOpen: (item: CatalogRow) => void;
+  onImport: (item: CatalogRow) => void;
+}) {
+  const sales = item.ordersCount ?? 0;
+  const estrellas = item.rating ? Math.round(item.rating * 10) / 10 : null;
+
+  return (
+    <div data-tour="catalog:card" className="group relative flex flex-col overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.02] transition-all hover:border-indigo-400/30 hover:bg-white/[0.04] hover:shadow-xl hover:shadow-indigo-500/5">
+      <button type="button" onClick={() => onOpen(item)} className="relative block aspect-square w-full overflow-hidden bg-black/30 text-left">
+        {item.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={item.imageUrl}
+            alt={item.title}
+            loading="lazy"
+            className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
+          />
+        ) : (
+          <span className="grid size-full place-items-center text-[11px] text-muted-foreground">Sin imagen</span>
+        )}
+
+        <span className="absolute left-2 top-2 flex flex-wrap gap-1">
+          <ProviderBadge provider={item.provider} />
+          {item.source === 'sample' && (
+            <span className="rounded-md border border-white/15 bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground backdrop-blur">
+              MUESTRA
+            </span>
+          )}
+        </span>
+
+        <span className="absolute right-2 top-2 flex flex-col items-end gap-1">
+          {item.isTrending && (
+            <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 backdrop-blur">
+              <TrendingUp className="size-3" /> Tendencia
+            </span>
+          )}
+          {item.freeShipping && (
+            <span className="rounded-md border border-indigo-500/25 bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-300 backdrop-blur">
+              Envío gratis
+            </span>
+          )}
+        </span>
+      </button>
+
+      <div className="flex flex-1 flex-col gap-2 p-3">
+        <button type="button" onClick={() => onOpen(item)} className="line-clamp-2 text-left text-[13px] font-medium leading-snug hover:text-indigo-200">
+          {item.title}
+        </button>
+
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          {estrellas !== null && (
+            <span className="inline-flex items-center gap-1 text-amber-300">
+              <Star className="size-3 fill-current" /> {estrellas.toFixed(1)}
+            </span>
+          )}
+          {sales > 0 && <span>{formatNumber(sales)} pedidos</span>}
+          {item.shipFrom && <span>desde {item.shipFrom}</span>}
+          {item.shippingMinDays !== null && (
+            <span className="inline-flex items-center gap-1">
+              <Truck className="size-3" />
+              {item.shippingMinDays}-{item.shippingMaxDays ?? item.shippingMinDays + 7} d
+            </span>
+          )}
+        </div>
+
+        <div className="mt-auto space-y-2">
+          <div className="flex items-end justify-between gap-2">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Coste proveedor</div>
+              <div className="text-sm font-semibold tabular-nums">{formatCurrency(item.costPrice, item.currency)}</div>
+              {item.fx?.converted && item.costPriceEur !== undefined && (
+                <div className="text-[10px] text-muted-foreground" title={`Tipo de cambio configurado: 1 ${item.currency} = ${item.fx.rate} €`}>
+                  ≈ {formatCurrency(item.costPriceEur)} (cambio {item.fx.rate})
+                </div>
+              )}
+            </div>
+            {item.sellingPrice !== undefined && (
+              <div className="text-right">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Tu precio de venta</div>
+                <div className="text-base font-semibold tabular-nums text-indigo-200">{formatCurrency(item.sellingPrice)}</div>
+              </div>
+            )}
+          </div>
+
+          {item.profit !== undefined && (
+            <div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-2 py-1.5 text-[11px]">
+              <span className="text-emerald-300/90">Beneficio por unidad</span>
+              <span className="font-semibold tabular-nums text-emerald-300">
+                +{formatCurrency(item.profit)} · {Math.round(item.profitMarginPct ?? 0)}%
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="gradient" className="flex-1" onClick={() => onImport(item)}>
+              Importar
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onOpen(item)}>
+              Ver ficha
+            </Button>
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span className={item.stock > 0 ? '' : 'text-amber-400'}>
+              {item.stock > 0 ? `${formatNumber(item.stock)} en stock` : 'Sin stock'}
+              {item.importedCount ? ` · importado ${item.importedCount}×` : ''}
+            </span>
+            {item.source === 'sample' && <UiBadge variant="outline" className="px-1.5 py-0 text-[9px]">datos de ejemplo</UiBadge>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default CatalogCard;

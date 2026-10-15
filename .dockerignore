@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Nada de esto debe entrar en las imágenes Docker.
+#  IMPORTANTE: los .env con secretos NUNCA se copian dentro de una imagen
+#  (quedarían visibles en cualquier `docker history`).
+# ─────────────────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+.env.local
+.env.local.dev.bak
+
+node_modules
+.next
+out
+dist
+build
+coverage
+.venv
+__pycache__
+*.pyc
+
+# Documentación y capturas (no hacen falta para ejecutar)
+docs
+backups
+*.md
+!README.md
+
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+npm-debug.log*
+*.log
+scripts/capture-screenshots.py
+scripts/build-gallery.py
+
+# Entorno local del scraper
+services/scraper/.venv
+services/scraper/__pycache__
+services/scraper/.pytest_cache
+services/scraper/test_*.py

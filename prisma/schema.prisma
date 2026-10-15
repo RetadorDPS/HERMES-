@@ -1,0 +1,809 @@
+// ════════════════════════════════════════════════════════════════════════════
+//  DropshipPilot — Prisma Schema
+//  Plataforma SaaS de dropshipping automatizado (clon AutoDS)
+//  Proveedor: PostgreSQL
+// ════════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── ENUMS ────────────────────────────────────────
+
+enum UserRole {
+  OWNER
+  ADMIN
+  MEMBER
+  SUPPORT
+}
+
+enum PlanTier {
+  TRIAL
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+}
+
+enum SupplierType {
+  ALIEXPRESS
+  CJ_DROPSHIPPING
+  AMAZON
+  ALIBABA
+  TEMU
+  /// Cualquier otra tienda o mayorista (importación por URL con extractor genérico)
+  OTHER
+}
+
+enum StorePlatform {
+  SHOPIFY
+  WOOCOMMERCE
+}
+
+enum StoreStatus {
+  PENDING
+  CONNECTED
+  ERROR
+  DISCONNECTED
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  OUT_OF_STOCK
+  ERROR
+  ARCHIVED
+}
+
+enum SyncType {
+  IMPORT
+  PRICE_UPDATE
+  STOCK_UPDATE
+  FULL_REFRESH
+  ORDER_PUSH
+  DELETE
+}
+
+enum SyncStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SUPPLIER_PURCHASED
+  SUPPLIER_ERROR
+  SHIPPED
+  DELIVERED
+  CANCELED
+  REFUNDED
+}
+
+enum FulfillmentStatus {
+  UNFULFILLED
+  PARTIAL
+  FULFILLED
+  RESTOCKED
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  DEBUG
+}
+
+// ───────────────────────────── USERS / SAAS ─────────────────────────────────
+
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  name          String?
+  passwordHash  String?
+  image         String?
+  role          UserRole      @default(OWNER)
+  plan          PlanTier      @default(TRIAL)
+  timezone      String        @default("Europe/Madrid")
+  lastLoginAt   DateTime?
+  /// Null = email pendiente de verificar (obligatorio en producción)
+  emailVerifiedAt DateTime?
+  /// Registro de alta y último acceso (para auditoría y antifraude)
+  signupIp      String?
+  lastIp        String?
+  /// Tutorial guiado del cliente: 0 = sin decidir · 1 = en curso · 2 = visto o saltado
+  tourVersion    Int          @default(0)
+  tourSeenAt     DateTime?
+  /// Tutorial del operador (zona de Administración), misma escala
+  adminTourVersion Int        @default(0)
+  adminTourSeenAt  DateTime?
+  /// Primeros pasos: fecha en la que el cliente ocultó la lista (null = visible)
+  onboardingHiddenAt DateTime?
+  /// Recordatorio de primeros pasos enviado por correo (null = aún no se le ha enviado)
+  onboardingNudgedAt DateTime?
+  /// Segundo factor (TOTP): secreto cifrado y fecha de activación
+  totpSecretEnc  String?
+  totpEnabledAt  DateTime?
+  /// Códigos de recuperación de un solo uso (hasheados)
+  totpRecoveryCodes String[]
+  /// Avisos por correo (el usuario los puede desactivar en Configuración)
+  alertSyncFailures  Boolean @default(true)
+  alertStockChanges  Boolean @default(true)
+  alertWebhookErrors Boolean @default(true)
+  alertBilling       Boolean @default(true)
+  /// Correos de acompañamiento (bienvenida con primeros pasos y recordatorio)
+  alertOnboarding    Boolean @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  verificationTokens VerificationToken[]
+  supplierAccounts   SupplierAccount[]
+  auditLogs          AuditLog[]
+  stores        Store[]
+  products      Product[]
+  subscription  Subscription?
+  pricingRules  PricingRule[]
+  syncLogs      SyncLog[]
+  orders        Order[]
+
+  @@index([email])
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  /// Lemon Squeezy (vendedor legal alternativo: cobra sin alta de autónomo)
+  lemonCustomerId      String?
+  lemonSubscriptionId  String?            @unique
+  lemonVariantId       String?
+  lemonStatus          String?
+  plan                 PlanTier           @default(TRIAL)
+  status               SubscriptionStatus @default(TRIALING)
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  creditsUsed          Int                @default(0)
+  creditsLimit         Int                @default(200)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([stripeSubscriptionId])
+  @@index([lemonSubscriptionId])
+}
+
+/// Reglas de margen configurables por usuario (global, por categoría o por producto).
+model PricingRule {
+  id          String        @id @default(cuid())
+  userId      String
+  name        String
+  /// Porcentaje de markup. Ej: 45.00 => precio_final = costo * 1.45
+  markupPct   Decimal       @default(40) @db.Decimal(6, 2)
+  /// Tarifa fija añadida al precio final (fee de marketplace + mano de obra)
+  fixedFee    Decimal       @default(0) @db.Decimal(10, 2)
+  /// Suelo de beneficio absoluto: nunca vender por debajo de costo + minProfit
+  minProfit   Decimal       @default(1.5) @db.Decimal(10, 2)
+  /// Precio final nunca por debajo / encima de estos límites
+  minPrice    Decimal?      @db.Decimal(10, 2)
+  maxPrice    Decimal?      @db.Decimal(10, 2)
+  /// Redondeo psicológico: 0.99, 0.95, 0.00
+  roundTo     Decimal?      @default(0.99) @db.Decimal(4, 2)
+  /// Aplica al costo de envío del proveedor dentro del cálculo
+  includeShipping Boolean   @default(true)
+  applyToCategory String?
+  isDefault   Boolean       @default(false)
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products Product[]
+
+  @@index([userId, isActive])
+}
+
+// ───────────────────────────── SUPPLIERS ────────────────────────────────────
+
+model Supplier {
+  id            String       @id @default(cuid())
+  type          SupplierType
+  name          String
+  baseUrl       String
+  logoUrl       String?
+  isEnabled     Boolean      @default(true)
+  /// Credenciales API del proveedor (CJ Dropshipping, etc.) cifradas
+  apiKeyEnc     String?
+  apiSecretEnc  String?
+  /// Selectores / config del extractor para soportar cambios de DOM sin deploy
+  scraperConfig Json?
+  /// Proxies dedicados a este proveedor
+  proxyPool     String[]
+  rateLimitRpm  Int          @default(60)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  products      Product[]
+  orders        Order[]
+  syncLogs      SyncLog[]
+
+  @@unique([type, name])
+}
+
+// ───────────────────────────── STORES ───────────────────────────────────────
+
+model Store {
+  id             String        @id @default(cuid())
+  userId         String
+  platform       StorePlatform
+  name           String
+  domain         String
+  /// Token de acceso Admin API (Shopify) o consumer key (Woo) — cifrado en reposo
+  accessTokenEnc String?
+  /// WooCommerce consumer secret
+  consumerSecretEnc String?
+  apiVersion     String        @default("2025-01")
+  scopes         String[]
+  status         StoreStatus   @default(PENDING)
+  lastPingAt     DateTime?
+  lastError      String?
+  /// Config de la tienda: moneda, idioma, markup override, importación automática
+  settings       Json?
+  webhookSecret  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  products     Product[]
+  orders       Order[]
+  syncLogs     SyncLog[]
+  webhookEvents WebhookEvent[]
+
+  @@unique([userId, domain])
+  @@index([userId, status])
+}
+
+// ───────────────────────────── PRODUCTS ─────────────────────────────────────
+
+model Product {
+  id              String        @id @default(cuid())
+  userId          String
+  storeId         String?
+  supplierId      String
+  pricingRuleId   String?
+
+  /// Identidad en el proveedor
+  supplierProductId String?
+  sourceUrl       String
+  supplier        Supplier?     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  // ── Contenido
+  title           String
+  seoTitle        String?
+  description     String        @db.Text
+  bullets         String[]
+  category        String?
+  categoryPath    String[]
+  tags            String[]
+  brand           String?
+
+  // ── Precios (siempre en la moneda base del proveedor, normalmente USD)
+  currency        String        @default("USD")
+  costPrice       Decimal       @db.Decimal(10, 2)
+  shippingCost    Decimal       @default(0) @db.Decimal(10, 2)
+  sellingPrice    Decimal       @db.Decimal(10, 2)
+  compareAtPrice  Decimal?      @db.Decimal(10, 2)
+  marginPct       Decimal       @default(40) @db.Decimal(6, 2)
+  profitAmount    Decimal       @default(0) @db.Decimal(10, 2)
+
+  // ── Stock
+  stockTotal      Int           @default(0)
+  trackInventory  Boolean       @default(true)
+
+  // ── Métricas de proveedor
+  ordersCount     Int           @default(0)
+  ratingAvg       Float         @default(0)
+  ratingCount     Int           @default(0)
+
+  // ── Estado
+  status          ProductStatus @default(DRAFT)
+  isMonitored     Boolean       @default(true)
+  autoUpdatePrice Boolean       @default(true)
+  autoUpdateStock Boolean       @default(true)
+
+  // ── Sincronización con la tienda destino
+  storeProductId  String?
+  storeHandle     String?
+  lastSyncedAt    DateTime?
+  lastSyncStatus  SyncStatus?
+  lastSyncError   String?
+  /// Hash de {cost, stock, title} para detectar cambios sin golpear la tienda
+  providerHash    String?
+  nextSyncAt      DateTime?
+  syncPriority    Int           @default(5)
+
+  // ── Datos crudos del scraper (auditoría / re-parseo sin re-scrapear)
+  rawPayload      Json?
+  shippingOptions Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store       Store?           @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  pricingRule PricingRule?     @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
+  variants    ProductVariant[]
+  images      ProductImage[]
+  reviews     ProductReview[]
+  orderItems  OrderItem[]
+  syncLogs    SyncLog[]
+
+  @@unique([userId, sourceUrl])
+  @@index([userId, status])
+  @@index([storeId, status])
+  @@index([supplierId, lastSyncedAt])
+  @@index([isMonitored, nextSyncAt])
+}
+
+model ProductVariant {
+  id                String    @id @default(cuid())
+  productId         String
+  supplierVariantId String?
+  sku               String?
+  barcode           String?
+  title             String
+  option1Name       String?
+  option1Value      String?
+  option2Name       String?
+  option2Value      String?
+  option3Name       String?
+  option3Value      String?
+  color              String?
+  size               String?
+  material           String?
+
+  costPrice         Decimal   @db.Decimal(10, 2)
+  shippingCost      Decimal   @default(0) @db.Decimal(10, 2)
+  sellingPrice      Decimal   @db.Decimal(10, 2)
+  compareAtPrice    Decimal?  @db.Decimal(10, 2)
+
+  stock             Int       @default(0)
+  weightGrams       Int?
+  imageUrl          String?
+  position          Int       @default(0)
+  storeVariantId    String?
+  lastSyncedAt      DateTime?
+  isActive          Boolean   @default(true)
+  rawPayload        Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  product   Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+  syncLogs  SyncLog[]
+
+  @@unique([productId, supplierVariantId])
+  @@index([productId, isActive])
+  @@index([storeVariantId])
+}
+
+model ProductImage {
+  id         String  @id @default(cuid())
+  productId  String
+  variantId  String?
+  url        String
+  hdUrl      String?
+  alt        String?
+  position   Int     @default(0)
+  isMain     Boolean @default(false)
+  width      Int?
+  height     Int?
+  createdAt  DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, position])
+}
+
+model ProductReview {
+  id           String   @id @default(cuid())
+  productId    String
+  supplierReviewId String?
+  rating       Int
+  author       String?
+  authorCountry String?
+  text         String?  @db.Text
+  images       String[]
+  helpfulCount Int      @default(0)
+  variantSku   String?
+  reviewedAt   DateTime?
+  isImported   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, supplierReviewId])
+  @@index([productId, rating])
+}
+
+// ───────────────────────────── ORDERS ───────────────────────────────────────
+
+model Order {
+  id                String            @id @default(cuid())
+  userId            String
+  storeId           String
+  supplierId        String?
+  /// Cuenta de proveedor (API oficial) empleada para comprar el pedido
+  supplierAccountId String?
+
+  storeOrderId      String
+  storeOrderNumber   String
+  externalOrderId   String?
+  status            OrderStatus       @default(PENDING)
+  fulfillmentStatus FulfillmentStatus @default(UNFULFILLED)
+
+  customerName      String?
+  customerEmail     String?
+  customerPhone     String?
+
+  shippingName      String?
+  shippingAddress1  String?
+  shippingAddress2  String?
+  shippingCity      String?
+  shippingProvince  String?
+  shippingCountry   String?
+  shippingZip       String?
+
+  currency          String            @default("USD")
+  subtotal          Decimal           @db.Decimal(10, 2)
+  shippingTotal     Decimal           @default(0) @db.Decimal(10, 2)
+  taxTotal          Decimal           @default(0) @db.Decimal(10, 2)
+  total             Decimal           @db.Decimal(10, 2)
+  /// Coste real pagado al proveedor (para calcular beneficio neto)
+  supplierCost      Decimal           @default(0) @db.Decimal(10, 2)
+  profitAmount      Decimal           @default(0) @db.Decimal(10, 2)
+
+  trackingNumber    String?
+  trackingCompany   String?
+  trackingUrl       String?
+  supplierOrderId   String?
+  supplierOrderStatus String?
+  autoFulfilled     Boolean           @default(false)
+  errorMessage      String?
+  notes             String?           @db.Text
+
+  orderedAt         DateTime          @default(now())
+  pushedToSupplierAt DateTime?
+  shippedAt         DateTime?
+  deliveredAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store    Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  supplier Supplier?   @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  supplierAccount SupplierAccount? @relation(fields: [supplierAccountId], references: [id], onDelete: SetNull)
+  items    OrderItem[]
+
+  @@unique([storeId, storeOrderId])
+  @@index([userId, status])
+  @@index([supplierAccountId])
+  @@index([userId, fulfillmentStatus])
+  @@index([trackingNumber])
+}
+
+model OrderItem {
+  id                String  @id @default(cuid())
+  orderId           String
+  productId         String?
+  variantId         String?
+  supplierVariantId String?
+  storeLineItemId   String?
+
+  title             String
+  sku               String?
+  quantity          Int     @default(1)
+  unitPrice         Decimal @db.Decimal(10, 2)
+  unitCost          Decimal @default(0) @db.Decimal(10, 2)
+  totalPrice        Decimal @db.Decimal(10, 2)
+  imageUrl          String?
+
+  order   Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// ───────────────────────────── SYNC / OBSERVABILITY ─────────────────────────
+
+model SyncLog {
+  id            String      @id @default(cuid())
+  userId        String?
+  storeId       String?
+  supplierId    String?
+  productId     String?
+  variantId     String?
+  type          SyncType
+  status        SyncStatus  @default(QUEUED)
+  level         LogLevel    @default(INFO)
+  message       String
+  /// Detalle del cambio: { field, from, to }
+  changes       Json?
+  beforeState   Json?
+  afterState    Json?
+  durationMs    Int?
+  attempt       Int         @default(1)
+  jobId         String?
+  errorStack    String?     @db.Text
+  createdAt     DateTime    @default(now())
+
+  user     User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store    Store?          @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  supplier Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  product  Product?        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant  ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([productId, createdAt])
+  @@index([type, status])
+  @@index([storeId, status])
+}
+
+/// Espejo en BD de los jobs de BullMQ (permite mostrar la cola en el dashboard
+/// sin necesitar conexión a Redis desde el frontend).
+model SyncJob {
+  id          String     @id @default(cuid())
+  queue       String     @default("sync")
+  jobName     String
+  jobId       String?    @unique
+  productId   String?
+  storeId     String?
+  status      SyncStatus @default(QUEUED)
+  priority    Int        @default(5)
+  progress    Int        @default(0)
+  attempts    Int        @default(0)
+  maxAttempts Int        @default(3)
+  scheduledFor DateTime?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  lastError   String?
+  payload     Json?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([status, scheduledFor])
+  @@index([queue, status])
+}
+
+model WebhookEvent {
+  id         String   @id @default(cuid())
+  storeId    String?
+  topic      String
+  externalId String?
+  signature  String?
+  payload    Json
+  processed  Boolean  @default(false)
+  processedAt DateTime?
+  error      String?
+  receivedAt DateTime @default(now())
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, externalId])
+  @@index([topic, processed])
+}
+
+/// Caché de cotizaciones de envío por proveedor → país (evita re-scrapear).
+model ShippingQuote {
+  id            String   @id @default(cuid())
+  supplierId    String?
+  productId     String?
+  destinationCountry String
+  method        String
+  carrier       String?
+  cost          Decimal  @db.Decimal(10, 2)
+  currency      String   @default("USD")
+  minDays       Int?
+  maxDays       Int?
+  isTracked     Boolean  @default(false)
+  fetchedAt     DateTime @default(now())
+
+  @@index([productId, destinationCountry])
+  @@index([supplierId, destinationCountry])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Cuentas de usuario: verificación de email, recuperación de contraseña,
+//  conexiones a APIs oficiales de proveedor y auditoría.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum VerificationTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  EMAIL_CHANGE
+}
+
+/// Token de un solo uso enviado por email (verificación o restablecimiento).
+/// Se guarda el HASH, nunca el token en claro.
+model VerificationToken {
+  id        String                @id @default(cuid())
+  userId    String
+  type      VerificationTokenType
+  tokenHash String                @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+enum SupplierAccountStatus {
+  PENDING
+  CONNECTED
+  ERROR
+  DISABLED
+}
+
+/// Conexión de un cliente con la API OFICIAL de un proveedor (AliExpress Open
+/// Platform, CJ Dropshipping, Amazon PA-API...). Sustituye al scraping cuando
+/// está disponible: datos estructurados, sin bloqueos y con compra de pedidos.
+///
+/// Las credenciales se guardan cifradas con AES-256-GCM (ENCRYPTION_KEY) y
+/// NUNCA se devuelven al frontend: sólo se muestra una máscara.
+model SupplierAccount {
+  id          String               @id @default(cuid())
+  userId      String
+  supplierId  String?
+  provider    SupplierType
+  label       String
+  /// JSON de credenciales cifrado (appKey, appSecret, accessToken, apiKey...)
+  credentialsEnc String
+  status      SupplierAccountStatus @default(PENDING)
+  isDefault   Boolean              @default(false)
+  lastTestAt  DateTime?
+  lastError   String?
+  /// País de origen, moneda, margen de envío por defecto…
+  settings    Json?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@unique([userId, provider, label])
+  @@index([userId, status])
+}
+
+/// Trazabilidad de acciones sensibles: accesos, cambios de plan, conexiones
+/// de tiendas/proveedores, exportaciones. Necesario para operar un SaaS.
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  ip        String?
+  userAgent String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+// ───────────────────── CATÁLOGO SERVIDO POR LA PLATAFORMA ────────────────────
+
+/// Credenciales de LA PLATAFORMA para un proveedor (una sola vez para todos los
+/// clientes): así ningún usuario necesita solicitar su propia app a AliExpress.
+/// Se guardan cifradas (AES-256-GCM) y nunca se devuelven al frontend.
+/// Precedencia al resolver un cliente: plataforma → variables de entorno → cuenta
+/// propia del usuario (opcional).
+model PlatformCredential {
+  id             String                @id @default(cuid())
+  provider       SupplierType          @unique
+  label          String                @default("Plataforma")
+  /// JSON de credenciales cifrado (appKey, appSecret, accessToken, apiKey…)
+  credentialsEnc String
+  status         SupplierAccountStatus @default(PENDING)
+  isEnabled      Boolean               @default(true)
+  lastTestAt     DateTime?
+  lastError      String?
+  /// Cuota mensual de llamadas para toda la plataforma (null = sin límite conocido)
+  monthlyQuota  Int?
+  usedThisMonth Int       @default(0)
+  quotaResetAt  DateTime?
+  /// País/idioma/moneda por defecto para las consultas de este proveedor
+  settings      Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+/// Categorías del catálogo, para la navegación visual (no solo búsqueda).
+model CatalogCategory {
+  id         String       @id @default(cuid())
+  provider   SupplierType
+  externalId String
+  name       String
+  slug       String
+  parentName String?
+  imageUrl   String?
+  itemCount  Int          @default(0)
+  sortOrder  Int          @default(0)
+  updatedAt  DateTime     @updatedAt
+
+  @@unique([provider, externalId])
+  @@index([provider, sortOrder])
+  @@index([slug])
+}
+
+/// Producto del catálogo listo para importar: índice propio (nuestra base de
+/// datos), de modo que el usuario navega y busca sin gastar cuota del proveedor
+/// y la importación no necesita volver a extraer nada (usa `rawPayload`).
+model CatalogItem {
+  id              String       @id @default(cuid())
+  provider        SupplierType
+  externalId      String
+  title           String
+  description     String?
+  categoryId      String?
+  categoryName    String?
+  imageUrl        String?
+  images          String[]
+  currency        String       @default("EUR")
+  costPrice       Float
+  suggestedPrice  Float?
+  stock           Int          @default(0)
+  rating          Float?
+  ordersCount     Int?
+  shippingCost    Float?
+  shippingMinDays Int?
+  shippingMaxDays Int?
+  /// País desde el que se envía (almacén). Vacío = no informado.
+  shipFrom        String?
+  freeShipping    Boolean      @default(false)
+  isTrending      Boolean      @default(false)
+  tags            String[]
+  /// Variantes, envíos y reseñas normalizados (mismo formato que el importador)
+  rawPayload      Json
+  sourceUrl       String
+  /// 'api' = descargado con claves reales · 'sample' = catálogo de muestra etiquetado
+  source          String       @default("api")
+  lastSyncedAt    DateTime     @default(now())
+  refreshDueAt    DateTime?
+  /// Cuántas veces se ha visto en detalle y cuántas se ha importado
+  views           Int          @default(0)
+  importedCount   Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([provider, externalId])
+  @@index([provider, categoryId])
+  @@index([isTrending])
+  @@index([costPrice])
+  @@index([shipFrom])
+  @@index([views])
+  @@index([source])
+}

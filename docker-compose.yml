@@ -1,0 +1,128 @@
+version: '3.9'
+
+# Infraestructura completa de DropshipPilot:
+#   docker compose up -d          → base de datos, Redis y scraper service
+#   docker compose up -d --build  → además construye la imagen del scraper
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: dropship_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: autods
+      POSTGRES_PASSWORD: autods
+      POSTGRES_DB: autods
+    ports:
+      - '5432:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U autods -d autods']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  redis:
+    image: redis:7-alpine
+    container_name: dropship_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  scraper:
+    build:
+      context: ./services/scraper
+    container_name: dropship_scraper
+    restart: unless-stopped
+    environment:
+      HEADLESS: 'true'
+      MAX_CONCURRENCY: '4'
+      DEFAULT_COUNTRY: ES
+      PROXY_LIST: ${PROXY_LIST:-}
+      PROXY_ROTATION: ${PROXY_ROTATION:-round-robin}
+      # Proveedor residencial (recomendado para scraping real sin bloqueos)
+      PROXY_PROVIDER: ${PROXY_PROVIDER:-}
+      PROXY_USERNAME: ${PROXY_USERNAME:-}
+      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+      PROXY_COUNTRY: ${PROXY_COUNTRY:-es}
+      PROXY_SESSIONS: ${PROXY_SESSIONS:-12}
+      PROXY_SESSION_TTL_MIN: ${PROXY_SESSION_TTL_MIN:-10}
+      PROXY_REQUIRED: ${PROXY_REQUIRED:-false}
+      API_KEY: ${SCRAPER_API_KEY:-}
+      CJ_API_KEY: ${CJ_API_KEY:-}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - '8000:8000'
+    depends_on:
+      redis:
+        condition: service_healthy
+    shm_size: '1gb'
+
+  # Servicio opcional: dashboard + API (Next.js) en contenedor
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dropship_web
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://autods:autods@db:5432/autods?schema=public
+      REDIS_URL: redis://redis:6379
+      SCRAPER_SERVICE_URL: http://scraper:8000
+      # En producción cambia esto por tu dominio: NEXTAUTH_URL=https://tudominio.com
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?define NEXTAUTH_SECRET en .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?define ENCRYPTION_KEY en .env}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_EMAIL: ${AUTH_EMAIL:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      SHOPIFY_WEBHOOK_SECRET: ${SHOPIFY_WEBHOOK_SECRET:-}
+      WOO_WEBHOOK_SECRET: ${WOO_WEBHOOK_SECRET:-}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-60}
+    ports:
+      - '3000:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles: ['full']
+
+  # Worker 24/7: re-escaneo horario, recálculo de precio/stock y compra a proveedor.
+  # IMPRESCINDIBLE para que la sincronización automática ocurra.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: dropship_worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://autods:autods@db:5432/autods?schema=public
+      REDIS_URL: redis://redis:6379
+      SCRAPER_SERVICE_URL: http://scraper:8000
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?define ENCRYPTION_KEY en .env}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-60}
+      SYNC_CONCURRENCY: ${SYNC_CONCURRENCY:-8}
+      PROXY_PROVIDER: ${PROXY_PROVIDER:-}
+      PROXY_USERNAME: ${PROXY_USERNAME:-}
+      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      scraper:
+        condition: service_started
+    profiles: ['full']
+
+volumes:
+  db_data:
+  redis_data:

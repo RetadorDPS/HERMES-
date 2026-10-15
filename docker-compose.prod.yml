@@ -1,0 +1,264 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  DropshipPilot · DESPLIEGUE DE PRODUCCIÓN (un solo comando)
+#
+#    ./scripts/deploy.sh          ← crea .env.prod, valida y levanta todo
+#
+#  Levanta 7 servicios:
+#    nginx-proxy + acme  →  HTTPS automático de Let's Encrypt (renovación incluida)
+#    web                 →  Next.js 14 (panel + API)   [sin puerto expuesto]
+#    worker              →  BullMQ 24/7 (sync por plan + pedidos + catálogo)
+#    scraper             →  FastAPI + Playwright       [sin puerto expuesto]
+#    db / redis          →  PostgreSQL + Redis         [sin puerto expuesto]
+#    migrate             →  aplica el esquema Prisma una vez y termina
+#
+#  Sólo los puertos 80 y 443 quedan abiertos a internet.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: dropshippilot
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: '10m', max-file: '3' }
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-autods}:${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env.prod}@db:5432/${POSTGRES_DB:-autods}?schema=public
+  REDIS_URL: redis://redis:6379
+  SCRAPER_SERVICE_URL: http://scraper:8000
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?define ENCRYPTION_KEY en .env.prod}
+  NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?define NEXTAUTH_SECRET en .env.prod}
+  NEXTAUTH_URL: https://${DOMAIN:?define DOMAIN en .env.prod}
+  AUTH_ENABLED: 'true'
+  AUTH_EMAIL: ${AUTH_EMAIL:?define AUTH_EMAIL en .env.prod}
+  AUTH_PASSWORD: ${AUTH_PASSWORD:?define AUTH_PASSWORD en .env.prod}
+  ALLOW_IFRAME_EMBED: 'false'
+  SHOPIFY_WEBHOOK_SECRET: ${SHOPIFY_WEBHOOK_SECRET:-}
+  WOO_WEBHOOK_SECRET: ${WOO_WEBHOOK_SECRET:-}
+  SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-60}
+  SYNC_CONCURRENCY: ${SYNC_CONCURRENCY:-4}
+  PROXY_PROVIDER: ${PROXY_PROVIDER:-}
+  PROXY_USERNAME: ${PROXY_USERNAME:-}
+  PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+  PROXY_COUNTRY: ${PROXY_COUNTRY:-es}
+  PROXY_REQUIRED: ${PROXY_REQUIRED:-false}
+  SCRAPER_MODE: ${SCRAPER_MODE:-auto}
+  # Catálogo servido por la plataforma (worker de catálogo)
+  CATALOG_SYNC_MINUTES: ${CATALOG_SYNC_MINUTES:-360}
+  CATALOG_SYNC_PAGES: ${CATALOG_SYNC_PAGES:-2}
+  CATALOG_SYNC_KEYWORD: ${CATALOG_SYNC_KEYWORD:-}
+  # Claves de proveedor de la plataforma (alternativa a guardarlas desde el panel
+  # de administración; lo guardado en el panel tiene prioridad)
+  ALIEXPRESS_APP_KEY: ${ALIEXPRESS_APP_KEY:-}
+  ALIEXPRESS_APP_SECRET: ${ALIEXPRESS_APP_SECRET:-}
+  ALIEXPRESS_ACCESS_TOKEN: ${ALIEXPRESS_ACCESS_TOKEN:-}
+  ALIEXPRESS_API_REGION: ${ALIEXPRESS_API_REGION:-sg}
+  CJ_EMAIL: ${CJ_EMAIL:-}
+  CJ_API_KEY: ${CJ_API_KEY:-}
+
+services:
+  # ───────────────────────── Proxy inverso + HTTPS automático ─────────────────
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:1.6-alpine
+    container_name: dsp_nginx
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - conf:/etc/nginx/conf.d
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - certs:/etc/nginx/certs:ro
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    networks: [proxy]
+    <<: *logging
+
+  acme:
+    image: nginxproxy/acme-companion:2.4
+    container_name: dsp_acme
+    restart: always
+    depends_on: [nginx-proxy]
+    environment:
+      DEFAULT_EMAIL: ${LETSENCRYPT_EMAIL:?define LETSENCRYPT_EMAIL en .env.prod}
+      NGINX_PROXY_CONTAINER: dsp_nginx
+    volumes:
+      - conf:/etc/nginx/conf.d
+      - vhost:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - certs:/etc/nginx/certs
+      - acme:/etc/acme.sh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [proxy]
+    <<: *logging
+
+  # ─────────────────────────────── Infraestructura ────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: dsp_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autods}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:-autods}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-autods} -d ${POSTGRES_DB:-autods}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+    <<: *logging
+
+  redis:
+    image: redis:7-alpine
+    container_name: dsp_redis
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 384mb --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+    <<: *logging
+
+  # ────────────────────────── Esquema de base de datos ────────────────────────
+  # Aplica el esquema Prisma y, si SEED_DEMO_DATA=true, carga los datos de ejemplo.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: dsp_migrate
+    restart: 'no'
+    environment:
+      <<: *app-env
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+    # `seed-if-empty` sólo siembra si la base está vacía: reiniciar los
+    # contenedores nunca borra datos reales.
+    # `--accept-data-loss`: el esquema se aplica con `db push` (sin migraciones), y
+    # añadir restricciones nuevas (p. ej. un índice único sobre una columna recién
+    # creada) aborta el despliegue sin este flag aunque no haya pérdida real.
+    # Revisa el diff del esquema antes de desplegar una versión que ELIMINE columnas.
+    command: >
+      sh -c "npx prisma db push --skip-generate --accept-data-loss &&
+             if [ \"$$SEED_DEMO_DATA\" = \"true\" ]; then npx tsx scripts/seed-if-empty.ts; fi"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    <<: *logging
+
+  # ────────────────────────────────── Scraper ─────────────────────────────────
+  scraper:
+    build:
+      context: ./services/scraper
+    container_name: dsp_scraper
+    restart: always
+    environment:
+      HEADLESS: 'true'
+      MAX_CONCURRENCY: ${SCRAPER_MAX_CONCURRENCY:-2}
+      DEFAULT_COUNTRY: ${PROXY_COUNTRY:-es}
+      PROXY_PROVIDER: ${PROXY_PROVIDER:-}
+      PROXY_USERNAME: ${PROXY_USERNAME:-}
+      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+      PROXY_COUNTRY: ${PROXY_COUNTRY:-es}
+      PROXY_SESSIONS: ${PROXY_SESSIONS:-12}
+      PROXY_SESSION_TTL_MIN: ${PROXY_SESSION_TTL_MIN:-10}
+      PROXY_REQUIRED: ${PROXY_REQUIRED:-false}
+      CJ_API_KEY: ${CJ_API_KEY:-}
+      REDIS_URL: redis://redis:6379
+    # Sin puertos publicados: sólo visible dentro de la red interna.
+    expose: ['8000']
+    shm_size: '1gb'
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [internal]
+    <<: *logging
+
+  # ────────────────────────────── App web (Next.js) ───────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dsp_web
+    restart: always
+    environment:
+      <<: *app-env
+      # nginx-proxy descubre el contenedor por estas variables y emite el certificado
+      VIRTUAL_HOST: ${DOMAIN}
+      VIRTUAL_PORT: '3000'
+      LETSENCRYPT_HOST: ${DOMAIN}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      scraper:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal, proxy]
+    <<: *logging
+
+  # ───────────────────────────── Worker 24/7 (BullMQ) ─────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: dsp_worker
+    restart: always
+    environment:
+      <<: *app-env
+      WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-300}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+    <<: *logging
+
+  # ───────────────── Copias de seguridad diarias de PostgreSQL ────────────────
+  backup:
+    image: postgres:16-alpine
+    container_name: dsp_backup
+    restart: always
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+    entrypoint: >
+      sh -c 'while true; do
+               pg_dump -h db -U ${POSTGRES_USER:-autods} -d ${POSTGRES_DB:-autods}
+                 | gzip > /backups/autods-$$(date +%F-%H%M).sql.gz;
+               find /backups -name "autods-*.sql.gz" -mtime +$$BACKUP_KEEP_DAYS -delete;
+               echo "[backup] $$(date -Iseconds) copia creada";
+               sleep 86400;
+             done'
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+    <<: *logging
+
+networks:
+  proxy:
+  internal:
+    driver: bridge
+
+volumes:
+  db_data:
+  redis_data:
+  conf:
+  vhost:
+  html:
+  certs:
+  acme:

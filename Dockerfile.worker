@@ -1,0 +1,22 @@
+# Imagen de los workers 24/7 (BullMQ: sincronización + pedidos + catálogo + copias).
+# Incluye el cliente de PostgreSQL para que el worker de copias pueda hacer pg_dump.
+# Necesita tsx y Prisma, por eso instala también dependencias de desarrollo.
+FROM node:20-alpine
+
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl postgresql16-client
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY prisma ./prisma
+RUN npx prisma generate
+
+COPY workers ./workers
+COPY src ./src
+COPY scripts ./scripts
+COPY tsconfig.json ./
+
+ENV NODE_ENV=production
+# El proceso no abre puertos: sólo consume la cola de Redis.
+CMD ["npm", "run", "worker"]
