@@ -1,0 +1,98 @@
+{
+  "medidoEn": "2026-10-15T23:28:46.490Z",
+  "config": {
+    "REQUESTS": 200,
+    "CONCURRENCY": 20,
+    "JOBS": 60
+  },
+  "http": [
+    {
+      "label": "Panel (portada con datos reales)",
+      "path": "/dashboard",
+      "requests": 200,
+      "ok": 200,
+      "p50": 660.2841050000002,
+      "p95": 901.6320890000001,
+      "p99": 907.2439280000001,
+      "max": 910.5275499999999,
+      "rps": 28.939372015627264
+    },
+    {
+      "label": "Listado de productos",
+      "path": "/products",
+      "requests": 200,
+      "ok": 200,
+      "p50": 337.34449700000005,
+      "p95": 401.46938000000046,
+      "p99": 412.20034999999916,
+      "max": 412.9308009999986,
+      "rps": 58.68544600938967
+    },
+    {
+      "label": "Catálogo",
+      "path": "/catalog",
+      "requests": 200,
+      "ok": 200,
+      "p50": 611.7034560000011,
+      "p95": 682.187715,
+      "p99": 711.9730810000001,
+      "max": 718.4813139999987,
+      "rps": 32.488628979857054
+    },
+    {
+      "label": "Salud del sistema (API)",
+      "path": "/api/health",
+      "requests": 200,
+      "ok": 200,
+      "p50": 65.50470300000234,
+      "p95": 113.4643410000026,
+      "p99": 150.18827599999713,
+      "max": 186.3540439999997,
+      "rps": 285.30670470756064
+    },
+    {
+      "label": "Datos del cliente (API)",
+      "path": "/api/account/onboarding",
+      "requests": 200,
+      "ok": 200,
+      "p50": 70.93870199999947,
+      "p95": 88.67490899999757,
+      "p99": 90.49818500000038,
+      "max": 106.69725900000049,
+      "rps": 277.77777777777777
+    }
+  ],
+  "db": [
+    {
+      "label": "Listado de productos (12 con filtros y orden)",
+      "runs": 40,
+      "p50": 2.850858000001608,
+      "p95": 4.020577999999659
+    },
+    {
+      "label": "KPIs del panel (agregados de pedidos)",
+      "runs": 40,
+      "p50": 0.5893200000027718,
+      "p95": 2.0571920000002137
+    },
+    {
+      "label": "Cola de sync: últimos registros",
+      "runs": 40,
+      "p50": 1.3455270000013115,
+      "p95": 1.6341360000005807
+    },
+    {
+      "label": "Comprobación de salud de la base",
+      "runs": 40,
+      "p50": 0.31946899999820744,
+      "p95": 0.5515169999998761
+    }
+  ],
+  "queue": {
+    "jobs": 60,
+    "processed": 60,
+    "seconds": 0.115,
+    "perSecond": 521.7391304347826,
+    "concurrency": 8
+  }
+}

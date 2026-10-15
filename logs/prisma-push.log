@@ -1,0 +1,5 @@
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "autods", schema "public" at "localhost:5432"
+
+The database is already in sync with the Prisma schema.
+

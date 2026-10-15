@@ -1201,3 +1201,52 @@ primero la confirmación, luego la promesa («no estarás solo delante de un pan
 `verify:onboarding-mail` **34/34** (nuevo, con SMTP real de pruebas) · `verify:onboarding` 29/29 · `verify:tour` 23/23 ·
 `verify:gdpr` 44/44 · `verify:mail` 18/18 · `verify:fx` 27/27 · `verify:admin` ✓ · `verify:catalog` 58/58 ·
 `verify:isolation` 13/13 · `verify:e2e` ✓ · `tsc` ✓ · `next lint` ✓ · `next build` ✓.
+
+
+---
+
+## 📊 🧗 Decimoctava ronda: capacidad medida y estado sin adornos (15/10/2026)
+
+Antes de dar el proyecto por terminado se hizo lo que faltaba para poder hablar de escalabilidad sin
+inventar: **medir**. Y se escribieron los dos documentos de cierre.
+
+### 1. Medición real (`npm run loadtest`, nueva suite)
+
+Sobre la app en marcha, 200 peticiones por ruta con 20 simultáneas:
+
+| Ruta | p50 | p95 | Caudal |
+|---|---|---|---|
+| Portada del panel | 660 ms | 902 ms | 29 pet./s |
+| Listado de productos | 337 ms | 401 ms | 59 pet./s |
+| Catálogo | 612 ms | 682 ms | 32 pet./s |
+| `/api/health` | 66 ms | 113 ms | 285 pet./s |
+| `/api/account/onboarding` | 71 ms | 89 ms | 278 pet./s |
+
+PostgreSQL: **1–4 ms** por consulta · Cola BullMQ con concurrencia 8: **521 trabajos/s** (trabajo
+sintético) · Sincronización real de producto: **350–480 ms** (ciclo E2E).
+
+**Conclusión medida:** el cuello de botella no es la base de datos ni la cola, es el **renderizado de
+páginas** (660 ms p50 en la portada con 20 navegando a la vez).
+
+### 2. Los cuatro límites identificados (con su arreglo)
+
+| Punto | Dónde | Arreglo |
+|---|---|---|
+| Limitador en memoria (no vale con 2 instancias) | `src/lib/rate-limit.ts:11` | Contador en Redis (ya montado) |
+| Renderizado repetido en cada visita | páginas dinámicas | Caché 30–60 s en listas y catálogo |
+| `SyncLog`/`AuditLog` crecen sin freno (1.200 filas/día por cliente de 50 productos) | esquema | Retención 30–90 días + resumen diario, o particionado por mes |
+| El scraper es el techo real (4 navegadores: ~5.000 extracciones/hora) | `services/scraper/config.py:18` | Multiplicar el servicio (es sin estado) y dar RAM |
+
+### 3. Dos documentos nuevos
+
+- **`ESTADO.md`**: lo verificado (12 suites, 0 fallos), lo construido pero **sin probar** contra servicios
+  reales (AliExpress, CJ, Shopify/Woo reales, Stripe, SMTP real, proxies, scraping real), lo que aún no
+  está construido (landing pública, app móvil, i18n, alcance de Cuba) y lo que se puede afirmar sin reservas.
+- **`ESCALABILIDAD.md`**: capacidad medida, lo que ya está preparado, los cuatro límites, la escalera de
+  costes por tramos (1–10 · 10–50 · 50–200 · 200–1.000 clientes) y qué no se ha podido medir y por qué.
+
+### 4. Suites tras la ronda
+
+12 suites, **0 fallos** (`onboarding-mail` 34/34 · `gdpr` 44/44 · `onboarding` 29/29 · `tour` 23/23 ·
+recorridos con navegador 24/24 y 14/14 · `catalog` 58/58 · `fx` 27/27 · `mail` 18/18 · `isolation` 13/13 ·
+`admin` ✓ · `e2e` ✓) · `loadtest` (nuevo) · `tsc` ✓ · `next lint` ✓ · `next build` ✓ · `preflight` 0 bloqueantes.

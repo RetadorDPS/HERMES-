@@ -498,6 +498,13 @@ npm run worker:backup        # worker sólo para copias (si separas cargas)
 Ambas cosas quedan en la auditoría (`account.exported`, `account.deleted`). El registro del borrado conserva
 la fecha, el correo y el motivo — nada más — para poder demostrar que se atendió la petición (ver `DPA.md`).
 
+## 📊 Estado y escalabilidad
+
+- **[`ESTADO.md`](./ESTADO.md)** — qué está probado (con sus números), qué está construido pero **no** se ha
+  probado contra servicios reales, qué no está hecho todavía y qué se puede afirmar sin reservas.
+- **[`ESCALABILIDAD.md`](./ESCALABILIDAD.md)** — capacidad medida (`npm run loadtest`), los cuatro puntos que
+  hay que tocar antes de 100+ clientes y la escalera de costes de servidor por tramos.
+
 ## 🧪 Verificación
 
 ```bash
@@ -511,6 +518,7 @@ npm run verify:tour       # tutorial de bienvenida: pasos, estados y API (23 com
 npm run verify:onboarding # primeros pasos + recorrido del operador (29 comprobaciones)
 npm run verify:onboarding-mail # correos de acompañamiento: bienvenida y recordatorio único (34)
 npm run preflight         # qué falta por conectar (0 bloqueantes = operativo)
+npm run loadtest          # capacidad real: latencias, base de datos y caudal de la cola
 ```
 
 Verificación rápida del importador, sin infraestructura:

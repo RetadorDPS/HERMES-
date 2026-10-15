@@ -50,7 +50,8 @@
     "verify:tour": "tsx scripts/verify-tour.ts",
     "verify:onboarding": "tsx scripts/verify-onboarding.ts",
     "worker:onboarding": "tsx workers/onboardingWorker.ts",
-    "verify:onboarding-mail": "tsx scripts/verify-onboarding-mail.ts"
+    "verify:onboarding-mail": "tsx scripts/verify-onboarding-mail.ts",
+    "loadtest": "tsx scripts/loadtest.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
