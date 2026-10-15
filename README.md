@@ -502,6 +502,8 @@ la fecha, el correo y el motivo — nada más — para poder demostrar que se at
 
 - **[`ESTADO.md`](./ESTADO.md)** — qué está probado (con sus números), qué está construido pero **no** se ha
   probado contra servicios reales, qué no está hecho todavía y qué se puede afirmar sin reservas.
+- **[`PROXIES.md`](./PROXIES.md)** — la verdad sobre los proxies «gratis», precios reales por GB, cómo
+  crear tus propios nodos (casa, móvil, módems 4G con SIM) y qué no hay que hacer nunca.
 - **[`ESCALABILIDAD.md`](./ESCALABILIDAD.md)** — capacidad medida (`npm run loadtest`), los cuatro puntos que
   hay que tocar antes de 100+ clientes y la escalera de costes de servidor por tramos.
 
