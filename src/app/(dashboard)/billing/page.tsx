@@ -1,7 +1,7 @@
 import { Topbar } from '@/components/layout/topbar';
 import { dataMode } from '@/lib/data';
 import { withCurrentTenant, getCurrentUser } from '@/lib/tenant';
-import { prisma } from '@/lib/prisma';
+import { prisma, hasDatabase } from '@/lib/prisma';
 import { PLANS, planFor } from '@/lib/plans';
 import { stripeConfigured } from '@/lib/stripe';
 import { lemonCheckoutReady, lemonCustomerPortalUrl } from '@/lib/lemon';
@@ -14,6 +14,19 @@ export default async function BillingPage() {
   const mode = dataMode();
 
   const data = await withCurrentTenant(async (userId) => {
+    // Modo demostración (sin base de datos): plan Pro de ejemplo, en periodo de prueba
+    if (!hasDatabase()) {
+      const demo = planFor('PRO');
+      return {
+        tier: demo.tier,
+        planName: demo.name,
+        priceMonthly: demo.priceMonthly,
+        status: 'TRIALING' as const,
+        renewsAt: new Date('2026-11-01T00:00:00.000Z').toISOString(),
+        cancelAtPeriodEnd: false,
+        provider: null as 'lemon' | 'stripe' | null,
+      };
+    }
     const [user, subscription] = await Promise.all([
       prisma.user.findUnique({ where: { id: userId }, select: { plan: true } }),
       prisma.subscription.findUnique({ where: { userId } }),

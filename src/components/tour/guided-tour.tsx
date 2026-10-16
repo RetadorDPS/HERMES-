@@ -11,6 +11,7 @@
  *   bloquea los clics: el usuario puede tocar el botón que se le señala.
  * - Se sale con Escape o con «Saltar»; al terminar o saltar no vuelve a salir.
  */
+import { rutaActual } from '@/lib/ruta';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, ArrowRight, CheckCircle2, Compass, PartyPopper, X } from 'lucide-react';
@@ -100,7 +101,7 @@ export function GuidedTour({ scope = 'user', steps, intro, shouldOffer, inProgre
   // Al cambiar de paso: navegar si hace falta y luego medir
   useEffect(() => {
     if (!step) return;
-    const path = window.location.pathname;
+    const path = rutaActual();
     if (step.route !== path) {
       travelling.current = true;
       router.push(step.route);
@@ -174,7 +175,7 @@ export function GuidedTour({ scope = 'user', steps, intro, shouldOffer, inProgre
   useEffect(() => {
     if (!step) return;
     const t = window.setTimeout(() => {
-      const here = window.location.pathname;
+      const here = rutaActual();
       const at = steps.findIndex((s) => s.route === here);
       if (at >= 0 && at !== index && !travelling.current) setIndex(at);
       travelling.current = false;

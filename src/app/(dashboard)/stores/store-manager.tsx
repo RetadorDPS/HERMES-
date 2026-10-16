@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input, Label, Select } from '@/components/ui/input';
 import { cn, formatRelative } from '@/lib/utils';
+import { ESTATICO } from '@/lib/ruta';
 
 interface StoreRow {
   id: string;
@@ -58,6 +59,10 @@ export function StoreManager({
   const installShopify = () => {
     const shop = oauthShop.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
     if (!shop) return;
+    if (ESTATICO) {
+      setMsg({ variant: 'info', title: 'Modo demostración', text: 'La conexión real con Shopify se activa cuando conectemos el servidor. Aquí no se instala nada.' });
+      return;
+    }
     window.location.href = `/api/shopify/install?shop=${encodeURIComponent(shop)}`;
   };
 

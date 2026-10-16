@@ -21,6 +21,7 @@ import { prisma, hasDatabase } from '../prisma';
 import { withSystem } from '../tenant-context';
 import { resolveProviderClient, consumePlatformQuota } from './platform-credentials';
 import { SAMPLE_CATEGORIES, sampleCatalogItems } from './sample';
+import { consultarCatalogoMemoria, detalleMuestra, sugerenciasMemoria } from './memoria';
 import { supplierProductToScraped } from '../supplier-apis/mapper';
 import { computeSellingPrice } from '../pricing';
 import { fxInfo, toEur } from '../fx';
@@ -442,7 +443,8 @@ export async function queryCatalog(q: CatalogQuery = {}): Promise<CatalogResult>
     stats: { total: 0, real: 0, sample: 0, lastSyncedAt: null, freeShipping: 0, trending: 0 },
     priceRange: { min: 0, max: 0 },
   };
-  if (!hasDatabase()) return empty;
+  // Sin base de datos: se sirve el catálogo de muestra desde memoria (modo demostración)
+  if (!hasDatabase()) return consultarCatalogoMemoria(q) ?? empty;
 
   await ensureSampleCatalog();
   const sources = await visibleSources();
@@ -566,6 +568,10 @@ function toRow(item: any): CatalogRow {
 
 /** Detalle de un artículo, con vistas incrementadas y el payload de importación. */
 export async function catalogItemWithPayload(id: string, opts: { destinationCountry?: string } = {}) {
+  if (!hasDatabase()) {
+    const d = detalleMuestra(id, opts.destinationCountry ?? 'ES');
+    return d ? { item: d.item, scraped: d.scraped, description: d.description, tags: d.tags, raw: null as any } : null;
+  }
   const item = await withSystem('catálogo: leer artículo', () => prisma.catalogItem.findUnique({ where: { id } }));
   if (!item) return null;
 
@@ -579,7 +585,8 @@ export async function catalogItemWithPayload(id: string, opts: { destinationCoun
 
 /** Sugerencias de búsqueda a partir del índice (ciudades rápidas del buscador). */
 export async function catalogSuggestions(term: string, limit = 8) {
-  if (!hasDatabase() || term.trim().length < 2) return [];
+  if (!hasDatabase()) return sugerenciasMemoria(term, limit);
+  if (term.trim().length < 2) return [];
   const rows = await withSystem('catálogo: sugerencias', () =>
     prisma.catalogItem.findMany({
       where: { title: { contains: term.trim(), mode: 'insensitive' } },

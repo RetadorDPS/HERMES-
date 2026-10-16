@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Activity, ChevronRight, CircleDollarSign, Server, Sparkles } from 'lucide-react';
+import { Activity, ChevronRight, CircleDollarSign, Menu, Server, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { UserMenu } from './user-menu';
+import { EVENTO_ABRIR_MENU } from './sidebar';
 
 interface HealthCheck {
   ok: boolean;
@@ -41,14 +42,22 @@ export function Topbar({ title, subtitle, mode, authEnabled = false }: { title: 
 
   return (
     <header className="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-white/[0.06] bg-background/70 px-5 py-3 backdrop-blur-xl">
+      <button
+        type="button"
+        aria-label="Abrir el menú"
+        onClick={() => window.dispatchEvent(new Event(EVENTO_ABRIR_MENU))}
+        className="grid size-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-foreground transition hover:bg-white/[0.08] lg:hidden"
+      >
+        <Menu className="size-5" />
+      </button>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex">
           <span>DropshipPilot</span>
           <ChevronRight className="size-3" />
           <span className="text-foreground/80">{title}</span>
         </div>
-        <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="truncate text-xs text-muted-foreground">{subtitle}</p>}
+        <h1 className="text-lg font-semibold leading-tight tracking-tight sm:truncate sm:text-xl">{title}</h1>
+        {subtitle && <p className="line-clamp-2 text-xs text-muted-foreground sm:truncate">{subtitle}</p>}
       </div>
 
       <div className="flex items-center gap-2">

@@ -10,9 +10,19 @@ import { SyncLogList } from '@/components/dashboard/sync-log-list';
 import { getProduct, getSyncLogs, dataMode } from '@/lib/data';
 import { cn, formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { ProductEditor } from './product-editor';
+import { demoProducts } from '@/lib/demo-data';
 
 import { withCurrentTenant } from '@/lib/tenant';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Solo la versión estática (GitHub Pages) genera una página por cada producto de
+ * demostración. En el servidor normal esta lista va vacía y no cambia nada.
+ */
+export function generateStaticParams() {
+  if (process.env.ESTATICO !== '1') return [];
+  return demoProducts.map((p) => ({ id: p.id }));
+}
 
 export default async function ProductDetailPage({ params }: { params: { id: string } }) {
     return withCurrentTenant(async (userId) => {

@@ -5,7 +5,7 @@ import { Alert } from '@/components/ui/alert';
 import { dataMode } from '@/lib/data';
 import { platformCredentialSummary } from '@/lib/catalog/platform-credentials';
 import { withCurrentTenant } from '@/lib/tenant';
-import { prisma } from '@/lib/prisma';
+import { prisma, hasDatabase } from '@/lib/prisma';
 import { PROVIDERS } from '@/lib/supplier-apis';
 import { planFor } from '@/lib/plans';
 import { SupplierWorkspace, type AccountView } from './supplier-workspace';
@@ -19,6 +19,11 @@ export default async function SuppliersPage() {
   const platformReady = platformKeys.filter((c) => c.configured && c.enabled);
 
   const data = await withCurrentTenant(async (userId) => {
+    // Modo demostración (sin base de datos): ninguna cuenta de proveedor conectada
+    if (!hasDatabase()) {
+      const demo = planFor('PRO');
+      return { view: [] as AccountView[], plan: { tier: demo.tier, name: demo.name, max: demo.maxSupplierAccounts, used: 0 } };
+    }
     const [accounts, user, count] = await Promise.all([
       prisma.supplierAccount.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } }),
       prisma.user.findUnique({ where: { id: userId }, select: { plan: true } }),

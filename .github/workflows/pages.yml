@@ -1,0 +1,58 @@
+name: Publicar pantallas en GitHub Pages
+
+# Publica la versión ESTÁTICA (solo pantallas, con datos de ejemplo) en
+#   https://<usuario>.github.io/<repositorio>/
+# La app completa con servidor (Next.js + Prisma + colas) NO se publica aquí:
+# esta versión sirve para ver y probar el diseño en ordenador y móvil.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  construir:
+    name: Construir versión estática
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci --no-audit --no-fund
+
+      - name: Construir (subcarpeta = nombre del repositorio)
+        run: node scripts/estatico/construir.mjs
+        env:
+          RUTA_BASE: /${{ github.event.repository.name }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  publicar:
+    name: Publicar en GitHub Pages
+    needs: construir
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.despliegue.outputs.page_url }}
+    steps:
+      - id: despliegue
+        uses: actions/deploy-pages@v4

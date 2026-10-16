@@ -207,8 +207,104 @@ export function ProductTable({
         </Alert>
       )}
 
-      {/* Tabla */}
-      <div className="glass-card overflow-hidden">
+      {/* Móvil: una tarjeta por producto (la tabla ancha no cabe en una pantalla pequeña) */}
+      <div className="space-y-2 md:hidden">
+        {items.length > 0 && (
+          <label className="flex items-center gap-2 px-1 text-[12px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={(e) => setSelected(e.target.checked ? items.map((i) => i.id) : [])}
+              className="size-4 accent-indigo-500"
+            />
+            Seleccionar todos
+          </label>
+        )}
+        {items.map((p) => (
+          <div key={p.id} className={cn('glass-card p-3', selected.includes(p.id) && 'border-indigo-400/40 bg-indigo-500/[0.05]')}>
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={selected.includes(p.id)}
+                onChange={(e) => setSelected((prev) => (e.target.checked ? [...prev, p.id] : prev.filter((x) => x !== p.id)))}
+                className="mt-1 size-4 shrink-0 accent-indigo-500"
+                aria-label={`Seleccionar ${p.title}`}
+              />
+              {p.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={p.image} alt="" className="size-14 shrink-0 rounded-lg object-cover" loading="lazy" />
+              ) : (
+                <span className="grid size-14 shrink-0 place-items-center rounded-lg bg-white/[0.06]">
+                  <Boxes className="size-5 text-muted-foreground" />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <Link href={`/products/${p.id}`} className="line-clamp-2 text-[13px] font-medium leading-snug hover:text-indigo-300">
+                  {p.title}
+                </Link>
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                  {p.supplierName} · {p.storeName}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                  <StatusBadge status={p.status} />
+                  {p.lastSyncStatus && <StatusBadge status={p.lastSyncStatus} />}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-4 gap-2 border-t border-white/[0.06] pt-3 text-center">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Coste</p>
+                <p className="text-[12px] tabular-nums text-muted-foreground">{formatCurrency(p.costPrice, 'USD')}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Venta</p>
+                <p className="text-[13px] font-medium tabular-nums">{formatCurrency(p.sellingPrice)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Beneficio</p>
+                <p className="text-[13px] font-semibold tabular-nums text-emerald-400">+{formatCurrency(p.profitAmount)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Stock</p>
+                <p className={cn('text-[13px] font-medium tabular-nums', p.stockTotal === 0 ? 'text-rose-400' : p.stockTotal < 30 ? 'text-amber-400' : 'text-emerald-400')}>
+                  {formatNumber(p.stockTotal)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/[0.06] pt-3">
+              <span className="text-[11px] text-muted-foreground">Sync {formatRelative(p.lastSyncedAt)}</span>
+              <div className="flex items-center gap-1">
+                <Switch
+                  checked={p.isMonitored}
+                  onCheckedChange={(v) => toggleMonitor(p.id, v)}
+                  aria-label="Monitorizar 24/7"
+                  title={p.isMonitored ? 'Monitorización 24/7 activa' : 'Monitorización desactivada'}
+                />
+                <Button variant="ghost" size="icon" onClick={() => syncOne(p.id)} disabled={busyAction === p.id} title="Sincronizar ahora">
+                  {busyAction === p.id ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                </Button>
+                <Button variant="ghost" size="icon" asChild title="Abrir el producto">
+                  <Link href={`/products/${p.id}`}>
+                    <ExternalLink className="size-4" />
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          </div>
+        ))}
+        {items.length === 0 && (
+          <div className="glass-card py-10 text-center">
+            <Sparkles className="mx-auto mb-2 size-6 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Sin productos que mostrar con estos filtros.</p>
+            <Button asChild variant="gradient" size="sm" className="mt-3">
+              <Link href="/import">Importar el primer producto</Link>
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Escritorio: tabla */}
+      <div className="glass-card hidden overflow-hidden md:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -302,9 +398,9 @@ export function ProductTable({
                       {busyAction === p.id ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
                     </Button>
                     <Button variant="ghost" size="icon" asChild title="Abrir producto en el proveedor">
-                      <a href={p.id ? '/products/' + p.id : '#'} target="_self">
+                      <Link href={`/products/${p.id}`}>
                         <ExternalLink className="size-3.5" />
-                      </a>
+                      </Link>
                     </Button>
                   </div>
                 </TableCell>

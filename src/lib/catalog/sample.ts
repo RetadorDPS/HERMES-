@@ -10,6 +10,7 @@
  * Los precios son realistas (coste en euros del proveedor, no precio de venta).
  */
 import type { SupplierType } from '@prisma/client';
+import { conBase } from '../ruta';
 
 export interface SampleItem {
   provider: SupplierType;
@@ -32,12 +33,12 @@ export interface SampleItem {
 }
 
 const CATEGORY_IMAGES: Record<string, string> = {
-  'Relojes y wearables': '/catalog/sample-wearables.jpg',
-  'Audio y auriculares': '/catalog/sample-audio.jpg',
-  'Hogar inteligente': '/catalog/sample-home.jpg',
-  'Mascotas': '/catalog/sample-pets.jpg',
-  'Fitness y deporte': '/catalog/sample-fitness.jpg',
-  'Belleza y cuidado': '/catalog/sample-beauty.jpg',
+  'Relojes y wearables': conBase('/catalog/sample-wearables.jpg'),
+  'Audio y auriculares': conBase('/catalog/sample-audio.jpg'),
+  'Hogar inteligente': conBase('/catalog/sample-home.jpg'),
+  'Mascotas': conBase('/catalog/sample-pets.jpg'),
+  'Fitness y deporte': conBase('/catalog/sample-fitness.jpg'),
+  'Belleza y cuidado': conBase('/catalog/sample-beauty.jpg'),
 };
 
 export const SAMPLE_CATEGORIES = Object.keys(CATEGORY_IMAGES).map((name, i) => ({

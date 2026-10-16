@@ -4,12 +4,13 @@ import { Button } from '@/components/ui/button';
 import { AuthShell } from '@/components/auth/auth-shell';
 import { verifyEmailToken } from '@/lib/account';
 import { hasDatabase } from '@/lib/prisma';
+import { parametrosDeServidor } from '@/lib/ruta';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Confirmar cuenta · DropshipPilot' };
 
 export default async function VerifyPage({ searchParams }: { searchParams: { token?: string } }) {
-  const token = searchParams.token;
+  const token = parametrosDeServidor(searchParams).token;
   let ok = false;
   let message = 'Falta el token de verificación. Abre el enlace completo que recibiste por correo.';
 

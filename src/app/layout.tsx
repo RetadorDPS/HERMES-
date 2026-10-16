@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import { SimuladorApi } from '@/components/estatico/simulador-api';
+import { ESTATICO } from '@/lib/ruta';
 
 export const metadata: Metadata = {
   title: {
@@ -19,7 +21,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es" className="dark">
-      <body className="min-h-screen bg-background font-sans antialiased">{children}</body>
+      <body className="min-h-screen bg-background font-sans antialiased">
+        {ESTATICO && <SimuladorApi />}
+        {children}
+      </body>
     </html>
   );
 }

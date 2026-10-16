@@ -14,7 +14,7 @@
  * Además: cuota mensual por proveedor para la plataforma (si la API tiene un
  * límite, se registra aquí para no agotarlo sin darnos cuenta).
  */
-import { prisma } from '../prisma';
+import { prisma, hasDatabase } from '../prisma';
 import { withSystem } from '../tenant-context';
 import { decryptSecret, encryptSecret, maskSecret } from '../crypto';
 import { buildClient, clientFromAccount } from '../supplier-apis';
@@ -88,6 +88,7 @@ export function credentialsFromEnv(provider: SupplierType): SupplierCredentials 
 
 /** Lee la fila de credenciales de plataforma (modo sistema: es global). */
 export async function platformCredentialRow(provider: SupplierType) {
+  if (!hasDatabase()) return null; // modo demostración: no hay claves guardadas
   return withSystem('catálogo: leer credenciales de plataforma', () =>
     prisma.platformCredential.findUnique({ where: { provider } }),
   );
@@ -206,7 +207,9 @@ export async function testPlatformConnection(provider: SupplierType) {
 
 /** Estado de cada proveedor para el panel de administración. */
 export async function platformCredentialSummary() {
-  const rows = await withSystem('catálogo: resumen de credenciales', () => prisma.platformCredential.findMany()).catch(() => []);
+  const rows = hasDatabase()
+    ? await withSystem('catálogo: resumen de credenciales', () => prisma.platformCredential.findMany()).catch(() => [])
+    : []; // modo demostración: ninguna clave guardada
 
   return PLATFORM_PROVIDERS.map((provider) => {
     const spec = PROVIDER_FIELDS[provider];

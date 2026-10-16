@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions, DEFAULT_DEMO_EMAIL } from '@/lib/auth';
 import { LoginForm } from './login-form';
+import { parametrosDeServidor } from '@/lib/ruta';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Iniciar sesión · DropshipPilot' };
@@ -12,7 +13,7 @@ export default async function LoginPage({
   searchParams: { callbackUrl?: string; error?: string };
 }) {
   const authEnabled = process.env.AUTH_ENABLED === 'true';
-  const callbackUrl = searchParams.callbackUrl ?? '/dashboard';
+  const callbackUrl = parametrosDeServidor(searchParams).callbackUrl ?? '/dashboard';
 
   // Si ya hay sesión, no tiene sentido volver a pedir credenciales
   if (authEnabled) {

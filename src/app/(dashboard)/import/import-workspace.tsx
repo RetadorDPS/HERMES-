@@ -1,5 +1,6 @@
 'use client';
 
+import { conBase } from '@/lib/ruta';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -735,7 +736,7 @@ export function ImportWorkspace({ rules, stores: initialStores, mode }: { rules:
 
               <div className="flex gap-2">
                 <Button asChild variant="outline" size="sm" className="flex-1">
-                  <a href={`/products/${importResult.product.id}`}>
+                  <a href={conBase(`/products/${importResult.product.id}/`)}>
                     Ver ficha <ArrowRight className="size-3.5" />
                   </a>
                 </Button>

@@ -8,6 +8,7 @@
  * El borrado es irreversible y por eso está detrás de dos barreras: hay que
  * escribir la frase exacta y, si la cuenta tiene contraseña, teclearla.
  */
+import { conBase } from '@/lib/ruta';
 import { useState } from 'react';
 import { AlertTriangle, Download, Loader2, ShieldCheck, Trash2 } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
@@ -76,7 +77,7 @@ export function DataRightsCard({ email, hasPassword }: { email: string; hasPassw
       });
       setOpen(false);
       // La sesión ya no sirve: se recarga para volver al acceso
-      setTimeout(() => window.location.assign('/login'), 2500);
+      setTimeout(() => window.location.assign(conBase('/login/')), 2500);
     } finally {
       setBusy(null);
     }

@@ -52,3 +52,6 @@ backups/
 /capturas/
 /logs/mail-out/
 /data/fx-cache*.json
+
+# Versión estática (GitHub Pages): copia temporal de construcción
+/.estatico-tmp/

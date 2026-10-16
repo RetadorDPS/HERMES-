@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { Topbar } from '@/components/layout/topbar';
 import { getStores, getSuppliers, dataMode } from '@/lib/data';
 import { StoreManager } from './store-manager';
@@ -19,7 +20,9 @@ export default async function StoresPage() {
             mode={dataMode()}
           />
           <div data-tour="screen:stores" className="py-5">
-            <StoreManager stores={stores as any} suppliers={suppliers} shopifyOAuth={shopifyOAuthConfigured()} />
+            <Suspense fallback={null}>
+              <StoreManager stores={stores as any} suppliers={suppliers} shopifyOAuth={shopifyOAuthConfigured()} />
+            </Suspense>
           </div>
         </>
       );

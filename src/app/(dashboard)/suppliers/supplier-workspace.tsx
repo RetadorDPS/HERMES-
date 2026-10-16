@@ -1,5 +1,6 @@
 'use client';
 
+import { conBase } from '@/lib/ruta';
 import { useState } from 'react';
 import {
   AlertTriangle,
@@ -368,7 +369,7 @@ export function SupplierWorkspace({ providers, accounts, plan }: Props) {
         </CardHeader>
         <CardContent className="text-[12px] leading-relaxed text-muted-foreground">
           Los extractores funcionan igual, pero necesitan salir desde IPs residenciales para no ser bloqueados. Configúralos en la sección{' '}
-          <a href="/proxies" className="text-indigo-300 hover:underline">
+          <a href={conBase('/proxies/')} className="text-indigo-300 hover:underline">
             Proxies y anti-bot
           </a>{' '}
           y DropshipPilot los usará automáticamente para los productos sin API conectada.

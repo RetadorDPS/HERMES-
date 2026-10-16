@@ -3,6 +3,19 @@
 @tailwind utilities;
 
 @layer base {
+  /*
+   * Móvil: una cuadrícula sin columnas definidas se ensancha hasta el contenido
+   * más largo y empuja la pantalla fuera de su ancho (había que desplazarla de
+   * lado). Con estas dos reglas la columna única nunca pasa del ancho disponible;
+   * las clases grid-cols-* de Tailwind siguen mandando donde se usan.
+   */
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .grid > * {
+    min-width: 0;
+  }
+
   :root {
     /* Tema oscuro como único modo (según especificación del panel) */
     --background: 224 30% 6%;

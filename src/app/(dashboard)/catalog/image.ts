@@ -3,5 +3,7 @@
  * proveedor pasan por el proxy del servidor (/api/img), que evita bloqueos por
  * hotlinking y funciona aunque el visor no tenga salida a internet.
  */
+import { ESTATICO } from '@/lib/ruta';
+
 export const imageSrc = (url: string | null | undefined) =>
-  !url ? '' : url.startsWith('/') || url.startsWith('data:') ? url : `/api/img?u=${encodeURIComponent(url)}`;
+  !url ? '' : url.startsWith('/') || url.startsWith('data:') || ESTATICO ? url : `/api/img?u=${encodeURIComponent(url)}`;
