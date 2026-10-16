@@ -95,7 +95,7 @@ export function OrdersTable({
   return (
     <div className="space-y-3">
       {/* Resumen */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-5">
         {[
           { label: 'Pedidos totales', value: formatNumber(summary.total), tone: '' },
           { label: 'Pendientes de enviar', value: formatNumber(summary.pending), tone: 'text-amber-400' },
@@ -134,7 +134,89 @@ export function OrdersTable({
         </Alert>
       )}
 
-      <div className="glass-card overflow-hidden">
+      {/* Móvil: una tarjeta por pedido */}
+      <div className="space-y-2 md:hidden">
+        {filtered.map((o) => (
+          <div key={o.id} className="glass-card p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[14px] font-semibold">{o.number}</p>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {o.storeName} · {formatRelative(o.orderedAt as any)}
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <StatusBadge status={o.status} />
+                <StatusBadge status={o.fulfillmentStatus} />
+              </div>
+            </div>
+            <p className="mt-2 text-[12px]">
+              {o.customerName} <span className="text-muted-foreground">· {o.shippingCity}, {o.shippingCountry}</span>
+            </p>
+            <div className="mt-2 space-y-1">
+              {o.items.map((it, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  {it.imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={it.imageUrl} alt="" className="size-8 shrink-0 rounded object-cover" loading="lazy" />
+                  )}
+                  <span className="line-clamp-2 text-[12px]">
+                    {it.quantity}× {it.title}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 border-t border-white/[0.06] pt-3 text-center">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Total</p>
+                <p className="text-[13px] font-medium tabular-nums">{formatCurrency(o.total, o.currency)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Coste prov.</p>
+                <p className="text-[12px] tabular-nums text-muted-foreground">{formatCurrency(o.supplierCost, o.currency)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Beneficio</p>
+                <p className="text-[13px] font-semibold tabular-nums text-emerald-400">+{formatCurrency(o.profitAmount, o.currency)}</p>
+              </div>
+            </div>
+            {o.errorMessage && <p className="mt-2 text-[11px] leading-tight text-rose-400">{o.errorMessage}</p>}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-3">
+              {o.trackingNumber ? (
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-[11px]">{o.trackingNumber}</p>
+                  <p className="text-[10px] text-muted-foreground">{o.trackingCompany}</p>
+                </div>
+              ) : (
+                <Badge variant="outline">{o.status === 'PENDING' ? 'pendiente de compra' : 'sin tracking'}</Badge>
+              )}
+              <div className="flex gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => action(o.id, 'push-to-supplier')}
+                  disabled={busy === o.id || ['SHIPPED', 'DELIVERED'].includes(o.status)}
+                >
+                  {busy === o.id ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+                  Comprar
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => action(o.id, 'tracking')} disabled={busy === o.id} title="Sincronizar tracking">
+                  <Truck className="size-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div className="glass-card py-10 text-center text-sm text-muted-foreground">
+            <Package className="mx-auto mb-2 size-6" />
+            No hay pedidos que coincidan con los filtros.
+          </div>
+        )}
+      </div>
+
+      {/* Escritorio: tabla */}
+      <div className="glass-card hidden overflow-hidden md:block">
         <Table>
           <TableHeader>
             <TableRow>
