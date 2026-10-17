@@ -1,0 +1,113 @@
+# Contrato DropshipPilot ⇄ Retador (versión 1)
+
+Documento común de los dos lados. DropshipPilot (cliente) publica y mantiene productos en la tienda de UN vendedor de Retador
+mediante un token propio de ese vendedor. Retador es el único que habla con CJ y AliExpress para crear el producto
+(`cj-seller-import` / `ali-seller-import`); DropshipPilot manda decisiones del vendedor (qué variantes, a qué precio, con qué
+contenido), nunca costes.
+
+## Principios
+1. El coste real del proveedor nunca viaja de DropshipPilot a Retador, ni sale de Retador hacia el comprador. Retador lo relee del proveedor.
+2. Todo número que Retador reciba tiene que ser real: si DropshipPilot no sabe el stock, manda `null` y Retador no inventa.
+3. Idempotencia por `ref` (identificador estable de DropshipPilot por producto y tienda).
+4. Proveedores independientes: el campo `proveedor` decide a qué función de proveedor se enruta (`cj` o `aliexpress`).
+5. Las respuestas de error van en español, con código estable y sin datos internos del proveedor.
+
+## Autenticación
+- Cabecera `x-dropship-token: dsp_<43 caracteres base64url>`; el gateway de Supabase no exige JWT en estas funciones (`verify_jwt = false`) porque el token es la credencial.
+- El token lo crea el vendedor en la app de Retador (sin dar su contraseña): se muestra una sola vez, en la base solo queda su `sha256`. Revocable, caduca a 90 días, como máximo 3 vivos por vendedor.
+- En cada uso se comprueba: token vigente y no revocado, vendedor no suspendido, plan pro/premium, sin deuda de comisiones, tope de productos del plan.
+- Errores de autenticación: `401 token_invalido`, `401 token_caducado`, `403 vendedor_suspendido`, `403 plan_insuficiente`, `403 deuda_comisiones`.
+
+## Formato
+- `POST https://qsxtjuhueqdxoduyroli.supabase.co/functions/v1/dropship-<accion>` con cuerpo JSON y `Content-Type: application/json`.
+- Respuesta correcta: `{ "ok": true, ... }`. Error: `{ "ok": false, "codigo": "...", "error": "texto en español", "reintentar_en_s"?: n }` con el estado HTTP que corresponda.
+- Todos los importes en USD (moneda de los productos de proveedor en Retador), con dos decimales.
+- `version_contrato: 1` en todas las respuestas correctas.
+
+## `dropship-config` (solo lectura)
+Respuesta:
+```json
+{
+  "ok": true, "version_contrato": 1,
+  "vendedor": { "plan": "pro", "productos_usados": 12, "tope_productos": 55, "suspendido": false, "deuda_comisiones": false },
+  "tarifas": {
+    "hub_usd_por_libra": 1.99,
+    "dias_hub_cuba": [8, 15],
+    "comision_pct_ganancia": 8,
+    "pasarela_pct": 4.4,
+    "pasarela_fija_usd": 0.30,
+    "pasarela_a_cargo": "vendedor"
+  },
+  "categorias": [ { "cat": "hogar", "nombre": "Hogar", "subcategorias": ["Cocina", "Baño"] } ],
+  "provincias": ["La Habana", "Matanzas"],
+  "limites": { "publicar_por_hora": 10, "actualizar_por_hora": 60, "retirar_por_hora": 60, "estado_por_hora": 300 },
+  "token": { "prefijo": "dsp_ab12", "caduca_en": "2027-01-15T00:00:00Z" }
+}
+```
+`pasarela_a_cargo` (`vendedor` o `comprador`) dice quién paga la pasarela de pago; sirve para calcular el beneficio neto real del vendedor. Si falta, DropshipPilot asume `vendedor` (lo más prudente).
+
+Se usa para probar la conexión y para que DropshipPilot calcule beneficio neto con las mismas tarifas que Retador (nunca valores fijos copiados).
+
+## `dropship-publicar`
+Cuerpo:
+```json
+{
+  "ref": "dsp:<idTienda>:<idProducto>",
+  "proveedor": "cj",
+  "pid": "<id del producto en el proveedor>",
+  "variantes": [ { "sku": "CJ123-RED-M", "precio_venta_usd": 19.99, "stock": 37 } ],
+  "cat": "hogar", "subcat": "Cocina", "provincia": "La Habana",
+  "contenido": { "titulo": "…", "descripcion": "texto plano", "imagenes": ["https://…"] }
+}
+```
+- `variantes`: de 1 a 12. `sku` debe existir en el proveedor (`sku_inexistente`). `stock` es un entero ≥ 0 verificado por DropshipPilot o `null` si no se sabe.
+- `contenido` es opcional; sin él se usa lo que traiga el proveedor. Título ≤ 150 caracteres, descripción en texto plano ≤ 5000, imágenes ≤ 9, solo `https` de estos orígenes: `alicdn.com`, `aliexpress-media.com`, `cjdropshipping.com` y el almacenamiento de Retador. La primera imagen es la portada.
+- Retador relee el coste del proveedor, calcula coste puesto en Cuba (producto + tramo al hub + tramo hub→Cuba por peso real) y **rechaza** un precio por debajo de ese mínimo: `409 precio_bajo_minimo` con `{ "sku": "…", "minimo_usd": 14.20 }`. Nunca se publica por debajo del coste.
+- Stock `null`: Retador no inventa 50; usa `platform_config.dropship_stock_sin_dato` (por defecto 5), marca el producto como `stock_estimado` y lo deja registrado. Cuando DropshipPilot mande el stock verificado, se sustituye.
+- Si `ref` ya existe: `409 ya_publicado` con `producto_id` (no duplica).
+- Respuesta:
+```json
+{ "ok": true, "version_contrato": 1, "ref": "…", "producto_id": "uuid", "url": "https://retadormarketplace.es/…",
+  "estado": "activo", "moderacion": "approved",
+  "variantes": [ { "sku": "…", "precio_venta_usd": 19.99, "stock": 37, "stock_estimado": false } ],
+  "imagenes": 7, "cat": "hogar", "subcat": "Cocina" }
+```
+Errores: `400 datos_invalidos` (con `campo`), `404 producto_no_encontrado_en_proveedor`, `409 tope_productos`, `409 ya_publicado`, `409 precio_bajo_minimo`, `429 cupo_proveedor` (con `reintentar_en_s`), `502 proveedor_no_disponible`.
+
+## `dropship-actualizar`
+Cuerpo (todo opcional salvo `ref`):
+```json
+{ "ref": "…", "estado": "activo|pausado",
+  "variantes": [ { "sku": "…", "precio_venta_usd": 21.5, "stock": 12 } ],
+  "contenido": { "titulo": "…", "descripcion": "…", "imagenes": ["…"] },
+  "cat": "hogar", "subcat": "Cocina", "provincia": "La Habana" }
+```
+- **No llama a CJ ni a AliExpress** (no gasta la cuota de Retador). Solo aplica lo que manda el vendedor. El mínimo de precio se valida con el último coste conocido guardado en Retador.
+- Variantes no mencionadas no se tocan. Stock `0` en todas las variantes → el producto pasa a `sold_out`.
+- Un `sku` que no pertenece al producto → `404 sku_no_pertenece`.
+- Respuesta: igual que `publicar` con el estado final.
+
+## `dropship-retirar`
+`{ "ref": "…" }` → pone el producto en `paused` (no lo borra). Idempotente. Respuesta `{ ok, ref, producto_id, estado: "pausado" }`.
+
+## `dropship-estado`
+`{ "refs": ["…", "…"] }` (hasta 100). Respuesta `{ ok, version_contrato, productos: [ … ] }` con un elemento por ref (`{ "ref": "…", "existe": false }` si no existe):
+```json
+{ "ref": "…", "existe": true, "producto_id": "uuid", "estado": "activo|pausado|agotado|eliminado",
+  "moderacion": "approved|pending|rejected",
+  "variantes": [ { "sku": "…", "precio_venta_usd": 19.99, "stock": 37, "stock_estimado": false } ],
+  "vendidos": 4, "pedidos_pendientes": 1,
+  "actualizado_en": "…", "origen_ultimo_cambio": "dropship|vendedor|sistema" }
+```
+`origen_ultimo_cambio` permite a DropshipPilot detectar que el vendedor cambió algo a mano en Retador y no pisarlo sin avisar.
+
+## Cupos y seguridad
+- Por token y por hora: publicar 10, actualizar 60, retirar 60, estado 300 (`429 cupo_excedido` con `reintentar_en_s`).
+- Publicar: como mucho 1 a la vez por vendedor; cupo diario global de llamadas a proveedores reservado para DropshipPilot en `platform_config.dropship_cupo_proveedor_dia` (por defecto 40 para CJ y 40 para AliExpress).
+- Auditoría de cada uso (token, acción, ref, resultado, sin datos sensibles).
+- Los errores 500 nunca devuelven texto interno de proveedor ni trazas.
+
+## Fuera de esta versión (fase 2)
+- Avisos de Retador hacia DropshipPilot (venta, moderación) por webhook firmado.
+- Pedidos para cumplimiento desde DropshipPilot.
+- Copiar las fotos del proveedor al almacenamiento de Retador.

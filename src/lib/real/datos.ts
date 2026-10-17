@@ -226,7 +226,8 @@ export async function obtenerProductos(): Promise<ProductoListado[]> {
 /* ───────────────────────────────── Tiendas ───────────────────────────────── */
 
 export async function obtenerTiendas(): Promise<StoreView[]> {
-  const r = await supabase().from('Store').select(`${COL_TIENDA},products:Product(count),orders:Order(count)`).order('createdAt', { ascending: true });
+  // Retador tiene su propia tarjeta (conexión con token); aquí solo van Shopify y WooCommerce
+  const r = await supabase().from('Store').select(`${COL_TIENDA},products:Product(count),orders:Order(count)`).neq('platform', 'RETADOR').order('createdAt', { ascending: true });
   return comprobar<any[]>(r).map((s) => ({
     id: s.id,
     platform: s.platform === 'SHOPIFY' ? 'SHOPIFY' : 'WOOCOMMERCE',

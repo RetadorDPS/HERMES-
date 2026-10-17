@@ -5,6 +5,7 @@ import { OrdersTable } from '@/app/(dashboard)/orders/orders-table';
 import { ProductTableEstatico } from '@/app/(dashboard)/products/product-table-estatico';
 import { StoreManager } from '@/app/(dashboard)/stores/store-manager';
 import { obtenerPedidos, obtenerProductos, obtenerProveedores, obtenerTiendas } from '@/lib/real/datos';
+import { RetadorConexion } from './retador-conexion';
 import { formatNumber } from '@/lib/utils';
 import { PantallaReal, useCarga } from './comun';
 
@@ -57,16 +58,19 @@ export function TiendasReal() {
   return (
     <PantallaReal
       titulo="Tiendas conectadas"
-      subtitulo={datos ? `${datos.tiendas.length} integraciones · Shopify y WooCommerce` : 'Shopify y WooCommerce'}
+      subtitulo="Retador, Shopify y WooCommerce"
       cargando={cargando}
       error={error}
       alRecargar={recargar}
       tour="screen:stores"
     >
       {datos && (
-        <Suspense fallback={null}>
-          <StoreManager stores={datos.tiendas as any} suppliers={datos.proveedores} shopifyOAuth={false} />
-        </Suspense>
+        <>
+          <RetadorConexion />
+          <Suspense fallback={null}>
+            <StoreManager stores={datos.tiendas as any} suppliers={datos.proveedores} shopifyOAuth={false} />
+          </Suspense>
+        </>
       )}
     </PantallaReal>
   );
