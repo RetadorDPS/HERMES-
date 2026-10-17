@@ -73,7 +73,7 @@ export function CatalogCard({
           )}
           {item.freeShipping && (
             <span className="hidden rounded-md border border-indigo-500/25 bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-300 backdrop-blur sm:inline">
-              Envío gratis
+              Gratis a algún destino
             </span>
           )}
         </span>
@@ -105,8 +105,11 @@ export function CatalogCard({
             <div>
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground"><span className="sm:hidden">Coste</span><span className="hidden sm:inline">Coste proveedor</span></div>
               <div className="text-sm font-semibold tabular-nums">{formatCurrency(item.costPrice, item.currency)}</div>
+              {item.fx?.unknown && (
+                <div className="text-[10px] text-amber-400">Sin tipo de cambio: no se calcula el precio de venta</div>
+              )}
               {item.fx?.converted && item.costPriceEur !== undefined && (
-                <div className="text-[10px] text-muted-foreground" title={`Tipo de cambio configurado: 1 ${item.currency} = ${item.fx.rate} €`}>
+                <div className="text-[10px] text-muted-foreground" title={`Tipo de cambio del Banco Central Europeo${item.fx.date ? ` del ${item.fx.date}` : ''}: 1 ${item.currency} = ${item.fx.rate} €`}>
                   ≈ {formatCurrency(item.costPriceEur)} (cambio {item.fx.rate})
                 </div>
               )}

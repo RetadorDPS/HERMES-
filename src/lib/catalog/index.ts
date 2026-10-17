@@ -90,7 +90,7 @@ export interface CatalogRow {
   /** Coste convertido a euros (la divisa de la tienda) */
   costPriceEur?: number;
   /** Tipo de cambio aplicado, si se convirtió */
-  fx?: { currency: string; rate: number; converted: boolean; unknown?: boolean };
+  fx?: { currency: string; rate: number; converted: boolean; unknown?: boolean; date?: string | null };
   /** Precio de venta y beneficio con la regla del usuario (si se pasó) */
   sellingPrice?: number;
   compareAtPrice?: number | null;

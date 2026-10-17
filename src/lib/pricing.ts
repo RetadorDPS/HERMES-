@@ -16,6 +16,7 @@ export const DEFAULT_RULE: Required<Omit<PricingRuleLike, 'minPrice' | 'maxPrice
   minProfit: 1.5,
   roundTo: 0.99,
   includeShipping: true,
+  compareAtPct: null,
   minPrice: null,
   maxPrice: null,
 };
@@ -52,7 +53,9 @@ export function computeSellingPrice(
     cost: round2(cost),
     shipping: round2(shipping),
     sellingPrice: round2(price),
-    compareAtPrice: round2(roundPsychological(price * 1.35)),
+    // Un «precio antes» inventado es publicidad engañosa (en la UE el precio de referencia debe ser el más bajo de los últimos 30 días):
+    // solo se genera si la regla lo pide expresamente. 0 = sin precio tachado.
+    compareAtPrice: Number(rule.compareAtPct) > 0 ? round2(roundPsychological(price * (1 + Number(rule.compareAtPct) / 100))) : 0,
     profit,
     marginPct,
     ruleApplied: ruleName,

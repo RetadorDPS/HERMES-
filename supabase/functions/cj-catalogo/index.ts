@@ -103,8 +103,8 @@ function normalizarListado(item: any, pais: string | null, nombresCategoria: Map
     stock: Number(item.warehouseInventoryNum ?? item.totalVerifiedInventory ?? item.variantStock ?? item.stock ?? 0) || 0,
     ordersCount: pedidos,
     shipFrom: pais,
-    freeShipping: Number(item.addMarkStatus) === 1,
-    isTrending: Number(pedidos ?? 0) > 5000,
+    // «Envío gratis» ya NO se toma de `addMarkStatus` (marcaba como gratis productos que cotizan 5 USD): lo deduce la base de datos
+    // de las cotizaciones guardadas. «Top ventas» se calcula al consultar, por proveedor. Aquí no se afirma ninguna de las dos cosas.
     rawPayload: item,
     sourceUrl: `https://cjdropshipping.com/product/-p-${id}.html`,
     source: "api",

@@ -120,6 +120,8 @@ export interface PricingRuleLike {
   maxPrice?: number | string | null;
   roundTo?: number | string | null;
   includeShipping?: boolean;
+  /** Precio tachado: solo si el vendedor lo pide expresamente (% por encima del precio de venta). Por defecto NO hay precio tachado. */
+  compareAtPct?: number | string | null;
 }
 
 export interface PriceBreakdown {

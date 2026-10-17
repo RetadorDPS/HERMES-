@@ -462,7 +462,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
           <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-4">
             <label className="inline-flex cursor-pointer items-center gap-2 text-[12px]">
               <input type="checkbox" checked={freeShipping} onChange={(e) => { setFreeShipping(e.target.checked); setPage(1); }} className="size-3.5 accent-indigo-500" />
-              <Truck className="size-3.5 text-indigo-300" /> Solo envío gratis (si el proveedor lo informa)
+              <Truck className="size-3.5 text-indigo-300" /> Solo con envío gratis a algún destino cotizado
             </label>
             <label className="inline-flex cursor-pointer items-center gap-2 text-[12px]">
               <input type="checkbox" checked={trending} onChange={(e) => { setTrending(e.target.checked); setPage(1); }} className="size-3.5 accent-indigo-500" />

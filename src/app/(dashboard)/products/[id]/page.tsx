@@ -56,7 +56,7 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
             <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-5 [&>*:last-child:nth-child(odd)]:col-span-2 xl:[&>*:last-child:nth-child(odd)]:col-span-1">
               {[
                 { label: 'Coste proveedor', value: formatCurrency(product.costPrice, product.currency), sub: `+ ${formatCurrency(product.shippingCost, product.currency)} envío` },
-                { label: 'Precio de venta', value: formatCurrency(product.sellingPrice), sub: `tachado ${formatCurrency(product.compareAtPrice)}` },
+                { label: 'Precio de venta', value: formatCurrency(product.sellingPrice), sub: product.compareAtPrice > 0 ? `tachado ${formatCurrency(product.compareAtPrice)}` : 'sin precio tachado' },
                 { label: 'Beneficio / unidad', value: formatCurrency(product.profitAmount), sub: `${product.marginPct.toFixed(0)}% de margen`, accent: 'text-emerald-400' },
                 { label: 'Stock total', value: formatNumber(product.stockTotal), sub: `${product.variants.filter((v) => v.stock === 0).length} variantes agotadas` },
                 { label: 'Última sincronización', value: formatRelative(product.lastSyncedAt), sub: `próxima ${formatRelative(product.nextSyncAt)}` },

@@ -617,10 +617,12 @@ export function ImportWorkspace({ rules, stores: initialStores, mode }: { rules:
                   <span className="font-medium">Precio de venta</span>
                   <span className="font-semibold tabular-nums text-foreground">{formatCurrency(finalPrice)}</span>
                 </div>
-                <div className="flex items-center justify-between text-[13px]">
-                  <span className="text-muted-foreground">Comparativa (precio tachado)</span>
-                  <span className="tabular-nums text-muted-foreground line-through">{formatCurrency(pricing.compareAtPrice)}</span>
-                </div>
+                {pricing.compareAtPrice > 0 && (
+                  <div className="flex items-center justify-between text-[13px]">
+                    <span className="text-muted-foreground">Comparativa (precio tachado)</span>
+                    <span className="tabular-nums text-muted-foreground line-through">{formatCurrency(pricing.compareAtPrice)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between rounded-lg bg-emerald-500/10 px-2 py-1.5 text-[13px]">
                   <span className="text-emerald-300">Beneficio neto por unidad</span>
                   <span className="font-semibold tabular-nums text-emerald-300">

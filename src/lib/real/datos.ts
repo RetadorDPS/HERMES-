@@ -11,7 +11,8 @@
  * permitidas; un «select *» fallaría por permisos.
  */
 import { supabase } from '../supabase/cliente';
-import { conPrecios } from '../catalog/memoria';
+import { computeSellingPrice } from '../pricing';
+import type { PricingRuleLike } from '../types';
 import type { CatalogFacet, CatalogQuery, CatalogResult, CatalogRow } from '../catalog';
 import type { ProductListItem, StoreView } from '../data';
 
@@ -416,6 +417,57 @@ const slugCat = (s: string) =>
     .replace(/(^-|-$)/g, '')
     .slice(0, 60);
 
+/* ─────────────── Tipos de cambio (BCE) ─────────────── */
+
+const redondear2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Euros que vale 1 unidad de cada moneda, con la fecha del BCE. Si lo guardado tiene más de 24 h, se pide a la función `fx-tasas`. */
+export async function tasasEnEuros(): Promise<Record<string, { rate: number; fecha: string | null }>> {
+  const c = supabase();
+  const leer = async () => {
+    const { data } = await c.from('FxRate').select('currency,eurPerUnit,rateDate,fetchedAt');
+    return (data ?? []) as { currency: string; eurPerUnit: number | string; rateDate: string | null; fetchedAt: string }[];
+  };
+  let filas = await leer().catch(() => []);
+  const ultima = Math.max(0, ...filas.map((f) => new Date(f.fetchedAt).getTime()));
+  if (filas.length < 2 || Date.now() - ultima > 24 * 3_600_000) {
+    try {
+      await c.functions.invoke('fx-tasas', { body: {} });
+      filas = await leer();
+    } catch {
+      /* se usa lo que haya guardado, con su fecha; nunca un tipo supuesto */
+    }
+  }
+  return Object.fromEntries(filas.map((f) => [f.currency, { rate: Number(f.eurPerUnit), fecha: f.rateDate }]));
+}
+
+/**
+ * Convierte el coste del proveedor a euros con el tipo de cambio real y, solo entonces, calcula precio de venta y beneficio
+ * con la regla del usuario. Sin tipo de cambio NO se calcula nada (antes se trataban los dólares como si fueran euros).
+ * El beneficio es ANTES del envío: el catálogo no conoce el país de destino. Tampoco se inventa un «precio antes».
+ */
+function conPreciosEnEuros(filas: CatalogRow[], regla: ReglaPrecio | null, tasas: Record<string, { rate: number; fecha: string | null }>): CatalogRow[] {
+  return filas.map((f) => {
+    const moneda = (f.currency || 'USD').toUpperCase();
+    const t = moneda === 'EUR' ? { rate: 1, fecha: null } : tasas[moneda];
+    if (!t || !(t.rate > 0)) {
+      return { ...f, costPriceEur: undefined, shippingCostEur: undefined, fx: { currency: moneda, rate: 0, converted: false, unknown: true } };
+    }
+    const costeEur = redondear2(f.costPrice * t.rate);
+    const base: CatalogRow = { ...f, costPriceEur: costeEur, fx: { currency: moneda, rate: Math.round(t.rate * 10000) / 10000, converted: moneda !== 'EUR', date: t.fecha } };
+    if (!regla) return base;
+    const b = computeSellingPrice(costeEur, 0, regla as unknown as PricingRuleLike, regla.name);
+    const beneficio = b.sellingPrice - costeEur;
+    return {
+      ...base,
+      sellingPrice: b.sellingPrice,
+      compareAtPrice: null,
+      profit: redondear2(beneficio),
+      profitMarginPct: redondear2((beneficio / Math.max(b.sellingPrice, 0.01)) * 100),
+    };
+  });
+}
+
 export async function reglaPredeterminada() {
   const reglas = await obtenerReglas().catch(() => [] as ReglaPrecio[]);
   return reglas.find((r) => r.isDefault) ?? reglas[0] ?? null;
@@ -514,10 +566,10 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   const almacenes = new Map<string, number>();
   for (const f of todos) for (const w of (f.warehouses ?? []) as string[]) almacenes.set(w, (almacenes.get(w) ?? 0) + 1);
   const precios = todos.map((f) => num(f.costPrice));
-  const regla = await reglaPredeterminada();
+  const [regla, tasas] = await Promise.all([reglaPredeterminada(), tasasEnEuros()]);
 
   return {
-    items: conPrecios(filas, { pricingRule: regla ? ({ ...regla, name: regla.name } as any) : null }),
+    items: conPreciosEnEuros(filas, regla, tasas),
     total,
     page: pagina,
     pages: Math.max(1, Math.ceil(total / tamano)),
