@@ -27,7 +27,7 @@ export default async function ProductsPage({
               subtitle={`${todos.total} productos importados · estados de sincronización en tiempo real`}
               mode={dataMode()}
             />
-            <div data-tour="screen:products" className="py-5">
+            <div data-tour="screen:products" className="py-3">
               <Suspense fallback={null}>
                 <ProductTableEstatico items={filas} stores={tiendas.map((s) => ({ id: s.id, name: s.name }))} />
               </Suspense>
@@ -65,7 +65,7 @@ export default async function ProductsPage({
             subtitle={`${data.total} productos importados · estados de sincronización en tiempo real`}
             mode={dataMode()}
           />
-          <div data-tour="screen:products" className="py-5">
+          <div data-tour="screen:products" className="py-3">
             <ProductTable
               items={data.items}
               total={data.total}

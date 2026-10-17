@@ -30,7 +30,7 @@ export default async function ProxiesPage() {
         subtitle="Configura proxies residenciales para extraer de AliExpress/Amazon sin bloqueos y valídalos con navegador real"
         mode={dataMode()}
       />
-      <div data-tour="screen:proxies" className="py-5">
+      <div data-tour="screen:proxies" className="py-3">
         <ProxyWorkspace initial={pool as any} />
       </div>
     </>

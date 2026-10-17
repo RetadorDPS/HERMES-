@@ -16,7 +16,7 @@ export default async function SetupPage() {
         subtitle="Todo lo que hay que conectar, comprobado en vivo: pega las claves y el sistema queda operativo"
         mode={mode}
       />
-      <div data-tour="screen:setup" className="py-5">
+      <div data-tour="screen:setup" className="py-3">
         <SetupCenter />
       </div>
     </>

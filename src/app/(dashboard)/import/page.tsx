@@ -18,7 +18,7 @@ export default async function ImportPage() {
             subtitle="Extrae un producto del proveedor, ajusta el margen y publícalo en tu tienda en un clic"
             mode={mode}
           />
-          <div data-tour="screen:import" className="py-5">
+          <div data-tour="screen:import" className="py-3">
             <ImportWorkspace
               mode={mode}
               rules={rules.map((r) => ({

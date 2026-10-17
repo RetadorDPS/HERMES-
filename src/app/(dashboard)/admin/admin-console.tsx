@@ -164,7 +164,7 @@ export function AdminConsole() {
         </Alert>
       )}
 
-      <div data-tour="admin:kpis" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div data-tour="admin:kpis" className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 xl:grid-cols-6">
         {KPIS.map((k) => (
           <Card key={k.label}>
             <CardContent className="p-4">

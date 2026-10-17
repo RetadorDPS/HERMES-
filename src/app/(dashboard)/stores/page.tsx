@@ -19,7 +19,7 @@ export default async function StoresPage() {
             subtitle={`${stores.length} integraciones · Shopify (GraphQL Admin API) y WooCommerce (REST v3)`}
             mode={dataMode()}
           />
-          <div data-tour="screen:stores" className="py-5">
+          <div data-tour="screen:stores" className="py-3">
             <Suspense fallback={null}>
               <StoreManager stores={stores as any} suppliers={suppliers} shopifyOAuth={shopifyOAuthConfigured()} />
             </Suspense>

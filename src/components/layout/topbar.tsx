@@ -41,12 +41,12 @@ export function Topbar({ title, subtitle, mode, authEnabled = false }: { title: 
   const allOk = health ? unhealthy === 0 : false;
 
   return (
-    <header className="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-white/[0.06] bg-background/70 px-5 py-3 backdrop-blur-xl">
+    <header className="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-white/[0.06] bg-background/70 px-3 py-2 backdrop-blur-xl sm:px-5 sm:py-2.5">
       <button
         type="button"
         aria-label="Abrir el menú"
         onClick={() => window.dispatchEvent(new Event(EVENTO_ABRIR_MENU))}
-        className="grid size-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-foreground transition hover:bg-white/[0.08] lg:hidden"
+        className="grid size-9 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.03] text-foreground transition hover:bg-white/[0.08] lg:hidden"
       >
         <Menu className="size-5" />
       </button>

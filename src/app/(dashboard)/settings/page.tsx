@@ -52,7 +52,7 @@ export default async function SettingsPage() {
         <>
           <Topbar title="Configuración y despliegue" subtitle="Variables de entorno, arquitectura y puesta en marcha" mode={mode} />
 
-          <div data-tour="screen:settings" className="space-y-4 py-5">
+          <div data-tour="screen:settings" className="space-y-4 py-3">
             {mode === 'demo' && (
               <Alert variant="warning" title="Estás en modo demo">
                 La plataforma funciona con datos sintéticos en memoria: importador, dashboard, monitor de sync y simulación de workers. Para activar el motor

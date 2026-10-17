@@ -25,7 +25,7 @@ export default async function MonitorPage() {
             mode={mode}
           />
 
-          <div data-tour="screen:monitor" className="space-y-4 py-5">
+          <div data-tour="screen:monitor" className="space-y-4 py-3">
             {monitor.stats.mode === 'demo' && (
               <Alert variant="warning" title="Cola en memoria (modo demo)">
                 Sin <code className="rounded bg-black/30 px-1">REDIS_URL</code> los jobs no se procesan de verdad. Arranca Redis + PostgreSQL y ejecuta{' '}
@@ -33,7 +33,7 @@ export default async function MonitorPage() {
               </Alert>
             )}
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
               {[
                 { label: 'Intervalo configurado', value: `${monitor.scheduler.intervalMinutes} min`, sub: 'SYNC_INTERVAL_MINUTES', icon: Timer },
                 { label: 'Próximo barrido', value: formatRelative(monitor.scheduler.nextRun as any), sub: monitor.scheduler.mode === 'redis' ? 'BullMQ repeatable job' : 'planificador simulado', icon: Clock },

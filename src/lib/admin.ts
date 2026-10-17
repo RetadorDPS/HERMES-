@@ -61,7 +61,14 @@ async function sessionUserId(): Promise<string | null> {
  *   4. Autenticación activa sin sesión → nadie.
  */
 export async function currentAdmin(): Promise<AdminIdentity | null> {
-  if (!hasDatabase()) return null;
+  if (!hasDatabase()) {
+    // Versión estática de demostración (GitHub Pages): el panel se puede MIRAR, nunca cambiar.
+    // ESTATICO solo existe en esa construcción; en un servidor real no se define y se devuelve null.
+    if (process.env.NEXT_PUBLIC_ESTATICO === '1') {
+      return { userId: 'user_demo_1', email: 'operador@dropshippilot.io', role: 'ADMIN' as UserRole, readOnly: true, source: 'evaluation' };
+    }
+    return null;
+  }
 
   const sessionId = await sessionUserId();
   // Dentro de un contexto de inquilino ya resuelto (jobs, scripts, llamadas

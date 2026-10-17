@@ -70,7 +70,7 @@ function ListaNavegacion({ items, pathname, onNavigate }: { items: typeof NAV; p
             href={href}
             onClick={onNavigate}
             className={cn(
-              'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all',
+              'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] transition-all',
               active ? 'bg-white/[0.07] text-foreground' : 'text-muted-foreground hover:bg-white/[0.04] hover:text-foreground',
             )}
           >
@@ -140,7 +140,7 @@ export function Sidebar({ mode, isAdmin = false }: { mode: 'demo' | 'postgres'; 
   return (
     <>
       {/* Escritorio: barra lateral fija */}
-      <aside className="sticky top-0 hidden h-screen w-[264px] shrink-0 flex-col border-r border-white/[0.06] bg-black/20 px-3 py-4 backdrop-blur-xl lg:flex">
+      <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 flex-col border-r border-white/[0.06] bg-black/20 px-3 py-4 backdrop-blur-xl lg:flex">
         <Marca />
         <ListaNavegacion items={items} pathname={pathname} />
         <CajaDatos mode={mode} />

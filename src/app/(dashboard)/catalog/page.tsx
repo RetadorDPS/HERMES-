@@ -43,7 +43,7 @@ export default async function CatalogPage() {
     return (
       <>
         <Topbar title="Catálogo de productos" subtitle={subtitle} mode={dataMode()} />
-        <div data-tour="screen:catalog" className="py-5">
+        <div data-tour="screen:catalog" className="py-3">
           <CatalogBrowser
             initial={{
               items: catalog.items,

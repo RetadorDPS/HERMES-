@@ -27,7 +27,7 @@ export default async function PricingPage() {
             mode={dataMode()}
           />
 
-          <div data-tour="screen:pricing" className="space-y-4 py-5">
+          <div data-tour="screen:pricing" className="space-y-4 py-3">
             <Alert variant="info" title="Cómo se calcula el precio de venta">
               <p>
                 <code className="rounded bg-black/30 px-1">precio = costo × (1 + markup%) + fee fijo (+ envío)</code>, con suelo de beneficio mínimo, límites

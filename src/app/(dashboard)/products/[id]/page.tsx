@@ -35,7 +35,7 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
         <>
           <Topbar title={product.title} subtitle={`${product.supplierName} → ${product.storeName} · ${product.variants.length} variantes`} mode={dataMode()} />
 
-          <div className="space-y-4 py-5">
+          <div className="space-y-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <Button asChild variant="outline" size="sm">
                 <Link href="/products">
@@ -53,7 +53,7 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
             </div>
 
             {/* Barra de métricas */}
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-5 [&>*:last-child:nth-child(odd)]:col-span-2 xl:[&>*:last-child:nth-child(odd)]:col-span-1">
               {[
                 { label: 'Coste proveedor', value: formatCurrency(product.costPrice, product.currency), sub: `+ ${formatCurrency(product.shippingCost, product.currency)} envío` },
                 { label: 'Precio de venta', value: formatCurrency(product.sellingPrice), sub: `tachado ${formatCurrency(product.compareAtPrice)}` },
@@ -61,9 +61,9 @@ export default async function ProductDetailPage({ params }: { params: { id: stri
                 { label: 'Stock total', value: formatNumber(product.stockTotal), sub: `${product.variants.filter((v) => v.stock === 0).length} variantes agotadas` },
                 { label: 'Última sincronización', value: formatRelative(product.lastSyncedAt), sub: `próxima ${formatRelative(product.nextSyncAt)}` },
               ].map((m) => (
-                <Card key={m.label} className="p-4">
+                <Card key={m.label} className="p-3 sm:p-4">
                   <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{m.label}</p>
-                  <p className={cn('mt-1.5 text-xl font-semibold tabular-nums', m.accent)}>{m.value}</p>
+                  <p className={cn('mt-1 text-lg font-semibold tabular-nums sm:text-xl', m.accent)}>{m.value}</p>
                   <p className="text-[11px] text-muted-foreground">{m.sub}</p>
                 </Card>
               ))}

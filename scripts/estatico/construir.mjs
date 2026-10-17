@@ -60,7 +60,8 @@ paso(`Construyendo versión estática (ruta base: "${RUTA_BASE || '/'}")`);
 const r = spawnSync('npx', ['next', 'build'], {
   cwd: TMP,
   stdio: 'inherit',
-  env: { ...process.env, ESTATICO: '1', RUTA_BASE, NEXT_TELEMETRY_DISABLED: '1' },
+  // HORA_BASE: la misma «hora de construcción» para todos los procesos (evita desfases entre el HTML y el navegador)
+  env: { ...process.env, ESTATICO: '1', RUTA_BASE, HORA_BASE: String(Date.now()), NEXT_TELEMETRY_DISABLED: '1' },
 });
 if (r.status !== 0) {
   console.error('\n✖ La construcción estática falló.');

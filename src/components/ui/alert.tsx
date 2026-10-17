@@ -28,7 +28,7 @@ export function Alert({
 }) {
   const s = STYLES[variant];
   return (
-    <div className={cn('flex items-start gap-3 rounded-lg border px-3.5 py-3 text-sm animate-in-up', s.wrap, className)}>
+    <div className={cn('flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm animate-in-up', s.wrap, className)}>
       <span className="mt-0.5 shrink-0">{s.icon}</span>
       <div className="min-w-0 flex-1">
         {title && <p className="font-medium">{title}</p>}

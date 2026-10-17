@@ -28,18 +28,31 @@ export function formatPct(value: number | string, decimals = 1) {
   return `${Number(value).toFixed(decimals)}%`;
 }
 
+/**
+ * «Ahora» de la aplicación. En el servidor normal es la hora real. En la versión
+ * estática se fija a la hora de construcción: así el HTML publicado y el
+ * navegador cuentan lo mismo y los datos de ejemplo no envejecen entre visitas.
+ */
+export function ahoraApp(): number {
+  if (process.env.NEXT_PUBLIC_ESTATICO === '1') return Number(process.env.NEXT_PUBLIC_HORA_BASE) || Date.now();
+  return Date.now();
+}
+
 export function formatRelative(date: Date | string | null | undefined) {
   if (!date) return '—';
   const d = typeof date === 'string' ? new Date(date) : date;
-  const diff = Date.now() - d.getTime();
+  const diff = ahoraApp() - d.getTime();
   const abs = Math.abs(diff);
+  // Fecha futura (p. ej. «próxima sincronización»): «en 5 min» en vez de «hace 5 min»
+  const futuro = diff < 0;
+  const dicho = (cantidad: string) => (futuro ? `en ${cantidad}` : `hace ${cantidad}`);
   const min = Math.round(abs / 60000);
-  if (min < 1) return 'hace unos segundos';
-  if (min < 60) return `hace ${min} min`;
+  if (min < 1) return futuro ? 'en unos segundos' : 'hace unos segundos';
+  if (min < 60) return dicho(`${min} min`);
   const hours = Math.round(min / 60);
-  if (hours < 24) return `hace ${hours} h`;
+  if (hours < 24) return dicho(`${hours} h`);
   const days = Math.round(hours / 24);
-  if (days < 30) return `hace ${days} d`;
+  if (days < 30) return dicho(`${days} d`);
   return d.toLocaleDateString('es-ES');
 }
 

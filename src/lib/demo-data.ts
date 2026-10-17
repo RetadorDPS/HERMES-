@@ -5,10 +5,10 @@
  * el importador y el monitor de sync funcionan end-to-end en local/preview.
  * Es determinista (semilla fija) para que la UI no "parpadee" entre renders.
  */
-import { round2, roundPsychological, stableHash } from './utils';
+import { ahoraApp, round2, roundPsychological, stableHash } from './utils';
 import type { DashboardKpis, FulfillmentState, OrderState, ProductState, ScrapedProduct, SyncState } from './types';
 
-const now = Date.now();
+const now = ahoraApp();
 const mins = (n: number) => new Date(now - n * 60_000);
 const hours = (n: number) => new Date(now - n * 3_600_000);
 const days = (n: number) => new Date(now - n * 86_400_000);
@@ -195,7 +195,7 @@ function buildProduct(seed: DemoProductSeed, i: number): DemoProduct {
     storeProductId: `gid://shopify/Product/${Math.floor(r() * 900000 + 100000)}`,
     lastSyncedAt: mins(Math.floor(r() * 55) + 2),
     lastSyncStatus: seed.status === 'OUT_OF_STOCK' ? 'SKIPPED' : r() > 0.08 ? 'SUCCESS' : 'FAILED',
-    nextSyncAt: mins(Math.floor(60 - r() * 55)),
+    nextSyncAt: mins(-Math.floor(60 - r() * 55)), // en el futuro (próxima sincronización)
     images: [
       { url: `https://images.unsplash.com/${seed.img}?w=1200&q=80`, hdUrl: `https://images.unsplash.com/${seed.img}?w=2000&q=90`, isMain: true },
       { url: `https://images.unsplash.com/${seed.img}?w=1200&q=80&sat=-40`, hdUrl: `https://images.unsplash.com/${seed.img}?w=2000&q=90`, isMain: false },
@@ -453,7 +453,7 @@ export function demoProductFromScraped(scraped: ScrapedProduct, extras: { storeI
     storeProductId: null,
     lastSyncedAt: null,
     lastSyncStatus: null,
-    nextSyncAt: new Date(Date.now() + 3_600_000),
+    nextSyncAt: new Date(ahoraApp() + 3_600_000),
     images: scraped.images.map((img, i) => ({ url: img.hdUrl ?? img.url, hdUrl: img.hdUrl ?? img.url, isMain: i === 0 })),
     variants: scraped.variants.map((v, i) => ({
       id: `${id}_v${i}`,

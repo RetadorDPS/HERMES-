@@ -19,7 +19,7 @@ export default async function AdminPage() {
     return (
       <>
         <Topbar title="Administración de la plataforma" subtitle="Sólo para el operador del servicio" mode={mode} />
-        <div className="py-5">
+        <div className="py-3">
           <Alert variant="warning" title="Esta sección es sólo para el administrador">
             Tu cuenta no tiene el rol <code>ADMIN</code>. Si eres el propietario del servicio, ejecuta en el servidor:{' '}
             <code>npx tsx scripts/make-admin.ts tu@correo.com</code> y vuelve a entrar. Los clientes de la plataforma no necesitan esta sección.
@@ -41,7 +41,7 @@ export default async function AdminPage() {
   return (
     <>
       <Topbar title="Administración de la plataforma" subtitle={`Operador: ${admin.email} · métricas globales y gestión de clientes`} mode={mode} />
-      <div className="py-5">
+      <div className="py-3">
         <AdminConsole />
       </div>
       {ofrecerTutorialOperador && (

@@ -56,7 +56,7 @@ export default async function DashboardPage() {
             mode={mode}
           />
 
-          <div data-tour="screen:dashboard" className="space-y-5 py-5">
+          <div data-tour="screen:dashboard" className="space-y-5 py-3">
             {/* Primeros pasos: se marcan solos según lo que el cliente va haciendo */}
             <FirstStepsCard state={firstSteps} />
 
@@ -83,7 +83,7 @@ export default async function DashboardPage() {
             )}
 
             {/* KPIs */}
-            <section data-tour="dash:kpis" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <section data-tour="dash:kpis" className="grid grid-cols-2 gap-2.5 sm:gap-3 xl:grid-cols-4">
               <KpiCard
                 label="Ventas (7 días)"
                 value={formatCurrency(kpis.revenue)}
@@ -117,7 +117,7 @@ export default async function DashboardPage() {
             </section>
 
             {/* Chart + cola */}
-            <section className="grid gap-4 lg:grid-cols-3">
+            <section className="grid gap-3 lg:grid-cols-3">
               <RevenueChart data={kpis.revenueSeries} />
               <div className="space-y-4">
                 <QueueWidget />
@@ -125,7 +125,7 @@ export default async function DashboardPage() {
             </section>
 
             {/* Tiendas + pedidos + top productos */}
-            <section className="grid gap-4 lg:grid-cols-3">
+            <section className="grid gap-3 lg:grid-cols-3">
               <Card>
                 <CardHeader className="flex-row items-center justify-between space-y-0">
                   <div>
@@ -238,7 +238,7 @@ export default async function DashboardPage() {
             </section>
 
             {/* Actividad + acciones rápidas */}
-            <section className="grid gap-4 lg:grid-cols-3">
+            <section className="grid gap-3 lg:grid-cols-3">
               <div className="lg:col-span-2">
                 <SyncLogList logs={logs} />
               </div>

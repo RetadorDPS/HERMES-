@@ -67,9 +67,9 @@ export function QueueWidget({ compact = false }: { compact?: boolean }) {
 
   return (
     <Card className={compact ? '' : 'col-span-1'}>
-      <CardHeader className="flex-row items-start justify-between space-y-0">
-        <div>
-          <CardTitle className="flex items-center gap-2">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2 space-y-0">
+        <div className="min-w-0 flex-1 basis-[200px]">
+          <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
             Cola de sincronización
             <Badge variant={stats?.mode === 'redis' ? 'success' : 'warning'}>{stats?.mode === 'redis' ? 'BullMQ + Redis' : 'en memoria'}</Badge>
           </CardTitle>
@@ -79,19 +79,19 @@ export function QueueWidget({ compact = false }: { compact?: boolean }) {
               : 'Cargando planificador…'}
           </CardDescription>
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <Button variant="outline" size="sm" onClick={() => action({ action: 'sweep' }, 'Barrido encolado')} disabled={busy}>
             <Zap className="size-3.5" />
             Barrido ahora
           </Button>
-          <Button variant="ghost" size="icon" onClick={load} aria-label="Refrescar">
+          <Button variant="outline" size="icon" onClick={load} aria-label="Refrescar" title="Refrescar">
             <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
           </Button>
         </div>
       </CardHeader>
 
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2">
           {[
             { label: 'En espera', value: stats?.waiting ?? 0, icon: Clock, tone: 'text-amber-400' },
             { label: 'En proceso', value: stats?.active ?? 0, icon: Activity, tone: 'text-sky-400' },

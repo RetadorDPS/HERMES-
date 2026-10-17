@@ -53,7 +53,7 @@ export default async function SuppliersPage() {
         subtitle="Conecta las APIs oficiales de AliExpress, CJ y Amazon: datos reales sin captchas y compra automática de pedidos"
         mode={mode}
       />
-      <div className="space-y-4 py-5">
+      <div className="space-y-4 py-3">
         <Alert variant="info" title="Buena noticia: no hace falta que configures nada aquí">
           El catálogo y las importaciones funcionan con las claves de la plataforma
           {platformReady.length > 0 ? ` (${platformReady.map((c) => c.name).join(', ')} ya configuradas por el operador).` : '.'} Esta pantalla sólo sirve

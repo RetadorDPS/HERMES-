@@ -16,7 +16,7 @@ import { consultarCatalogoMemoria, detalleMuestra, filasDeMuestra, sugerenciasMe
 import { SAMPLE_CATEGORIES } from './catalog/sample';
 import { demoPricingRules, demoQueueJobs, demoQueueStats, demoProducts, demoSyncLogs } from './demo-data';
 import { computeSellingPrice } from './pricing';
-import { round2 } from './utils';
+import { ahoraApp, round2 } from './utils';
 import { ESTATICO, sinBase as sinRutaBase } from './ruta';
 
 const AVISO = 'Modo demostración: esta acción no se guarda. Se activará cuando conectemos la base de datos y los proveedores.';
@@ -36,7 +36,7 @@ function salud() {
   return {
     ok: false,
     mode: 'demo',
-    at: new Date().toISOString(),
+    at: new Date(ahoraApp()).toISOString(),
     checks: {
       postgres: { ok: false, detail: 'Sin base de datos: la versión de demostración usa datos de ejemplo en el navegador' },
       redis: { ok: false, detail: 'Sin cola de tareas: se activa al conectar el servidor' },
@@ -48,7 +48,7 @@ function salud() {
 }
 
 function sync() {
-  const ahora = Date.now();
+  const ahora = ahoraApp();
   return {
     ok: true,
     dataMode: 'demo',
@@ -160,7 +160,7 @@ function puestaEnMarcha() {
   const pendientes = checks.filter((x) => !x.required && x.status !== 'ok');
   return {
     ok: true,
-    generatedAt: new Date().toISOString(),
+    generatedAt: new Date(ahoraApp()).toISOString(),
     ready: false,
     summary: { total: checks.length, ok: checks.filter((x) => x.status === 'ok').length, blockers: bloqueos.length, pending: pendientes.length },
     checks,
@@ -198,7 +198,7 @@ function clavesPlataforma() {
 }
 
 function inquilinos() {
-  const hace = (dias: number) => new Date(Date.now() - dias * 86_400_000).toISOString();
+  const hace = (dias: number) => new Date(ahoraApp() - dias * 86_400_000).toISOString();
   const tenants = [
     { id: 'u1', email: 'demo@dropshippilot.io', name: 'Cliente de ejemplo', role: 'OWNER', plan: 'PRO', createdAt: hace(40), lastLoginAt: hace(0), verified: true, twoFactor: true, stores: 2, products: 14, orders: 34, supplierAccounts: 0, status: 'ACTIVE', provider: 'stripe', creditsUsed: 42, creditsLimit: 500, renewsAt: hace(-12) },
     { id: 'u2', email: 'tienda.sol@ejemplo.es', name: 'Tienda Sol', role: 'OWNER', plan: 'STARTER', createdAt: hace(18), lastLoginAt: hace(2), verified: true, twoFactor: false, stores: 1, products: 6, orders: 9, supplierAccounts: 0, status: 'TRIALING', provider: null, creditsUsed: 11, creditsLimit: 100, renewsAt: hace(-5) },

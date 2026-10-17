@@ -21,6 +21,7 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_ESTATICO: estatico ? '1' : '0',
     NEXT_PUBLIC_RUTA_BASE: estatico ? rutaBase : '',
+    NEXT_PUBLIC_HORA_BASE: estatico ? (process.env.HORA_BASE ?? String(Date.now())) : '',
   },
   ...(estatico
     ? { output: 'export', basePath: rutaBase, assetPrefix: rutaBase || undefined, trailingSlash: true }

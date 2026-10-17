@@ -63,7 +63,7 @@ export default async function BillingPage() {
   return (
     <>
       <Topbar title="Facturación" subtitle="Plan, consumo de créditos, método de pago y facturas" mode={mode} />
-      <div data-tour="screen:billing" className="py-5">
+      <div data-tour="screen:billing" className="py-3">
         <BillingView
           plans={plans}
           lemonReady={lemonCheckoutReady()}

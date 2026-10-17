@@ -17,7 +17,7 @@ export default async function OrdersPage() {
             subtitle="Fulfillment automático: compra al proveedor, tracking y aviso al cliente"
             mode={dataMode()}
           />
-          <div data-tour="screen:orders" className="py-5">
+          <div data-tour="screen:orders" className="py-3">
             <OrdersTable orders={orders as any} summary={summary} />
           </div>
         </>
