@@ -36,6 +36,7 @@ import { imageSrc } from './image';
 import { CatalogImportDrawer } from './import-dialog';
 import { useSesion } from '@/components/auth/sesion';
 import { FichaProveedor } from '@/components/panel/real/ficha-proveedor';
+import { nombreAlmacen } from '@/lib/paises';
 
 export interface CatalogBrowserProps {
   initial: {
@@ -87,7 +88,8 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   // Filtros
   const [q, setQ] = useState('');
   const [category, setCategory] = useState<string>('');
-  const [provider, setProvider] = useState('ALL');
+  // Proveedores elegidos (vacío = todos). Se pueden marcar varios a la vez.
+  const [provider, setProvider] = useState<string[]>([]);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [shipFrom, setShipFrom] = useState('');
@@ -106,7 +108,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       const p = new URLSearchParams();
       if (q.trim()) p.set('q', q.trim());
       if (category) p.set('category', category);
-      if (provider !== 'ALL') p.set('provider', provider);
+      if (provider.length) p.set('provider', provider.join(','));
       if (minPrice) p.set('min', minPrice);
       if (maxPrice) p.set('max', maxPrice);
       if (shipFrom) p.set('shipFrom', shipFrom);
@@ -173,7 +175,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   const reset = () => {
     setQ('');
     setCategory('');
-    setProvider('ALL');
+    setProvider([]);
     setMinPrice('');
     setMaxPrice('');
     setShipFrom('');
@@ -187,13 +189,20 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   const activeFilters = [
     q && { label: `«${q}»`, clear: () => setQ('') },
     category && { label: category, clear: () => setCategory('') },
-    provider !== 'ALL' && { label: PROVIDER_LABEL[provider] ?? provider, clear: () => setProvider('ALL') },
+    provider.length > 0 && { label: provider.map((x) => PROVIDER_LABEL[x] ?? x).join(' + '), clear: () => setProvider([]) },
     (minPrice || maxPrice) && { label: `${minPrice || 0}–${maxPrice || '∞'} €`, clear: () => { setMinPrice(''); setMaxPrice(''); } },
-    shipFrom && { label: `almacén ${shipFrom}`, clear: () => setShipFrom('') },
+    shipFrom && { label: `almacén: ${nombreAlmacen(shipFrom)}`, clear: () => setShipFrom('') },
     freeShipping && { label: 'envío gratis', clear: () => setFreeShipping(false) },
     trending && { label: 'tendencias', clear: () => setTrending(false) },
     minRating && { label: `≥ ${minRating}★`, clear: () => setMinRating('') },
   ].filter(Boolean) as { label: string; clear: () => void }[];
+
+  // Proveedores del filtro: siempre CJ y AliExpress (aunque aún no tengan productos), más cualquier otro que tenga datos
+  const opcionesProveedor = useMemo(() => {
+    const cuenta = new Map(initial.providers.map((p) => [p.provider as string, p.count]));
+    const claves = [...new Set(['CJ_DROPSHIPPING', 'ALIEXPRESS', ...cuenta.keys(), ...credentials.map((c) => c.provider)])];
+    return claves.map((k) => ({ provider: k, count: cuenta.has(k) ? (cuenta.get(k) as number) : null }));
+  }, [initial.providers, credentials]);
 
   const shipFromOptions = useMemo(() => {
     const base = ['ES', 'EU', 'CN', 'US'];
@@ -362,14 +371,31 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
         <div className="grid gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] p-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
             <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Proveedor</label>
-            <Select value={provider} onChange={(e) => { setProvider(e.target.value); setPage(1); }}>
-              <option value="ALL">Todos</option>
-              {credentials.map((c) => (
-                <option key={c.provider} value={c.provider}>
-                  {PROVIDER_LABEL[c.provider] ?? c.provider}
-                </option>
-              ))}
-            </Select>
+            <div className="flex flex-wrap gap-2">
+              {opcionesProveedor.map((c) => {
+                const activo = provider.includes(c.provider);
+                return (
+                  <button
+                    key={c.provider}
+                    type="button"
+                    aria-pressed={activo}
+                    onClick={() => {
+                      setProvider((antes) => (antes.includes(c.provider) ? antes.filter((x) => x !== c.provider) : [...antes, c.provider]));
+                      setPage(1);
+                    }}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                      activo ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-100' : 'border-white/10 bg-white/[0.03] text-muted-foreground hover:bg-white/[0.07]',
+                    )}
+                  >
+                    <span className={cn('grid size-3.5 place-items-center rounded-[4px] border text-[9px]', activo ? 'border-indigo-300 bg-indigo-400 text-black' : 'border-white/30')}>{activo ? '✓' : ''}</span>
+                    {PROVIDER_LABEL[c.provider] ?? c.provider}
+                    {c.count !== null && <span className="text-[10.5px] opacity-70">({formatNumber(c.count)})</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10.5px] text-muted-foreground">{provider.length === 0 ? 'Mostrando todos los proveedores. Marca uno o varios para filtrar.' : 'Pulsa de nuevo para quitar el filtro.'}</p>
           </div>
           <div className="space-y-1.5">
             <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Almacén de salida</label>
@@ -377,7 +403,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
               <option value="">Cualquiera</option>
               {shipFromOptions.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {nombreAlmacen(c)}
                 </option>
               ))}
             </Select>

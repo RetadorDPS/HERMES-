@@ -372,7 +372,8 @@ async function visibleSources(): Promise<Record<string, string[]>> {
 function buildWhere(q: CatalogQuery, sources: Record<string, string[]>, onlyCounts = false) {
   const and: any[] = [];
 
-  const providerFilter = q.provider && q.provider !== 'ALL' ? [q.provider] : Object.keys(sources);
+  // `provider` puede traer varios proveedores separados por comas (por ejemplo «CJ_DROPSHIPPING,ALIEXPRESS»)
+  const providerFilter = q.provider && q.provider !== 'ALL' ? String(q.provider).split(',').filter(Boolean) : Object.keys(sources);
   const providerClauses = providerFilter
     .filter((p) => sources[p]?.length)
     .map((p) => ({ provider: p as SupplierType, source: { in: sources[p] } }));

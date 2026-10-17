@@ -58,7 +58,7 @@ export function filasDeMuestra(): CatalogRow[] {
 }
 
 function coincide(f: CatalogRow, q: CatalogQuery, etiquetas: string[]): boolean {
-  if (q.provider && q.provider !== 'ALL' && f.provider !== q.provider) return false;
+  if (q.provider && q.provider !== 'ALL' && !String(q.provider).split(',').includes(f.provider)) return false;
   if (q.search) {
     const s = q.search.trim().toLowerCase();
     const texto = `${f.title} ${f.categoryName ?? ''}`.toLowerCase();

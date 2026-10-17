@@ -427,7 +427,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   const tamano = Math.min(Math.max(Number(q.pageSize ?? 24), 4), 96);
 
   let consulta: any = c.from('CatalogItem').select(COL_CATALOGO, { count: 'exact' });
-  if (q.provider && q.provider !== 'ALL') consulta = consulta.eq('provider', q.provider);
+  if (q.provider && q.provider !== 'ALL') consulta = consulta.in('provider', String(q.provider).split(',').filter(Boolean));
   if (q.category && q.category !== 'ALL') consulta = consulta.eq('categoryName', q.category);
   if (q.minPrice !== undefined) consulta = consulta.gte('costPrice', q.minPrice);
   if (q.maxPrice !== undefined) consulta = consulta.lte('costPrice', q.maxPrice);

@@ -12,15 +12,21 @@ import { Badge as UiBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatCurrency, formatNumber, cn } from '@/lib/utils';
 import type { CatalogRow } from '@/lib/catalog';
+import { nombreAlmacen } from '@/lib/paises';
 
 export function ProviderBadge({ provider }: { provider: string }) {
+  // Fondo oscuro propio para que se lea sobre cualquier foto (antes se perdía sobre imágenes claras)
   const map: Record<string, { label: string; className: string }> = {
-    CJ_DROPSHIPPING: { label: 'CJ', className: 'bg-sky-500/15 text-sky-300 border-sky-500/25' },
-    ALIEXPRESS: { label: 'AliExpress', className: 'bg-orange-500/15 text-orange-300 border-orange-500/25' },
-    AMAZON: { label: 'Amazon', className: 'bg-amber-500/15 text-amber-300 border-amber-500/25' },
+    CJ_DROPSHIPPING: { label: 'CJ Dropshipping', className: 'border-sky-400/60 text-sky-200' },
+    ALIEXPRESS: { label: 'AliExpress', className: 'border-orange-400/60 text-orange-200' },
+    AMAZON: { label: 'Amazon', className: 'border-amber-400/60 text-amber-200' },
   };
-  const spec = map[provider] ?? { label: provider, className: 'bg-white/10 text-foreground border-white/15' };
-  return <span className={cn('rounded-md border px-1.5 py-0.5 text-[10px] font-semibold', spec.className)}>{spec.label}</span>;
+  const spec = map[provider] ?? { label: provider, className: 'border-white/30 text-foreground' };
+  return (
+    <span className={cn('rounded-md border bg-black/75 px-1.5 py-0.5 text-[10.5px] font-semibold leading-none shadow-sm backdrop-blur', spec.className)}>
+      {spec.label}
+    </span>
+  );
 }
 
 export function CatalogCard({
@@ -85,7 +91,7 @@ export function CatalogCard({
             </span>
           )}
           {sales > 0 && <span>{formatNumber(sales)}<span className="hidden sm:inline"> pedidos</span><span className="sm:hidden"> ped.</span></span>}
-          {item.shipFrom && <span className="hidden sm:inline">desde {item.shipFrom}</span>}
+          {item.shipFrom && <span className="hidden sm:inline">desde {nombreAlmacen(item.shipFrom)}</span>}
           {item.shippingMinDays !== null && (
             <span className="inline-flex items-center gap-1">
               <Truck className="size-3" />
