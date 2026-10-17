@@ -69,7 +69,7 @@ export function Topbar({ title, subtitle, mode, authEnabled = false }: { title: 
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-60" />
             <span className="relative inline-flex size-2 rounded-full bg-current" />
           </span>
-          {health ? (allOk ? 'Sistema operativo' : `${unhealthy} servicio(s) en modo demo`) : 'Comprobando…'}
+          {health ? (allOk ? 'Sistema operativo' : (mode === 'postgres' ? `${unhealthy} servicio(s) por conectar` : `${unhealthy} servicio(s) en modo demo`)) : 'Comprobando…'}
         </button>
 
         <Badge variant={mode === 'postgres' ? 'success' : 'warning'} className="capitalize">

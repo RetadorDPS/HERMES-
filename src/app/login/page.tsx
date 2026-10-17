@@ -2,7 +2,8 @@ import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions, DEFAULT_DEMO_EMAIL } from '@/lib/auth';
 import { LoginForm } from './login-form';
-import { parametrosDeServidor } from '@/lib/ruta';
+import { LoginSupabase } from './login-supabase';
+import { ESTATICO, parametrosDeServidor } from '@/lib/ruta';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Iniciar sesión · DropshipPilot' };
@@ -12,6 +13,19 @@ export default async function LoginPage({
 }: {
   searchParams: { callbackUrl?: string; error?: string };
 }) {
+  // Versión estática (GitHub Pages): acceso con Supabase (correo, Google) y modo demostración
+  if (ESTATICO) {
+    return (
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -left-32 -top-32 size-[520px] rounded-full bg-indigo-600/20 blur-[120px]" />
+          <div className="absolute -bottom-40 -right-24 size-[520px] rounded-full bg-cyan-500/10 blur-[120px]" />
+        </div>
+        <LoginSupabase />
+      </main>
+    );
+  }
+
   const authEnabled = process.env.AUTH_ENABLED === 'true';
   const callbackUrl = parametrosDeServidor(searchParams).callbackUrl ?? '/dashboard';
 

@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import {
-  ArrowRight,
   Boxes,
   Compass,
   Download,
@@ -12,6 +11,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PortadaAcciones } from '@/components/portada-acciones';
 
 export const metadata = { title: 'Dropshipping en piloto automático' };
 
@@ -65,7 +65,7 @@ export default function Portada() {
           <div>
             <span className="inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-3 py-1 text-[11px] font-medium text-amber-200">
               <span className="size-1.5 rounded-full bg-amber-300" />
-              Versión de demostración · datos de ejemplo
+              Vista previa · demostración con datos de ejemplo
             </span>
             <h1 className="mt-4 text-3xl font-semibold leading-tight tracking-tight sm:text-5xl">
               Tu negocio de dropshipping,
@@ -76,20 +76,7 @@ export default function Portada() {
               Importa productos de CJ y AliExpress, fija tu margen, vigila precios y stock y gestiona los pedidos de tus tiendas desde un único panel,
               en español.
             </p>
-            <div className="mt-6 flex flex-wrap gap-3">
-              <Button asChild variant="gradient" size="lg">
-                <Link href="/dashboard">
-                  Entrar al panel
-                  <ArrowRight className="size-4" />
-                </Link>
-              </Button>
-              <Button asChild variant="outline" size="lg">
-                <Link href="/catalog">Explorar el catálogo</Link>
-              </Button>
-            </div>
-            <p className="mt-3 text-[12px] text-muted-foreground">
-              Esta versión muestra cómo se verá la plataforma. Todavía no se guarda nada ni está conectada a proveedores reales.
-            </p>
+            <PortadaAcciones />
           </div>
 
           {/* Vista previa compacta (con datos de ejemplo) */}

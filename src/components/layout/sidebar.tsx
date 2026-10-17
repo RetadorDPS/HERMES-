@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useSesion } from '@/components/auth/sesion';
 
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: Gauge, hint: 'KPIs y estado general' },
@@ -91,26 +92,32 @@ function ListaNavegacion({ items, pathname, onNavigate }: { items: typeof NAV; p
   );
 }
 
-function CajaDatos({ mode }: { mode: 'demo' | 'postgres' }) {
+function CajaDatos({ mode, supabase = false }: { mode: 'demo' | 'postgres'; supabase?: boolean }) {
   return (
     <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
       <div className="flex items-center justify-between text-[11px]">
         <span className="text-muted-foreground">Fuente de datos</span>
         <span className={cn('rounded px-1.5 py-0.5 font-semibold', mode === 'postgres' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400')}>
-          {mode === 'postgres' ? 'PostgreSQL' : 'MODO DEMO'}
+          {mode === 'postgres' ? (supabase ? 'SUPABASE' : 'PostgreSQL') : 'MODO DEMO'}
         </span>
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
         {mode === 'postgres'
-          ? 'Datos reales desde Prisma. Workers BullMQ activos.'
-          : 'Añade DATABASE_URL + REDIS_URL en .env para operar con datos reales.'}
+          ? supabase
+            ? 'Datos reales de tu cuenta, protegidos por cliente.'
+            : 'Datos reales desde Prisma. Workers BullMQ activos.'
+          : 'Datos de ejemplo. Entra con tu cuenta para ver los reales.'}
       </p>
     </div>
   );
 }
 
 export function Sidebar({ mode, isAdmin = false }: { mode: 'demo' | 'postgres'; isAdmin?: boolean }) {
-  const items = NAV.filter((item) => !('adminOnly' in item && item.adminOnly) || isAdmin);
+  const { activo, modo: modoSesion, sesion } = useSesion();
+  const real = activo && modoSesion === 'real' && Boolean(sesion);
+  const modoEfectivo: 'demo' | 'postgres' = real ? 'postgres' : mode;
+  // En la versión estática el enlace de administración se muestra siempre en modo real; la propia pantalla comprueba el rol
+  const items = NAV.filter((item) => !('adminOnly' in item && item.adminOnly) || isAdmin || real);
   const pathname = usePathname();
   const [abierto, setAbierto] = useState(false);
 
@@ -143,7 +150,7 @@ export function Sidebar({ mode, isAdmin = false }: { mode: 'demo' | 'postgres'; 
       <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 flex-col border-r border-white/[0.06] bg-black/20 px-3 py-4 backdrop-blur-xl lg:flex">
         <Marca />
         <ListaNavegacion items={items} pathname={pathname} />
-        <CajaDatos mode={mode} />
+        <CajaDatos mode={modoEfectivo} supabase={real} />
       </aside>
 
       {/* Móvil y tableta: cajón que se abre con el botón de menú */}
@@ -177,7 +184,7 @@ export function Sidebar({ mode, isAdmin = false }: { mode: 'demo' | 'postgres'; 
             </button>
           </div>
           <ListaNavegacion items={items} pathname={pathname} onNavigate={() => setAbierto(false)} />
-          <CajaDatos mode={mode} />
+          <CajaDatos mode={modoEfectivo} supabase={real} />
         </aside>
       </div>
     </>

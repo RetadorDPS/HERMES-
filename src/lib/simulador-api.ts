@@ -18,6 +18,7 @@ import { demoPricingRules, demoQueueJobs, demoQueueStats, demoProducts, demoSync
 import { computeSellingPrice } from './pricing';
 import { ahoraApp, round2 } from './utils';
 import { ESTATICO, sinBase as sinRutaBase } from './ruta';
+import { leerModo } from './modo';
 
 const AVISO = 'Modo demostración: esta acción no se guarda. Se activará cuando conectemos la base de datos y los proveedores.';
 const ESPERA_MS = 180;
@@ -213,8 +214,30 @@ function inquilinos() {
   };
 }
 
+/** Estado honesto del modo real: la base de datos existe; el resto se conecta por bloques. */
+function saludReal() {
+  return {
+    ok: false,
+    mode: 'supabase',
+    at: new Date(ahoraApp()).toISOString(),
+    checks: {
+      postgres: { ok: true, detail: 'Base de datos Supabase conectada (Irlanda)' },
+      redis: { ok: false, detail: 'Las tareas programadas se activarán en Supabase (pendiente)' },
+      scraper: { ok: false, detail: 'Proveedores CJ y AliExpress: aún no conectados' },
+      fx: { ok: false, detail: 'Tasas de cambio: aún no conectadas' },
+      stripe: { ok: false, detail: 'Cobros sin configurar' },
+    },
+  };
+}
+
 async function responder(metodo: string, ruta: string, params: URLSearchParams, cuerpo: any): Promise<Response> {
   const get = metodo === 'GET';
+  if (leerModo() === 'real') {
+    if (get && ruta === '/api/health') return json(saludReal());
+    if (!get)
+      return json({ ok: false, error: 'Esta acción todavía no está conectada a la base de datos real. Se irá activando por bloques.' }, 503);
+    return json({ ok: false, error: 'Dato aún no conectado a la base de datos real.' }, 503);
+  }
   if (get && ruta === '/api/health') return json(salud());
   if (ruta === '/api/sync') return get ? json(sync()) : json({ ok: true, mode: 'demo', message: `${AVISO}` });
   if (get && ruta === '/api/catalog') return json({ ok: true, ...consultaCatalogo(params) });
