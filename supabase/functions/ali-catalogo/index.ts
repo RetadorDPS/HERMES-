@@ -8,7 +8,7 @@
  *
  * Acciones (solo administrador): probar · autorizar · feeds · sondear · descargar · detalle · envio
  *
- * Autorización de la cuenta (OAuth): `ds.product.get` y `ds.freight.query` exigen un `access_token`. La acción `autorizar` da el enlace; el retorno lo recibe la función `ali-callback`, que guarda el token en la tabla privada PlatformCredential. Aquí se usa y se renueva solo.
+ * Autorización de la cuenta (OAuth): `ds.product.get` y `ds.freight.query` exigen un `access_token`. La acción `autorizar` da el enlace; el retorno llega a la página de Retador, que lo reparte a la función `ali-callback`, que guarda el token en la tabla privada PlatformCredential. Aquí se usa y se renueva solo.
  *
  * Límite: AliExpress corta con `AppApiCallLimit` si se llama en paralelo o muy deprisa. TODAS las llamadas pasan
  * por `ali()`, una a una y con pausa. Las claves viven como secretos (ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET) y nunca se devuelven.
@@ -239,11 +239,13 @@ Deno.serve(async (req) => {
 
   /* ───────────────────────── autorizar (enlace para que la cuenta de AliExpress autorice la app) ───────────────────────── */
   if (accion === "autorizar") {
-    const urlRetorno = `${Deno.env.get("SUPABASE_URL")}/functions/v1/ali-callback`;
+    // La app de AliExpress se comparte con Retador y solo admite UNA Callback URL: la de Retador. Su página de retorno reparte
+    // el navegador según el `state`: si empieza por «dropshippilot.» lo envía a la función `ali-callback` de este proyecto.
+    const urlRetorno = "https://retadormarketplace.es/aliexpress/callback";
     const carga = `${uid}.${Date.now() + 15 * 60_000}`;
     const clave = await crypto.subtle.importKey("raw", new TextEncoder().encode(appSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
     const firma = [...new Uint8Array(await crypto.subtle.sign("HMAC", clave, new TextEncoder().encode(carga)))].map((b) => b.toString(16).padStart(2, "0")).join("");
-    const state = btoa(`${carga}.${firma}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const state = "dropshippilot." + btoa(`${carga}.${firma}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     const urlAutorizacion = `https://api-sg.aliexpress.com/oauth/authorize?response_type=code&force_auth=true&client_id=${encodeURIComponent(appKey)}&redirect_uri=${encodeURIComponent(urlRetorno)}&state=${state}`;
     const t = ajustes.aliToken;
     return responder({ ok: true, mensaje: t?.accessToken ? `Ya hay una cuenta autorizada${t.cuenta ? ` (${t.cuenta})` : ""}; puedes volver a autorizar si quieres cambiarla` : "Falta autorizar la cuenta de AliExpress", urlRetorno, urlAutorizacion, autorizada: Boolean(t?.accessToken), ...diagnostico });

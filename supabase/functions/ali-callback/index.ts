@@ -1,7 +1,8 @@
 /**
  * ali-callback — Dirección de retorno de la autorización de AliExpress (OAuth).
  *
- * AliExpress devuelve aquí al administrador con `?code=...&state=...`. Esta función:
+ * AliExpress devuelve al administrador a la página de retorno de Retador (única Callback URL de la app compartida), que
+ * lo reparte aquí con `?code=...&state=dropshippilot.…`. Esta función:
  *   1. comprueba que `state` lo firmó `ali-catalogo` hace menos de 15 minutos (así nadie de fuera puede guardar un token),
  *   2. cambia el `code` por el `access_token` y el `refresh_token`,
  *   3. los guarda SOLO en la tabla privada PlatformCredential (nunca se devuelven ni se muestran),
@@ -35,7 +36,9 @@ Deno.serve(async (req) => {
   // 1. Comprobar el state firmado
   let carga = "";
   try {
-    const crudo = atob(state.replace(/-/g, "+").replace(/_/g, "/"));
+    // El `state` lleva el prefijo «dropshippilot.» que usa la página de retorno de Retador para repartir la autorización
+    const sinPrefijo = state.startsWith("dropshippilot.") ? state.slice("dropshippilot.".length) : state;
+    const crudo = atob(sinPrefijo.replace(/-/g, "+").replace(/_/g, "/"));
     const corte = crudo.lastIndexOf(".");
     carga = crudo.slice(0, corte);
     const firma = crudo.slice(corte + 1);

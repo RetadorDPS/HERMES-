@@ -140,7 +140,7 @@ function Resultado({ r }: { r: Respuesta }) {
       {r.urlAutorizacion && (
         <div className="mt-2 space-y-2 text-[12px]">
           <p>
-            Dirección de retorno que debe estar registrada en tu app de AliExpress (consola de AliExpress Open Platform → tu app → «Callback URL»):
+            Esta es la dirección de retorno que ya tiene registrada tu app de AliExpress (la comparte con Retador, no hay que cambiar nada en la consola). Antes de autorizar, la página de retorno de Retador debe estar publicada con el reparto:
           </p>
           <p className="rounded-md bg-black/30 p-2 font-mono text-[11px]">{r.urlRetorno}</p>
           <Button asChild variant="gradient" size="sm">
