@@ -25,3 +25,15 @@ variables, tablas e identificadores técnicos que ya existen. El dueño del proy
 - El costo real del proveedor nunca lo ve un vendedor ni un comprador (solo el administrador).
 - Arreglos en el sistema, nunca parches a un producto concreto.
 - Las pantallas deben verse bien en ordenador, Android y Apple (comprobar siempre con ancho de móvil de 390 px).
+
+## Número de versión (obligatorio)
+
+- La fuente de verdad es `APP_VERSION` en `src/lib/version.ts` (un número entero). Se sube en 1 en cada publicación a `main` y se muestra en la portada, el menú lateral y el pie del panel. `package.json` se queda fijo y NO refleja la versión real.
+- Al final de CUALQUIER reporte de trabajo se indica el número de versión real resultante (por ejemplo «v2»), junto con la referencia del commit. Nunca omitirlo.
+- Historial: v1 = inicio de sesión real (correo y Google), panel con datos reales y primer número de versión.
+
+## Proveedores en Hermes
+
+- Igual que en Retador: CJ y AliExpress son independientes (funciones, tablas y lógica propias de cada uno). Un cambio de un proveedor nunca toca al otro.
+- Las claves de los proveedores viven solo como secretos de Edge Functions de Supabase (`CJ_API_KEY`, `ALI_APP_KEY`, `ALI_APP_SECRET`); nunca en el repositorio, en el chat ni en una tabla que un cliente pueda leer. Los tokens de sesión de cada proveedor se piden con esas claves y se guardan en una tabla privada.
+

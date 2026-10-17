@@ -11,6 +11,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { VERSION_ETIQUETA } from '@/lib/version';
 import { PortadaAcciones } from '@/components/portada-acciones';
 
 export const metadata = { title: 'Dropshipping en piloto automático' };
@@ -139,7 +140,7 @@ export default function Portada() {
       </main>
 
       <footer className="mx-auto mt-6 flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-5 text-[12px] text-muted-foreground sm:px-6">
-        <span>DropshipPilot · versión de demostración</span>
+        <span>DropshipPilot {VERSION_ETIQUETA}</span>
         <span className="flex gap-4">
           <Link href="/privacy" className="hover:text-foreground hover:underline">Privacidad</Link>
           <Link href="/terms" className="hover:text-foreground hover:underline">Términos</Link>

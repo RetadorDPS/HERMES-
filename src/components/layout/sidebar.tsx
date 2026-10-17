@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react';
+import { VERSION_ETIQUETA } from '@/lib/version';
 import { cn } from '@/lib/utils';
 import { useSesion } from '@/components/auth/sesion';
 
@@ -108,6 +109,7 @@ function CajaDatos({ mode, supabase = false }: { mode: 'demo' | 'postgres'; supa
             : 'Datos reales desde Prisma. Workers BullMQ activos.'
           : 'Datos de ejemplo. Entra con tu cuenta para ver los reales.'}
       </p>
+      <p className="mt-2 text-[10.5px] text-muted-foreground/70">Versión {VERSION_ETIQUETA}</p>
     </div>
   );
 }
