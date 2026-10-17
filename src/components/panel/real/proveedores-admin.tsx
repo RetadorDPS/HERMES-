@@ -67,17 +67,22 @@ async function articulosSinFicha(cantidad: number): Promise<string[]> {
 
 const DESTINOS_DEFECTO = 12;
 
-/** Elige un artículo con ficha completa al que todavía le faltan cotizaciones de envío (origen × destino). */
+/** Elige, entre los artículos con ficha, el MÁS POPULAR al que todavía le faltan cotizaciones de envío (origen × destino). */
 async function articuloSinEnvio(): Promise<string | null> {
-  const { data, error } = await supabase().from('CatalogItemDetail').select('itemId, origenes:ficha->origenes, envio:ficha->envio');
+  const { data, error } = await supabase()
+    .from('CatalogItemDetail')
+    .select('itemId, origenes:ficha->origenes, envio:ficha->envio, item:CatalogItem(ordersCount)');
   if (error) throw new Error(error.message);
-  const pendiente = (data ?? []).find((d: any) => {
-    const conStock = ((d.origenes ?? []) as { pais: string; total: number }[]).filter((o) => (o.total ?? 0) > 0).slice(0, 6);
-    const esperadas = Math.max(conStock.length, 1) * DESTINOS_DEFECTO;
-    const hechas = Object.values((d.envio?.porOrigen ?? {}) as Record<string, Record<string, unknown>>).reduce((n, porDestino) => n + Object.keys(porDestino).length, 0);
-    return hechas < esperadas;
-  });
-  return pendiente ? (pendiente as any).itemId : null;
+  const pedidos = (d: any) => Number((Array.isArray(d.item) ? d.item[0]?.ordersCount : d.item?.ordersCount) ?? 0);
+  const pendientes = (data ?? [])
+    .filter((d: any) => {
+      const conStock = ((d.origenes ?? []) as { pais: string; total: number }[]).filter((o) => (o.total ?? 0) > 0).slice(0, 6);
+      const esperadas = Math.max(conStock.length, 1) * DESTINOS_DEFECTO;
+      const hechas = Object.values((d.envio?.porOrigen ?? {}) as Record<string, Record<string, unknown>>).reduce((n, porDestino) => n + Object.keys(porDestino).length, 0);
+      return hechas < esperadas;
+    })
+    .sort((x: any, y: any) => pedidos(y) - pedidos(x));
+  return pendientes.length ? (pendientes[0] as any).itemId : null;
 }
 
 /** Catálogo del proveedor CJ. AliExpress se añadirá aparte (son independientes). */
