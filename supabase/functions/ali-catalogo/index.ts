@@ -214,7 +214,19 @@ Deno.serve(async (req) => {
 
   /* ───────────────────────── descargar ───────────────────────── */
   if (accion === "descargar") {
-    const feed = String(cuerpo?.feed ?? "DS bestseller").slice(0, 80);
+    // «DS bestseller» no existe en AliExpress: si no se indica feed, se usa el de más vendidos con más productos (se recuerda para no gastar otra llamada)
+    let feed = String(cuerpo?.feed ?? ajustes.feedPorDefecto ?? "").slice(0, 120);
+    if (!feed) {
+      const rf = await ali("aliexpress.ds.feedname.get", {});
+      if (!rf.ok) return await fallo(`AliExpress no devolvió los feeds: ${rf.mensaje}`, { codigoAli: rf.codigo, detalleError: rf.crudo });
+      const nodoF = rf.datos?.aliexpress_ds_feedname_get_response?.resp_result?.result ?? rf.datos?.aliexpress_ds_feedname_get_response ?? rf.datos;
+      const feedsDisp = lista(nodoF?.promos?.promo ?? nodoF?.promos).map((p: any) => ({ nombre: String(p.promo_name ?? p.name ?? ""), productos: numeroONulo(p.product_num) ?? 0 })).filter((f) => f.nombre);
+      const masVendidos = feedsDisp.filter((f) => /bestseller/i.test(f.nombre));
+      const elegido = [...(masVendidos.length ? masVendidos : feedsDisp)].sort((a, b) => b.productos - a.productos)[0];
+      if (!elegido) return await fallo("AliExpress no devolvió ningún feed utilizable");
+      feed = elegido.nombre;
+      await guardarAjustes({ feedPorDefecto: feed });
+    }
     const tamano = Math.max(1, Math.min(Number(cuerpo?.tamano ?? 50), 50));
     const paginas = Math.max(1, Math.min(Number(cuerpo?.paginas ?? 1), 3));
     const desde = Math.max(1, Number(cuerpo?.paginaInicial ?? 1));

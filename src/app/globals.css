@@ -16,6 +16,30 @@
     min-width: 0;
   }
 
+  /*
+   * Regla general (todas las pantallas): ningún texto largo sin espacios (identificadores,
+   * nombres de campos, enlaces) puede ensanchar la página, y la pantalla nunca se desplaza
+   * hacia los lados salvo que el diseño lo pida en un contenedor propio con overflow-x-auto.
+   */
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+  @supports not (overflow: clip) {
+    html,
+    body {
+      overflow-x: hidden;
+    }
+  }
+  body {
+    overflow-wrap: anywhere;
+  }
+  pre,
+  code {
+    white-space: pre-wrap;
+  }
+
   :root {
     /* Tema oscuro como único modo (según especificación del panel) */
     --background: 224 30% 6%;
