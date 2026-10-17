@@ -12,6 +12,7 @@ import { useSesion } from '@/components/auth/sesion';
 import { guardarPerfil, obtenerClientes, obtenerPerfil, obtenerResumen, type Perfil } from '@/lib/real/datos';
 import { cn, formatRelative } from '@/lib/utils';
 import { PantallaReal, useCarga } from './comun';
+import { ProveedoresAdmin } from './proveedores-admin';
 
 const ALERTAS: { clave: keyof Perfil['alertas']; titulo: string; texto: string }[] = [
   { clave: 'sync', titulo: 'Fallos de sincronización', texto: 'Un producto no se pudo actualizar en la tienda tras varios intentos.' },
@@ -172,6 +173,8 @@ export function AdminReal() {
           Tu cuenta no tiene el rol de operador. Si eres el propietario del servicio, el rol se concede desde la base de datos.
         </Alert>
       ) : (
+        <div className="space-y-3">
+        <ProveedoresAdmin />
         <Card>
           <CardHeader>
             <CardTitle>Clientes ({datos?.length ?? 0})</CardTitle>
@@ -195,6 +198,7 @@ export function AdminReal() {
             ))}
           </CardContent>
         </Card>
+        </div>
       )}
     </PantallaReal>
   );
