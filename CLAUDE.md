@@ -22,7 +22,7 @@ variables, tablas e identificadores técnicos que ya existen. El dueño del proy
 - Nunca inventar datos. Si algo no se puede verificar, se dice.
 - Reportar siempre qué se verificó en la app real, qué solo en datos y qué no se pudo verificar.
 - Nada de pruebas masivas ni en paralelo contra APIs externas (CJ, AliExpress): en serie, con pausa y lo mínimo.
-- El costo real del proveedor nunca lo ve un vendedor ni un comprador (solo el administrador).
+- El costo del proveedor lo ve el usuario de Hermes (el vendedor dropshipping, que lo necesita para calcular su margen). Nunca lo ve el comprador final de su tienda: ninguna ficha ni dato que viaje a la tienda del usuario incluye el costo.
 - Arreglos en el sistema, nunca parches a un producto concreto.
 - Las pantallas deben verse bien en ordenador, Android y Apple (comprobar siempre con ancho de móvil de 390 px).
 
@@ -30,7 +30,7 @@ variables, tablas e identificadores técnicos que ya existen. El dueño del proy
 
 - La fuente de verdad es `APP_VERSION` en `src/lib/version.ts` (un número entero). Se sube en 1 en cada publicación a `main` y se muestra en la portada, el menú lateral y el pie del panel. `package.json` se queda fijo y NO refleja la versión real.
 - Al final de CUALQUIER reporte de trabajo se indica el número de versión real resultante (por ejemplo «v2»), junto con la referencia del commit. Nunca omitirlo.
-- Historial: v1 = inicio de sesión real (correo y Google), panel con datos reales y primer número de versión. v2 = función `cj-catalogo` y botón de descarga de prueba en Administración. v3 = diagnóstico de la clave de CJ (sin mostrarla).
+- Historial: v1 = inicio de sesión real (correo y Google), panel con datos reales y primer número de versión. v2 = función `cj-catalogo` y botón de descarga de prueba en Administración. v3 = diagnóstico de la clave de CJ (sin mostrarla). v4 = categorías, descarga por páginas y fichas completas de CJ.
 
 ## Proveedores en Hermes
 

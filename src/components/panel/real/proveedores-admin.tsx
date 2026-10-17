@@ -7,6 +7,19 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { supabase } from '@/lib/supabase/cliente';
 
+interface InformeFicha {
+  id: string;
+  ok: boolean;
+  titulo?: string;
+  error?: string;
+  imagenes?: number;
+  variantes?: number;
+  almacenes?: number;
+  opcionesEnvio?: Record<string, number>;
+  resenas?: number;
+  avisos?: string[];
+}
+
 interface Respuesta {
   ok: boolean;
   mensaje?: string;
@@ -16,8 +29,12 @@ interface Respuesta {
   secretoCjApiKey?: boolean;
   secretosVistos?: string[];
   formaClave?: { longitud: number; tieneEspaciosOSaltos: boolean; contieneArrobaApi: boolean; sobrabanEspaciosAlBorde: boolean };
-  muestra?: { id: string; titulo: string; costo: number; categoria: string | null; stock: number }[];
+  avisos?: string[];
+  totalEnCj?: number | null;
+  informe?: InformeFicha[];
 }
+
+type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle';
 
 /** Llama a la función `cj-catalogo` (solo administrador) y devuelve su respuesta, con el error real si falla. */
 async function invocarCj(cuerpo: Record<string, unknown>): Promise<Respuesta> {
@@ -35,16 +52,35 @@ async function invocarCj(cuerpo: Record<string, unknown>): Promise<Respuesta> {
   return data as Respuesta;
 }
 
-/** Descarga del catálogo del proveedor CJ. AliExpress se añadirá aparte (son independientes). */
+/** Elige hasta 3 artículos de CJ que todavía no tienen la ficha completa (los más pedidos primero). */
+async function articulosSinFicha(cantidad: number): Promise<string[]> {
+  const cliente = supabase();
+  const [{ data: items, error: e1 }, { data: hechos, error: e2 }] = await Promise.all([
+    cliente.from('CatalogItem').select('id').eq('provider', 'CJ_DROPSHIPPING').order('ordersCount', { ascending: false, nullsFirst: false }).limit(60),
+    cliente.from('CatalogItemDetail').select('itemId'),
+  ]);
+  if (e1 || e2) throw new Error((e1 || e2)!.message);
+  const conFicha = new Set((hechos ?? []).map((h: any) => h.itemId));
+  return (items ?? []).map((i: any) => i.id as string).filter((id) => !conFicha.has(id)).slice(0, cantidad);
+}
+
+/** Catálogo del proveedor CJ. AliExpress se añadirá aparte (son independientes). */
 export function ProveedoresAdmin() {
-  const [trabajando, setTrabajando] = useState<'probar' | 'descargar' | null>(null);
+  const [trabajando, setTrabajando] = useState<Accion | null>(null);
   const [resultado, setResultado] = useState<Respuesta | null>(null);
 
-  const ejecutar = async (accion: 'probar' | 'descargar') => {
+  const ejecutar = async (accion: Accion) => {
     setTrabajando(accion);
     setResultado(null);
     try {
-      setResultado(await invocarCj(accion === 'probar' ? { accion } : { accion, tamano: 5 }));
+      if (accion === 'probar') setResultado(await invocarCj({ accion }));
+      else if (accion === 'categorias') setResultado(await invocarCj({ accion }));
+      else if (accion === 'descargar') setResultado(await invocarCj({ accion, paginas: 3, tamano: 50 }));
+      else {
+        const ids = await articulosSinFicha(3);
+        if (!ids.length) setResultado({ ok: true, mensaje: 'Todos los artículos descargados ya tienen su ficha completa.' });
+        else setResultado(await invocarCj({ accion, ids, paises: ['ES'] }));
+      }
     } catch (e) {
       setResultado({ ok: false, error: (e as Error).message });
     } finally {
@@ -52,25 +88,31 @@ export function ProveedoresAdmin() {
     }
   };
 
+  const boton = (accion: Accion, texto: string, variante: 'outline' | 'gradient' = 'outline') => (
+    <Button variant={variante} size="sm" disabled={trabajando !== null} onClick={() => ejecutar(accion)}>
+      {trabajando === accion && <Loader2 className="size-4 animate-spin" />}
+      {texto}
+    </Button>
+  );
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Catálogo de proveedores · CJ Dropshipping</CardTitle>
         <CardDescription>
-          Usa la clave guardada en los secretos de Supabase. La descarga de prueba trae solo 5 productos, en una única petición a CJ.
+          Usa la clave guardada en los secretos de Supabase. Todas las llamadas a CJ van en serie, con una pausa de más de un segundo entre una y otra.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" disabled={trabajando !== null} onClick={() => ejecutar('probar')}>
-            {trabajando === 'probar' && <Loader2 className="size-4 animate-spin" />}
-            Probar la clave de CJ
-          </Button>
-          <Button variant="gradient" size="sm" disabled={trabajando !== null} onClick={() => ejecutar('descargar')}>
-            {trabajando === 'descargar' && <Loader2 className="size-4 animate-spin" />}
-            Descargar 5 productos de prueba
-          </Button>
+          {boton('probar', 'Probar la clave')}
+          {boton('categorias', '1. Descargar categorías')}
+          {boton('descargar', '2. Descargar 150 productos')}
+          {boton('detalle', '3. Completar 3 fichas', 'gradient')}
         </div>
+        <p className="text-[12px] text-muted-foreground">
+          Orden recomendado: categorías, productos y fichas. Cada ficha trae variantes, stock por almacén, envío a España, días de entrega y reseñas, y usa unas 6 llamadas a CJ.
+        </p>
 
         {resultado && (
           <Alert variant={resultado.ok ? 'success' : 'warning'} title={resultado.ok ? 'Hecho' : 'No se pudo completar'}>
@@ -78,6 +120,7 @@ export function ProveedoresAdmin() {
             {resultado.ok && resultado.llamadasACj !== undefined && (
               <p className="mt-1 text-[12px] opacity-80">
                 Llamadas a CJ: {resultado.llamadasACj} · token {resultado.tokenReutilizado ? 'reutilizado' : 'nuevo'}
+                {resultado.totalEnCj ? ` · CJ tiene ${resultado.totalEnCj.toLocaleString('es-ES')} productos` : ''}
               </p>
             )}
             {!resultado.ok && resultado.secretoCjApiKey === false && (
@@ -88,16 +131,27 @@ export function ProveedoresAdmin() {
             {!resultado.ok && resultado.formaClave && resultado.secretoCjApiKey && (
               <p className="mt-1 text-[12px] opacity-80">
                 Forma de la clave guardada (sin mostrarla): {resultado.formaClave.longitud} caracteres
-                {resultado.formaClave.contieneArrobaApi ? ', con «@api@»' : ', sin «@api@»'}
-                {resultado.formaClave.tieneEspaciosOSaltos ? ', con espacios o saltos de línea dentro' : ''}
-                {resultado.formaClave.sobrabanEspaciosAlBorde ? ', con espacios en los bordes (ya se ignoran)' : ''}.
+                {resultado.formaClave.contieneArrobaApi ? ', con «@api@»' : ', sin «@api@»'}.
               </p>
             )}
-            {resultado.muestra && resultado.muestra.length > 0 && (
-              <ul className="mt-2 space-y-1 text-[12px]">
-                {resultado.muestra.map((m) => (
-                  <li key={m.id} className="truncate">
-                    {m.titulo} · {m.costo.toFixed(2)} USD · {m.categoria ?? 'sin categoría'} · stock {m.stock}
+            {resultado.avisos && resultado.avisos.length > 0 && <p className="mt-1 text-[12px] opacity-80">{resultado.avisos.join(' · ')}</p>}
+            {resultado.informe && resultado.informe.length > 0 && (
+              <ul className="mt-2 space-y-1.5 text-[12px]">
+                {resultado.informe.map((f) => (
+                  <li key={f.id}>
+                    <p className="truncate font-medium">{f.titulo ?? f.id}</p>
+                    {f.ok ? (
+                      <p className="opacity-80">
+                        {f.imagenes} fotos · {f.variantes} variantes · {f.almacenes} registros de almacén · envío:{' '}
+                        {Object.entries(f.opcionesEnvio ?? {})
+                          .map(([p, n]) => `${p} ${n} opciones`)
+                          .join(', ') || 'sin cotizar'}{' '}
+                        · {f.resenas} reseñas
+                      </p>
+                    ) : (
+                      <p className="opacity-80">{f.error}</p>
+                    )}
+                    {f.avisos && f.avisos.length > 0 && <p className="opacity-70">Avisos: {f.avisos.join(' · ')}</p>}
                   </li>
                 ))}
               </ul>
