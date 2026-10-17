@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { formatNumber, cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase/cliente';
 import { obtenerPerfil } from '@/lib/real/datos';
-import { nombrePais, PAISES_FRECUENTES } from '@/lib/paises';
+import { nombrePais, PAISES_FRECUENTES, textoPopularidad } from '@/lib/paises';
 import { ProviderBadge } from '@/app/(dashboard)/catalog/catalog-card';
 
 /* ───────────── utilidades de presentación ───────────── */
@@ -274,7 +274,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     ) : (
                       <span>Sin reseñas todavía</span>
                     )}
-                    {item.ordersCount ? <span>{formatNumber(item.ordersCount)} pedidos</span> : null}
+                    {item.ordersCount ? <span>{textoPopularidad(item.provider, item.ordersCount, formatNumber)}</span> : null}
                     <span>{item.stock === null || item.stock === undefined ? 'Stock por consultar en la ficha' : `${formatNumber(item.stock)} uds en total`}</span>
                   </div>
 

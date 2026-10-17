@@ -12,7 +12,7 @@ import { Badge as UiBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatCurrency, formatNumber, cn } from '@/lib/utils';
 import type { CatalogRow } from '@/lib/catalog';
-import { nombreAlmacen } from '@/lib/paises';
+import { nombreAlmacen, textoPopularidad } from '@/lib/paises';
 
 export function ProviderBadge({ provider }: { provider: string }) {
   // Fondo oscuro propio para que se lea sobre cualquier foto (antes se perdía sobre imágenes claras)
@@ -90,7 +90,7 @@ export function CatalogCard({
               <Star className="size-3 fill-current" /> {estrellas.toFixed(1)}
             </span>
           )}
-          {sales > 0 && <span>{formatNumber(sales)}<span className="hidden sm:inline"> pedidos</span><span className="sm:hidden"> ped.</span></span>}
+          {sales > 0 && <span title="Cifra de popularidad que informa el proveedor">{textoPopularidad(item.provider, sales, formatNumber)}</span>}
           {item.shipFrom && <span className="hidden sm:inline">desde {nombreAlmacen(item.shipFrom)}</span>}
           {item.shippingMinDays !== null && (
             <span className="inline-flex items-center gap-1">
@@ -121,7 +121,7 @@ export function CatalogCard({
 
           {item.profit !== undefined && (
             <div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-2 py-1.5 text-[11px]">
-              <span className="text-emerald-300/90"><span className="sm:hidden">Beneficio</span><span className="hidden sm:inline">Beneficio por unidad</span></span>
+              <span className="text-emerald-300/90"><span className="sm:hidden">Beneficio (sin envío)</span><span className="hidden sm:inline">Beneficio por unidad (antes del envío)</span></span>
               <span className="font-semibold tabular-nums text-emerald-300">
                 +{formatCurrency(item.profit)} · {Math.round(item.profitMarginPct ?? 0)}%
               </span>

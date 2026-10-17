@@ -65,12 +65,11 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 const SORTS = [
-  { value: 'relevance', label: 'Más vendidos' },
+  { value: 'relevance', label: 'Más populares' },
   { value: 'trending', label: 'Top ventas' },
   { value: 'price-asc', label: 'Precio: de menor a mayor' },
   { value: 'price-desc', label: 'Precio: de mayor a menor' },
   { value: 'rating', label: 'Mejor valorados' },
-  { value: 'orders', label: 'Más pedidos' },
   { value: 'newest', label: 'Novedades' },
 ];
 
