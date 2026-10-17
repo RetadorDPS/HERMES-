@@ -20,7 +20,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 const PROVEEDOR = "CJ_DROPSHIPPING";
-const PAUSA_MS = 1_300; // CJ admite 1 petición por segundo
+const PAUSA_MS = 1_300;
+/** Destinos que se cotizan por defecto (el usuario puede pedir cualquier otro código de país). */
+const DESTINOS_DEFECTO = ["ES", "US", "MX", "GB", "DE", "FR", "IT", "CA", "AU", "BR", "CO", "CL"];
+const MAX_COTIZACIONES = 30; // por llamada de la función (unos 40 s con la pausa) // CJ admite 1 petición por segundo
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -79,7 +82,7 @@ function extraerLista(data: any): any[] {
   return [];
 }
 
-function normalizarListado(item: any, pais: string, nombresCategoria: Map<string, string>) {
+function normalizarListado(item: any, pais: string | null, nombresCategoria: Map<string, string>) {
   const id = String(item.id ?? item.pid ?? item.productId ?? "");
   const imagenes = sinRepetidos(listaDeTextos(item.bigImage ?? item.productImage));
   const pedidos = numeroONulo(item.listedNum ?? item.ordersCount);
@@ -276,7 +279,7 @@ Deno.serve(async (req) => {
     const tamano = Math.max(1, Math.min(Number(cuerpo?.tamano ?? 50), 100));
     const paginas = Math.max(1, Math.min(Number(cuerpo?.paginas ?? 1), 5));
     const desde = Math.max(1, Number(cuerpo?.paginaInicial ?? 1));
-    const pais = String(cuerpo?.pais ?? "ES").toUpperCase().slice(0, 2);
+    const pais: string | null = cuerpo?.pais ? String(cuerpo.pais).toUpperCase().slice(0, 2) : null; // sin país = catálogo global
     const palabra: string | undefined = cuerpo?.palabra ? String(cuerpo.palabra).slice(0, 80) : undefined;
     const categoryId: string | undefined = cuerpo?.categoryId ? String(cuerpo.categoryId) : undefined;
     const nombres = await nombresDeCategorias();
@@ -288,7 +291,7 @@ Deno.serve(async (req) => {
     const avisos: string[] = [];
     for (let p = desde; p < desde + paginas; p += 1) {
       const r = await cj("/product/listV2", {
-        consulta: { page: p, size: tamano, countryCode: pais, orderBy: palabra ? 0 : 2, sort: "desc", keyWord: palabra, categoryId },
+        consulta: { page: p, size: tamano, countryCode: pais ?? undefined, orderBy: palabra ? 0 : 2, sort: "desc", keyWord: palabra, categoryId },
       });
       if (!r.ok) {
         const mensaje = `CJ respondió con error en la página ${p}: ${r.mensaje}`;
@@ -326,7 +329,6 @@ Deno.serve(async (req) => {
   /* ───────────────────────────── detalle (ficha completa) ───────────────────────────── */
   if (accion === "detalle") {
     const ids: string[] = (Array.isArray(cuerpo?.ids) ? cuerpo.ids : []).map(String).slice(0, 3);
-    const paises: string[] = (Array.isArray(cuerpo?.paises) && cuerpo.paises.length ? cuerpo.paises : ["ES"]).map((p: string) => String(p).toUpperCase().slice(0, 2)).slice(0, 3);
     if (!ids.length) return responder({ ok: false, error: "Indica al menos un artículo", ...diagnostico });
 
     const { data: items } = await servicio.from("CatalogItem").select("id,externalId,title,images,description").eq("provider", PROVEEDOR).in("id", ids);
@@ -358,38 +360,9 @@ Deno.serve(async (req) => {
       if (!ri.ok) avisos.push(`Inventario: ${ri.mensaje}`);
       crudo.inventario = ri.ok ? ri.datos : { error: ri.mensaje };
 
-      // 4) Envío por país (para la variante representativa: la de menor precio con vid)
-      const representativa = [...variantesCrudas].filter((v) => v?.vid).sort((a, b) => primerNumero(a.variantSellPrice) - primerNumero(b.variantSellPrice))[0];
-      const envioPorPais: Record<string, unknown> = {};
-      const crudoEnvio: Record<string, unknown> = {};
-      if (representativa?.vid) {
-        for (const pais of paises) {
-          const rf = await cj("/logistic/freightCalculate", {
-            metodo: "POST",
-            cuerpo: { startCountryCode: "CN", endCountryCode: pais, products: [{ quantity: 1, vid: String(representativa.vid) }] },
-          });
-          if (!rf.ok) {
-            avisos.push(`Envío a ${pais}: ${rf.mensaje}`);
-            crudoEnvio[pais] = { error: rf.mensaje };
-            continue;
-          }
-          crudoEnvio[pais] = rf.datos;
-          const opciones = (Array.isArray(rf.datos) ? rf.datos : [rf.datos]).filter(Boolean).map((o: any) => {
-            const dias = rangoDias(o.logisticAging ?? o.aging ?? o.arrivalTime);
-            return {
-              nombre: String(o.logisticName ?? o.name ?? "Envío CJ"),
-              precio: numeroONulo(o.logisticPrice ?? o.price ?? o.postage),
-              diasMin: dias.min,
-              diasMax: dias.max,
-              textoDias: o.logisticAging ?? o.aging ?? o.arrivalTime ?? null,
-            };
-          });
-          envioPorPais[pais] = { origen: "CN", variante: String(representativa.vid), actualizado: ahoraIso(), opciones };
-        }
-      } else {
-        avisos.push("Envío: el producto no trae variantes con identificador, no se pudo cotizar");
-      }
-      crudo.envio = crudoEnvio;
+      // (El envío mundial se cotiza aparte con la acción «envio»: es una matriz origen × destino.)
+      const { data: previa } = await servicio.from("CatalogItemDetail").select("ficha,raw").eq("itemId", item.id).maybeSingle();
+      const envioPrevio = (previa?.ficha as any)?.envio ?? { porOrigen: {} };
 
       // 5) Reseñas
       const rr = await cj("/product/productComments", { consulta: { pid, pageNum: 1, pageSize: 20 } });
@@ -418,6 +391,11 @@ Deno.serve(async (req) => {
         cj: numeroONulo(w.cjInventoryNum ?? w.cjInventory),
         fabrica: numeroONulo(w.factoryInventoryNum ?? w.factoryInventory),
       }));
+
+      // Países con stock (almacenes de origen), de mayor a menor existencias
+      const porPaisStock = new Map<string, number>();
+      for (const a of almacenes) if (a.pais) porPaisStock.set(String(a.pais).toUpperCase(), (porPaisStock.get(String(a.pais).toUpperCase()) ?? 0) + (a.total ?? 0));
+      const origenes = [...porPaisStock.entries()].map(([pais, total]) => ({ pais, total })).sort((x, y) => y.total - x.total);
 
       const imagenes = sinRepetidos([...listaDeTextos(prod.productImageSet), ...listaDeTextos(prod.productImage), ...listaDeTextos(prod.bigImage)]);
       const variantes = variantesCrudas.map((v: any) => {
@@ -458,45 +436,84 @@ Deno.serve(async (req) => {
         precio: { moneda: "USD", min: precios.length ? Math.min(...precios) : numeroONulo(prod.sellPrice), max: precios.length ? Math.max(...precios) : numeroONulo(prod.sellPrice) },
         variantes,
         almacenes: almacenes.filter((a) => !a.vid),
-        envio: { origen: "CN", porPais: envioPorPais },
+        origenes,
+        envio: envioPrevio,
         resenas: { total: totalResenas, media, lista: resenas },
         enlace: `https://cjdropshipping.com/product/-p-${pid}.html`,
-        fuentes: { detalle: true, variantes: rv.ok, inventario: ri.ok, envio: Object.keys(envioPorPais).length > 0, resenas: rr.ok },
+        fuentes: { detalle: true, variantes: rv.ok, inventario: ri.ok, resenas: rr.ok },
         avisos,
         actualizado: ahoraIso(),
       };
 
-      const { error: eDet } = await servicio.from("CatalogItemDetail").upsert({ itemId: item.id, ficha, raw: crudo, fetchedAt: ahoraIso() }, { onConflict: "itemId" });
+      const { error: eDet } = await servicio.from("CatalogItemDetail").upsert({ itemId: item.id, ficha, raw: { ...((previa?.raw as any) ?? {}), ...crudo }, fetchedAt: ahoraIso() }, { onConflict: "itemId" });
       if (eDet) {
         informe.push({ id: item.id, ok: false, error: `No se pudo guardar la ficha: ${eDet.message}` });
         continue;
       }
 
       // Lo más importante sube también a la tarjeta del catálogo
-      const primerPais = paises.find((p) => (envioPorPais as any)[p]?.opciones?.length);
-      const opciones: any[] = primerPais ? (envioPorPais as any)[primerPais].opciones : [];
-      const barata = [...opciones].filter((o) => o.precio !== null).sort((a, b) => a.precio - b.precio)[0];
       const cambios: Record<string, unknown> = { updatedAt: ahoraIso() };
       if (imagenes.length) { cambios.images = imagenes.slice(0, 12); cambios.imageUrl = imagenes[0]; }
       if (ficha.descripcionHtml) cambios.description = ficha.descripcionHtml.slice(0, 5000);
-      if (barata) {
-        cambios.shippingCost = barata.precio;
-        cambios.shippingMinDays = barata.diasMin;
-        cambios.shippingMaxDays = barata.diasMax;
-        cambios.freeShipping = barata.precio === 0;
-        cambios.shipFrom = "CN";
-      }
       if (media !== null) cambios.rating = media;
       await servicio.from("CatalogItem").update(cambios).eq("id", item.id);
 
       informe.push({
         id: item.id, ok: true, titulo: ficha.titulo,
         imagenes: imagenes.length, variantes: variantes.length, almacenes: almacenes.length,
-        opcionesEnvio: Object.fromEntries(Object.entries(envioPorPais).map(([p, v]: any) => [p, v.opciones.length])),
+        origenes: origenes.map((o) => `${o.pais}:${o.total}`),
         resenas: resenas.length, avisos,
       });
     }
     return await cerrarOk({ mensaje: `${informe.filter((i) => i.ok).length} de ${informe.length} fichas completadas`, informe });
+  }
+
+  /* ───────────────────────────── envío mundial (origen × destino) ───────────────────────────── */
+  if (accion === "envio") {
+    const id = String((Array.isArray(cuerpo?.ids) ? cuerpo.ids[0] : cuerpo?.id) ?? "");
+    if (!id) return responder({ ok: false, error: "Indica el artículo", ...diagnostico });
+    const destinos: string[] = (Array.isArray(cuerpo?.paises) && cuerpo.paises.length ? cuerpo.paises : DESTINOS_DEFECTO).map((p: string) => String(p).toUpperCase().slice(0, 2));
+    const { data: det } = await servicio.from("CatalogItemDetail").select("ficha,raw").eq("itemId", id).maybeSingle();
+    if (!det) return responder({ ok: false, error: "Primero hay que completar la ficha de este artículo", ...diagnostico });
+    const ficha: any = det.ficha ?? {};
+    const variantes: any[] = (ficha.variantes ?? []).filter((v: any) => v?.vid);
+    if (!variantes.length) return responder({ ok: false, error: "El artículo no tiene variantes con identificador para cotizar", ...diagnostico });
+    const vid = String(cuerpo?.vid ?? [...variantes].sort((a, b) => (a.precio ?? 1e9) - (b.precio ?? 1e9))[0].vid);
+
+    // Almacenes de origen: los pedidos explícitamente, o los que tienen stock, o China por defecto
+    const pedidos: string[] = Array.isArray(cuerpo?.origenes) ? cuerpo.origenes.map((p: string) => String(p).toUpperCase().slice(0, 2)) : [];
+    const conStock: string[] = (ficha.origenes ?? []).filter((o: any) => (o.total ?? 0) > 0).map((o: any) => String(o.pais));
+    const origenes = (pedidos.length ? pedidos : conStock.length ? conStock : ["CN"]).slice(0, 4);
+
+    const envio: any = { origen: ficha.envio?.origen ?? null, porOrigen: { ...(ficha.envio?.porOrigen ?? {}) } };
+    const crudoEnvio: Record<string, any> = { ...(((det.raw as any)?.envio) ?? {}) };
+    const avisos: string[] = [];
+    let hechas = 0;
+    for (const origen of origenes) {
+      envio.porOrigen[origen] = { ...(envio.porOrigen[origen] ?? {}) };
+      crudoEnvio[origen] = { ...(crudoEnvio[origen] ?? {}) };
+      for (const destino of destinos) {
+        if (hechas >= MAX_COTIZACIONES) { avisos.push(`Se alcanzó el máximo de ${MAX_COTIZACIONES} cotizaciones por vez: vuelve a pulsar para seguir con los destinos que faltan`); break; }
+        const rf = await cj("/logistic/freightCalculate", { metodo: "POST", cuerpo: { startCountryCode: origen, endCountryCode: destino, products: [{ quantity: 1, vid }] } });
+        hechas += 1;
+        if (!rf.ok) {
+          envio.porOrigen[origen][destino] = { variante: vid, actualizado: ahoraIso(), opciones: [], error: rf.mensaje };
+          crudoEnvio[origen][destino] = { error: rf.mensaje };
+          continue;
+        }
+        crudoEnvio[origen][destino] = rf.datos;
+        const opciones = (Array.isArray(rf.datos) ? rf.datos : [rf.datos]).filter(Boolean).map((o: any) => {
+          const dias = rangoDias(o.logisticAging ?? o.aging ?? o.arrivalTime);
+          return { nombre: String(o.logisticName ?? o.name ?? "Envío CJ"), precio: numeroONulo(o.logisticPrice ?? o.price ?? o.postage), diasMin: dias.min, diasMax: dias.max, textoDias: o.logisticAging ?? o.aging ?? o.arrivalTime ?? null };
+        });
+        envio.porOrigen[origen][destino] = { variante: vid, actualizado: ahoraIso(), opciones };
+      }
+    }
+    ficha.envio = envio;
+    const { error: eEnv } = await servicio.from("CatalogItemDetail").update({ ficha, raw: { ...((det.raw as any) ?? {}), envio: crudoEnvio }, fetchedAt: ahoraIso() }).eq("itemId", id);
+    if (eEnv) return responder({ ok: false, error: `No se pudo guardar el envío: ${eEnv.message}`, ...diagnostico });
+    const resumen = Object.fromEntries(origenes.map((o) => [o, Object.fromEntries(destinos.map((d) => { const x = envio.porOrigen[o]?.[d]; return [d, x ? (x.error ? "sin servicio" : `${x.opciones.length} opciones`) : "pendiente"]; }))]));
+    return await cerrarOk({ mensaje: `${hechas} cotizaciones hechas (${origenes.join(", ")} → ${destinos.length} destinos)`, resumen, avisos });
   }
 
   return responder({ ok: false, error: `Acción desconocida: ${accion}`, ...diagnostico });

@@ -15,7 +15,7 @@ interface InformeFicha {
   imagenes?: number;
   variantes?: number;
   almacenes?: number;
-  opcionesEnvio?: Record<string, number>;
+  origenes?: string[];
   resenas?: number;
   avisos?: string[];
 }
@@ -32,9 +32,10 @@ interface Respuesta {
   avisos?: string[];
   totalEnCj?: number | null;
   informe?: InformeFicha[];
+  resumen?: Record<string, Record<string, string>>;
 }
 
-type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle';
+type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle' | 'envio';
 
 /** Llama a la función `cj-catalogo` (solo administrador) y devuelve su respuesta, con el error real si falla. */
 async function invocarCj(cuerpo: Record<string, unknown>): Promise<Respuesta> {
@@ -64,6 +65,14 @@ async function articulosSinFicha(cantidad: number): Promise<string[]> {
   return (items ?? []).map((i: any) => i.id as string).filter((id) => !conFicha.has(id)).slice(0, cantidad);
 }
 
+/** Elige un artículo con ficha completa y sin cotización de envío todavía. */
+async function articuloSinEnvio(): Promise<string | null> {
+  const { data, error } = await supabase().from('CatalogItemDetail').select('itemId, envio:ficha->envio');
+  if (error) throw new Error(error.message);
+  const sin = (data ?? []).find((d: any) => !d.envio || !d.envio.porOrigen || Object.keys(d.envio.porOrigen).length === 0);
+  return sin ? (sin as any).itemId : null;
+}
+
 /** Catálogo del proveedor CJ. AliExpress se añadirá aparte (son independientes). */
 export function ProveedoresAdmin() {
   const [trabajando, setTrabajando] = useState<Accion | null>(null);
@@ -76,7 +85,11 @@ export function ProveedoresAdmin() {
       if (accion === 'probar') setResultado(await invocarCj({ accion }));
       else if (accion === 'categorias') setResultado(await invocarCj({ accion }));
       else if (accion === 'descargar') setResultado(await invocarCj({ accion, paginas: 3, tamano: 50 }));
-      else {
+      else if (accion === 'envio') {
+        const id = await articuloSinEnvio();
+        if (!id) setResultado({ ok: true, mensaje: 'Todos los artículos con ficha ya tienen su envío cotizado.' });
+        else setResultado(await invocarCj({ accion, ids: [id] }));
+      } else {
         const ids = await articulosSinFicha(3);
         if (!ids.length) setResultado({ ok: true, mensaje: 'Todos los artículos descargados ya tienen su ficha completa.' });
         else setResultado(await invocarCj({ accion, ids, paises: ['ES'] }));
@@ -108,10 +121,11 @@ export function ProveedoresAdmin() {
           {boton('probar', 'Probar la clave')}
           {boton('categorias', '1. Descargar categorías')}
           {boton('descargar', '2. Descargar 150 productos')}
-          {boton('detalle', '3. Completar 3 fichas', 'gradient')}
+          {boton('detalle', '3. Completar 3 fichas')}
+          {boton('envio', '4. Cotizar envío mundial (1 producto)', 'gradient')}
         </div>
         <p className="text-[12px] text-muted-foreground">
-          Orden recomendado: categorías, productos y fichas. Cada ficha trae variantes, stock por almacén, envío a España, días de entrega y reseñas, y usa unas 6 llamadas a CJ.
+          Orden recomendado: categorías, productos y fichas. La ficha trae variantes, stock por almacén y reseñas (unas 5 llamadas a CJ por producto). El envío mundial se cotiza aparte, desde cada almacén con stock hasta 12 países (ES, US, MX, GB, DE, FR, IT, CA, AU, BR, CO, CL): hasta 30 llamadas por producto, con pausa.
         </p>
 
         {resultado && (
@@ -135,6 +149,18 @@ export function ProveedoresAdmin() {
               </p>
             )}
             {resultado.avisos && resultado.avisos.length > 0 && <p className="mt-1 text-[12px] opacity-80">{resultado.avisos.join(' · ')}</p>}
+            {resultado.resumen && (
+              <ul className="mt-2 space-y-1 text-[12px]">
+                {Object.entries(resultado.resumen).map(([origen, destinos]) => (
+                  <li key={origen}>
+                    <span className="font-medium">Desde {origen}:</span>{' '}
+                    {Object.entries(destinos)
+                      .map(([d, estado]) => `${d} ${estado}`)
+                      .join(' · ')}
+                  </li>
+                ))}
+              </ul>
+            )}
             {resultado.informe && resultado.informe.length > 0 && (
               <ul className="mt-2 space-y-1.5 text-[12px]">
                 {resultado.informe.map((f) => (
@@ -142,11 +168,8 @@ export function ProveedoresAdmin() {
                     <p className="truncate font-medium">{f.titulo ?? f.id}</p>
                     {f.ok ? (
                       <p className="opacity-80">
-                        {f.imagenes} fotos · {f.variantes} variantes · {f.almacenes} registros de almacén · envío:{' '}
-                        {Object.entries(f.opcionesEnvio ?? {})
-                          .map(([p, n]) => `${p} ${n} opciones`)
-                          .join(', ') || 'sin cotizar'}{' '}
-                        · {f.resenas} reseñas
+                        {f.imagenes} fotos · {f.variantes} variantes · {f.almacenes} registros de almacén · orígenes con stock:{' '}
+                        {f.origenes?.join(', ') || 'sin datos'} · {f.resenas} reseñas
                       </p>
                     ) : (
                       <p className="opacity-80">{f.error}</p>

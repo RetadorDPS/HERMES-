@@ -30,7 +30,7 @@ variables, tablas e identificadores técnicos que ya existen. El dueño del proy
 
 - La fuente de verdad es `APP_VERSION` en `src/lib/version.ts` (un número entero). Se sube en 1 en cada publicación a `main` y se muestra en la portada, el menú lateral y el pie del panel. `package.json` se queda fijo y NO refleja la versión real.
 - Al final de CUALQUIER reporte de trabajo se indica el número de versión real resultante (por ejemplo «v2»), junto con la referencia del commit. Nunca omitirlo.
-- Historial: v1 = inicio de sesión real (correo y Google), panel con datos reales y primer número de versión. v2 = función `cj-catalogo` y botón de descarga de prueba en Administración. v3 = diagnóstico de la clave de CJ (sin mostrarla). v4 = categorías, descarga por páginas y fichas completas de CJ.
+- Historial: v1 = inicio de sesión real (correo y Google), panel con datos reales y primer número de versión. v2 = función `cj-catalogo` y botón de descarga de prueba en Administración. v3 = diagnóstico de la clave de CJ (sin mostrarla). v4 = categorías, descarga por páginas y fichas completas de CJ. v5 = catálogo y envío globales (almacén de origen × país de destino).
 
 ## Proveedores en Hermes
 
