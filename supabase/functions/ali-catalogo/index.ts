@@ -6,7 +6,9 @@
  * App Secret, feed curado `aliexpress.ds.recommend.feed.get`, detalle `aliexpress.ds.product.get` y envío
  * `aliexpress.ds.freight.query`.
  *
- * Acciones (solo administrador): probar · feeds · sondear · descargar · detalle · envio
+ * Acciones (solo administrador): probar · autorizar · feeds · sondear · descargar · detalle · envio
+ *
+ * Autorización de la cuenta (OAuth): `ds.product.get` y `ds.freight.query` exigen un `access_token`. La acción `autorizar` da el enlace; el retorno lo recibe la función `ali-callback`, que guarda el token en la tabla privada PlatformCredential. Aquí se usa y se renueva solo.
  *
  * Límite: AliExpress corta con `AppApiCallLimit` si se llama en paralelo o muy deprisa. TODAS las llamadas pasan
  * por `ali()`, una a una y con pausa. Las claves viven como secretos (ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET) y nunca se devuelven.
@@ -142,6 +144,11 @@ Deno.serve(async (req) => {
   async function ali(metodo: string, negocio: Record<string, string | number | undefined> = {}, intento = 1): Promise<{ ok: boolean; datos: any; mensaje: string; codigo: string | null; crudo?: any }> {
     const espera = ultimaLlamada + PAUSA_MS - Date.now();
     if (espera > 0) await pausa(espera);
+    // El detalle y el envío exigen el access_token de la cuenta autorizada (el feed funciona solo con las claves)
+    if (/^aliexpress\.ds\.(product|freight)/.test(metodo) && !negocio.access_token) {
+      const tk = await tokenVigente();
+      if (tk) negocio = { ...negocio, access_token: tk };
+    }
     // Formato de la hora: el gateway actual usa milisegundos; el cliente original usaba «aaaa-mm-dd hh:mm:ss». Se prueba el recordado y, si falla por la hora, el otro.
     const formatos: ("ms" | "texto")[] = ajustes.formatoHora === "texto" ? ["texto", "ms"] : ["ms", "texto"];
     let ultimoError: { mensaje: string; codigo: string | null; crudo: any } | null = null;
@@ -196,11 +203,57 @@ Deno.serve(async (req) => {
     return responder({ ok: false, error: mensaje, ...extra, ...diagnostico });
   };
 
+  /** Llamadas del sistema de autorización (ruta /rest/...): la firma lleva delante la ruta de la API. */
+  async function restToken(ruta: string, extra: Record<string, string>): Promise<{ ok: boolean; datos: any; mensaje: string }> {
+    const params: Record<string, string> = { app_key: appKey, timestamp: String(Date.now()), sign_method: "sha256", ...extra };
+    const base = ruta + Object.keys(params).sort().map((k) => `${k}${params[k]}`).join("");
+    const clave = await crypto.subtle.importKey("raw", new TextEncoder().encode(appSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    params.sign = [...new Uint8Array(await crypto.subtle.sign("HMAC", clave, new TextEncoder().encode(base)))].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    try {
+      const res = await fetch(`https://api-sg.aliexpress.com/rest${ruta}`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded;charset=utf-8" }, body: new URLSearchParams(params).toString() });
+      const json: any = await res.json().catch(() => ({}));
+      llamadas += 1;
+      ultimaLlamada = Date.now();
+      if (json?.access_token) return { ok: true, datos: json, mensaje: "" };
+      return { ok: false, datos: json, mensaje: String(json?.message ?? json?.msg ?? json?.error_response?.msg ?? "AliExpress no devolvió el token").slice(0, 300) };
+    } catch (e) {
+      return { ok: false, datos: null, mensaje: `No se pudo conectar con AliExpress (${(e as Error).message})` };
+    }
+  }
+  const guardarToken = async (d: any) => {
+    const expiraEn = Number(d.expire_time) > 1e12 ? Number(d.expire_time) : Date.now() + (Number(d.expires_in) || 0) * 1000;
+    await guardarAjustes({ aliToken: { accessToken: d.access_token, refreshToken: d.refresh_token ?? ajustes.aliToken?.refreshToken ?? null, expiraEn, cuenta: d.user_nick ?? d.account ?? ajustes.aliToken?.cuenta ?? null, guardadoEn: ahoraIso() } });
+  };
+  /** Devuelve el access_token de la cuenta autorizada; lo renueva si caduca en menos de 5 minutos. */
+  async function tokenVigente(): Promise<string | null> {
+    const t = ajustes.aliToken;
+    if (!t?.accessToken) return null;
+    if (!t.expiraEn || t.expiraEn - Date.now() > 300_000 || !t.refreshToken) return t.accessToken;
+    const r = await restToken("/auth/token/refresh", { refresh_token: t.refreshToken });
+    if (r.ok) {
+      await guardarToken(r.datos);
+      return r.datos.access_token;
+    }
+    return t.accessToken;
+  }
+
+  /* ───────────────────────── autorizar (enlace para que la cuenta de AliExpress autorice la app) ───────────────────────── */
+  if (accion === "autorizar") {
+    const urlRetorno = `${Deno.env.get("SUPABASE_URL")}/functions/v1/ali-callback`;
+    const carga = `${uid}.${Date.now() + 15 * 60_000}`;
+    const clave = await crypto.subtle.importKey("raw", new TextEncoder().encode(appSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const firma = [...new Uint8Array(await crypto.subtle.sign("HMAC", clave, new TextEncoder().encode(carga)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const state = btoa(`${carga}.${firma}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const urlAutorizacion = `https://api-sg.aliexpress.com/oauth/authorize?response_type=code&force_auth=true&client_id=${encodeURIComponent(appKey)}&redirect_uri=${encodeURIComponent(urlRetorno)}&state=${state}`;
+    const t = ajustes.aliToken;
+    return responder({ ok: true, mensaje: t?.accessToken ? `Ya hay una cuenta autorizada${t.cuenta ? ` (${t.cuenta})` : ""}; puedes volver a autorizar si quieres cambiarla` : "Falta autorizar la cuenta de AliExpress", urlRetorno, urlAutorizacion, autorizada: Boolean(t?.accessToken), ...diagnostico });
+  }
+
   /* ───────────────────────── probar ───────────────────────── */
   if (accion === "probar") {
     const r = await ali("aliexpress.ds.recommend.feed.get", { feed_name: "DS bestseller", target_currency: MONEDA, target_language: "ES", country: "ES", page_size: 1, page_no: 1 });
     if (!r.ok) return await fallo(`AliExpress rechazó la prueba: ${r.mensaje}`, { codigoAli: r.codigo, detalleError: r.crudo });
-    return await cerrarOk({ mensaje: "App Key y App Secret válidos: AliExpress respondió", formaRespuesta: Object.keys(r.datos ?? {}) });
+    return await cerrarOk({ mensaje: "App Key y App Secret válidos: AliExpress respondió", formaRespuesta: Object.keys(r.datos ?? {}), autorizada: Boolean(ajustes.aliToken?.accessToken), avisos: ajustes.aliToken?.accessToken ? [`Cuenta autorizada${ajustes.aliToken.cuenta ? `: ${ajustes.aliToken.cuenta}` : ""}`] : ["Cuenta de AliExpress sin autorizar (hace falta para fichas y envío)"] });
   }
 
   /* ───────────────────────── feeds ───────────────────────── */

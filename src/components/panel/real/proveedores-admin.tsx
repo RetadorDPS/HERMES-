@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -44,9 +44,12 @@ interface Respuesta {
   detalleError?: unknown;
   formaRespuesta?: string[];
   forma?: { claves?: string[] };
+  urlRetorno?: string;
+  urlAutorizacion?: string;
+  autorizada?: boolean;
 }
 
-type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle' | 'envio' | 'feeds' | 'sondear';
+type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle' | 'envio' | 'feeds' | 'sondear' | 'autorizar';
 type Proveedor = 'CJ_DROPSHIPPING' | 'ALIEXPRESS';
 
 const FUNCION: Record<Proveedor, string> = { CJ_DROPSHIPPING: 'cj-catalogo', ALIEXPRESS: 'ali-catalogo' };
@@ -134,6 +137,17 @@ function Resultado({ r }: { r: Respuesta }) {
       {r.ok && r.formaRespuesta && <p className="mt-1 text-[11px] opacity-70">Campos recibidos: {r.formaRespuesta.join(', ')}</p>}
       {r.ok && r.forma?.claves && <p className="mt-1 text-[11px] opacity-70">Campos recibidos: {r.forma.claves.join(', ')}</p>}
       {r.avisos && r.avisos.length > 0 && <p className="mt-1 text-[12px] opacity-80">{r.avisos.join(' · ')}</p>}
+      {r.urlAutorizacion && (
+        <div className="mt-2 space-y-2 text-[12px]">
+          <p>
+            Dirección de retorno que debe estar registrada en tu app de AliExpress (consola de AliExpress Open Platform → tu app → «Callback URL»):
+          </p>
+          <p className="rounded-md bg-black/30 p-2 font-mono text-[11px]">{r.urlRetorno}</p>
+          <Button asChild variant="gradient" size="sm">
+            <a href={r.urlAutorizacion}>Abrir la autorización de AliExpress</a>
+          </Button>
+        </div>
+      )}
       {r.feeds && r.feeds.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-[12px]">
           {r.feeds.map((f, i) => (
@@ -192,11 +206,22 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
   const [trabajando, setTrabajando] = useState<Accion | null>(null);
   const [resultado, setResultado] = useState<Respuesta | null>(null);
 
+  // Al volver de la autorización de AliExpress se muestra cómo salió
+  useEffect(() => {
+    if (esCj) return;
+    const q = new URLSearchParams(window.location.search);
+    const estado = q.get('ali');
+    if (!estado) return;
+    const mensaje = q.get('mensaje') ?? '';
+    setResultado(estado === 'ok' ? { ok: true, mensaje } : { ok: false, error: mensaje || 'La autorización no se completó' });
+    window.history.replaceState(null, '', window.location.pathname);
+  }, [esCj]);
+
   const ejecutar = async (accion: Accion) => {
     setTrabajando(accion);
     setResultado(null);
     try {
-      if (accion === 'probar' || accion === 'categorias' || accion === 'feeds' || accion === 'sondear') setResultado(await invocar(proveedor, { accion }));
+      if (accion === 'probar' || accion === 'categorias' || accion === 'feeds' || accion === 'sondear' || accion === 'autorizar') setResultado(await invocar(proveedor, { accion }));
       else if (accion === 'descargar')
         setResultado(await invocar(proveedor, esCj ? { accion, paginas: 3, tamano: 50, orden: 1 } : { accion, paginas: 1, tamano: 50 }));
       else if (accion === 'envio') {
@@ -237,6 +262,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
           {boton('descargar', esCj ? '2. Descargar 150 productos populares' : '2. Descargar 50 productos más vendidos')}
           {boton('detalle', esCj ? '3. Completar 3 fichas' : '3. Completar 1 ficha')}
           {boton('envio', '4. Cotizar envío mundial (1 producto)', 'gradient')}
+          {!esCj && boton('autorizar', '5. Autorizar la cuenta de AliExpress')}
           {!esCj && boton('sondear', 'Sondear el feed (máx. 5 llamadas)')}
         </div>
         <p className="text-[12px] text-muted-foreground">
