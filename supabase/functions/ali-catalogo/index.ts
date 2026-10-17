@@ -224,15 +224,28 @@ Deno.serve(async (req) => {
     const avisos: string[] = [];
     let forma: string[] = [];
     for (let p = desde; p < desde + paginas; p += 1) {
-      const r = await ali("aliexpress.ds.recommend.feed.get", { feed_name: feed, country: pais, target_currency: MONEDA, target_language: "ES", page_no: p, page_size: tamano, sort: cuerpo?.orden ?? "volumeDesc", category_id: cuerpo?.categoryId });
+      const pedir = (extra: Record<string, any>) => ali("aliexpress.ds.recommend.feed.get", { feed_name: feed, country: pais, target_currency: MONEDA, target_language: "ES", page_no: p, page_size: tamano, ...extra });
+      let r = await pedir({ sort: cuerpo?.orden ?? "volumeDesc", category_id: cuerpo?.categoryId });
       if (!r.ok) {
         if (p === desde) return await fallo(`AliExpress respondió con error: ${r.mensaje}`, { codigoAli: r.codigo, detalleError: r.crudo });
         avisos.push(`Página ${p}: ${r.mensaje}`);
         break;
       }
-      const nodo = r.datos?.aliexpress_ds_recommend_feed_get_response?.resp_result?.result ?? r.datos?.aliexpress_ds_recommend_feed_get_response?.result ?? r.datos?.aliexpress_ds_recommend_feed_get_response ?? {};
-      const items = primerArray(nodo?.products) ?? primerArray(nodo?.product_list) ?? primerArray(nodo?.ae_item_list) ?? lista(nodo?.products);
-      if (p === desde) forma = [...Object.keys(nodo), `products→${Object.keys(nodo?.products ?? {}).join("|") || "vacío"}`, `producto→${Object.keys(items[0] ?? {}).slice(0, 40).join("|") || "sin productos"}`];
+      const sacarNodo = (datos: any) => datos?.aliexpress_ds_recommend_feed_get_response?.resp_result?.result ?? datos?.aliexpress_ds_recommend_feed_get_response?.result ?? datos?.aliexpress_ds_recommend_feed_get_response ?? {};
+      const sacarItems = (n: any): any[] => primerArray(n?.products) ?? primerArray(n?.product_list) ?? primerArray(n?.ae_item_list) ?? [];
+      let nodo = sacarNodo(r.datos);
+      let items = sacarItems(nodo);
+      // Si el feed viene vacío, se repite UNA vez sin orden ni categoría (por si AliExpress no acepta ese orden) y se deja constancia
+      if (!items.length && p === desde) {
+        avisos.push(`Primer intento vacío (recibidos=${nodo?.current_record_count ?? "?"}, total=${nodo?.total_record_count ?? "?"}); se repite sin orden`);
+        await pausa(1_500);
+        r = await pedir({});
+        if (r.ok) {
+          nodo = sacarNodo(r.datos);
+          items = sacarItems(nodo);
+        }
+      }
+      if (p === desde) forma = [...Object.keys(nodo), `contadores→recibidos=${nodo?.current_record_count ?? "?"} total=${nodo?.total_record_count ?? "?"} terminado=${nodo?.is_finished ?? "?"}`, `products→${JSON.stringify(nodo?.products ?? null).slice(0, 300)}`, `producto→${Object.keys(items[0] ?? {}).slice(0, 40).join("|") || "sin productos"}`];
       recibidos += items.length;
       const filas = items
         .map((i: any) => {
