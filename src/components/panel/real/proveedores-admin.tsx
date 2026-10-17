@@ -91,7 +91,7 @@ export function ProveedoresAdmin() {
     try {
       if (accion === 'probar') setResultado(await invocarCj({ accion }));
       else if (accion === 'categorias') setResultado(await invocarCj({ accion }));
-      else if (accion === 'descargar') setResultado(await invocarCj({ accion, paginas: 3, tamano: 50 }));
+      else if (accion === 'descargar') setResultado(await invocarCj({ accion, paginas: 3, tamano: 50, orden: 1 }));
       else if (accion === 'envio') {
         const id = await articuloSinEnvio();
         if (!id) setResultado({ ok: true, mensaje: 'Todos los artículos con ficha ya tienen cotizado el envío desde sus almacenes.' });
@@ -127,7 +127,7 @@ export function ProveedoresAdmin() {
         <div className="flex flex-wrap gap-2">
           {boton('probar', 'Probar la clave')}
           {boton('categorias', '1. Descargar categorías')}
-          {boton('descargar', '2. Descargar 150 productos')}
+          {boton('descargar', '2. Descargar 150 productos populares')}
           {boton('detalle', '3. Completar 3 fichas')}
           {boton('envio', '4. Cotizar envío mundial (1 producto)', 'gradient')}
         </div>

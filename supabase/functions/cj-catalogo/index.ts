@@ -296,6 +296,8 @@ Deno.serve(async (req) => {
     const pais: string | null = cuerpo?.pais ? String(cuerpo.pais).toUpperCase().slice(0, 2) : null; // sin país = catálogo global
     const palabra: string | undefined = cuerpo?.palabra ? String(cuerpo.palabra).slice(0, 80) : undefined;
     const categoryId: string | undefined = cuerpo?.categoryId ? String(cuerpo.categoryId) : undefined;
+    // Orden de CJ: 0 mejor coincidencia · 1 más listados (populares) · 2 precio · 3 fecha · 4 inventario. Por defecto los más populares.
+    const orden = Number.isFinite(Number(cuerpo?.orden)) && cuerpo?.orden !== undefined ? Number(cuerpo.orden) : 1;
     const nombres = await nombresDeCategorias();
 
     let recibidos = 0;
@@ -305,7 +307,7 @@ Deno.serve(async (req) => {
     const avisos: string[] = [];
     for (let p = desde; p < desde + paginas; p += 1) {
       const r = await cj("/product/listV2", {
-        consulta: { page: p, size: tamano, countryCode: pais ?? undefined, orderBy: palabra ? 0 : 2, sort: "desc", keyWord: palabra, categoryId },
+        consulta: { page: p, size: tamano, countryCode: pais ?? undefined, orderBy: palabra ? 0 : orden, sort: "desc", keyWord: palabra, categoryId },
       });
       if (!r.ok) {
         const mensaje = `CJ respondió con error en la página ${p}: ${r.mensaje}`;
