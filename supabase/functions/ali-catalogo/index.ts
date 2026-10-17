@@ -49,6 +49,17 @@ function lista(v: any): any[] {
   }
   return [];
 }
+/** Busca la primera lista que haya dentro de un objeto (hasta 3 niveles), porque AliExpress cambia el nombre del contenedor según la API. */
+function primerArray(v: any, nivel = 0): any[] | null {
+  if (Array.isArray(v)) return v;
+  if (v && typeof v === "object" && nivel < 3) {
+    for (const x of Object.values(v)) {
+      const r = primerArray(x, nivel + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
 function sinRepetidos(a: string[]) {
   return [...new Set(a.filter(Boolean))];
 }
@@ -220,8 +231,8 @@ Deno.serve(async (req) => {
         break;
       }
       const nodo = r.datos?.aliexpress_ds_recommend_feed_get_response?.resp_result?.result ?? r.datos?.aliexpress_ds_recommend_feed_get_response?.result ?? r.datos?.aliexpress_ds_recommend_feed_get_response ?? {};
-      if (p === desde) forma = Object.keys(nodo);
-      const items = lista(nodo?.products?.traffic_product_d_t_o ?? nodo?.products ?? nodo?.product_list ?? nodo?.ae_item_list);
+      const items = primerArray(nodo?.products) ?? primerArray(nodo?.product_list) ?? primerArray(nodo?.ae_item_list) ?? lista(nodo?.products);
+      if (p === desde) forma = [...Object.keys(nodo), `products→${Object.keys(nodo?.products ?? {}).join("|") || "vacío"}`, `producto→${Object.keys(items[0] ?? {}).slice(0, 40).join("|") || "sin productos"}`];
       recibidos += items.length;
       const filas = items
         .map((i: any) => {
