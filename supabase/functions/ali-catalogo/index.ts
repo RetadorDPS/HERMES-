@@ -501,6 +501,7 @@ Deno.serve(async (req) => {
     const crudoEnvio: Record<string, any> = { ...(((det.raw as any)?.envio) ?? {}) };
     const avisos: string[] = [];
     let hechas = 0;
+    const almacenesVistos = new Set<string>(); // países desde los que AliExpress dice que sale el envío
     for (const destino of destinos) {
       const previa = envio.porOrigen.CN?.[destino];
       if (previa && !cuerpo?.forzar && Date.now() - new Date(previa.actualizado).getTime() < 24 * 3_600_000) continue;
@@ -524,15 +525,26 @@ Deno.serve(async (req) => {
         diasMin: numeroONulo(o.min_delivery_days ?? o.delivery_time_min),
         diasMax: numeroONulo(o.max_delivery_days ?? o.delivery_time_max ?? o.delivery_date_desc),
         textoDias: o.delivery_date_desc ?? null,
+        origen: o.ship_from_country ? String(o.ship_from_country).toUpperCase() : null,
       }));
+      for (const o of opciones) if (o.origen) almacenesVistos.add(o.origen);
       envio.porOrigen.CN[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), opciones };
     }
     ficha.envio = envio;
     ficha.origenes = ficha.origenes?.length ? ficha.origenes : [{ pais: "CN", total: 0 }];
     const { error: eEnv } = await servicio.from("CatalogItemDetail").update({ ficha, raw: { ...((det.raw as any) ?? {}), envio: crudoEnvio }, fetchedAt: ahoraIso() }).eq("itemId", id);
     if (eEnv) return await fallo(`No se pudo guardar el envío: ${eEnv.message}`);
+    // El país de salida que informa AliExpress pasa al catálogo (filtro «Almacén de salida»)
+    for (const a of almacenesVistos) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: [String(item.externalId)], p_almacen: a });
+    const detalleEnvio = (d: string) => {
+      const ops = envio.porOrigen.CN[d].opciones as any[];
+      const precios = ops.map((o) => o.precio).filter((x) => x !== null);
+      const dMin = Math.min(...ops.map((o) => o.diasMin ?? 999));
+      const dMax = Math.max(...ops.map((o) => o.diasMax ?? 0));
+      return `${d} (${ops.length} ${ops.length === 1 ? "método" : "métodos"}, desde ${precios.length ? Math.min(...precios).toFixed(2) : "?"} USD, ${dMin === 999 ? "?" : dMin}-${dMax || "?"} días)`;
+    };
     const resumen = Object.fromEntries([["CN", {
-      conServicio: destinos.filter((d) => envio.porOrigen.CN?.[d]?.opciones?.length).map((d) => `${d} (${envio.porOrigen.CN[d].opciones.length} métodos)`),
+      conServicio: destinos.filter((d) => envio.porOrigen.CN?.[d]?.opciones?.length).map(detalleEnvio),
       sinServicio: destinos.filter((d) => envio.porOrigen.CN?.[d] && !envio.porOrigen.CN[d].opciones?.length),
       pendientes: destinos.filter((d) => !envio.porOrigen.CN?.[d]),
     }]]);
