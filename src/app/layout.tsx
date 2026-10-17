@@ -2,7 +2,9 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { SimuladorApi } from '@/components/estatico/simulador-api';
 import { SesionProvider } from '@/components/auth/sesion';
-import { ESTATICO } from '@/lib/ruta';
+import { ESTATICO, conBase } from '@/lib/ruta';
+import { RegistroPwa } from '@/components/pwa/registro-pwa';
+import { AvisoInstalar } from '@/components/pwa/aviso-instalar';
 
 export const metadata: Metadata = {
   title: {
@@ -11,6 +13,17 @@ export const metadata: Metadata = {
   },
   description:
     'Plataforma SaaS de automatización de dropshipping: importación desde AliExpress, Amazon y CJ, sincronización 24/7 de precios y stock, gestión de pedidos y fulfillment automático.',
+  applicationName: 'DropshipPilot',
+  manifest: conBase('/manifest.webmanifest'),
+  icons: {
+    icon: [
+      { url: conBase('/iconos/favicon-32.png'), sizes: '32x32', type: 'image/png' },
+      { url: conBase('/iconos/icono.svg'), type: 'image/svg+xml' },
+    ],
+    apple: [{ url: conBase('/iconos/apple-touch-icon.png'), sizes: '180x180' }],
+  },
+  appleWebApp: { capable: true, title: 'DropshipPilot', statusBarStyle: 'default' },
+  formatDetection: { telephone: false },
 };
 
 export const viewport: Viewport = {
@@ -60,6 +73,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-background font-sans antialiased">
         {ESTATICO && <SimuladorApi />}
         <SesionProvider>{children}</SesionProvider>
+        <RegistroPwa />
+        <AvisoInstalar />
       </body>
     </html>
   );

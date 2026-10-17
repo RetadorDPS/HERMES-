@@ -1,0 +1,25 @@
+{
+  "id": "./",
+  "name": "DropshipPilot · Dropshipping en piloto automático",
+  "short_name": "DropshipPilot",
+  "description": "Importa productos de CJ y AliExpress, fija tu margen y vigila precios y stock desde un solo panel.",
+  "lang": "es",
+  "dir": "ltr",
+  "start_url": "./dashboard/?origen=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0d14",
+  "theme_color": "#0b1020",
+  "categories": ["business", "shopping", "productivity"],
+  "icons": [
+    { "src": "iconos/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "iconos/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "iconos/icono-512-mascara.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "iconos/icono.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Catálogo", "short_name": "Catálogo", "url": "./catalog/", "icons": [{ "src": "iconos/icono-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Panel", "short_name": "Panel", "url": "./dashboard/", "icons": [{ "src": "iconos/icono-192.png", "sizes": "192x192", "type": "image/png" }] }
+  ]
+}
