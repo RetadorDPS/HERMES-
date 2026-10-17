@@ -427,6 +427,21 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   const pagina = Math.max(1, Number(q.page ?? 1));
   const tamano = Math.min(Math.max(Number(q.pageSize ?? 24), 4), 96);
 
+  // «Tendencia» = estar entre el 20 % con más pedidos DE SU PROVEEDOR. Cada proveedor mide los pedidos a su manera
+  // (CJ: tiendas que lo listan; AliExpress: ventas recientes), así que un número fijo no valía para los dos.
+  const { data: pedidos } = await c.from('CatalogItem').select('provider,ordersCount').not('ordersCount', 'is', null).limit(5000);
+  const umbralTendencia = new Map<string, number>();
+  const porProv = new Map<string, number[]>();
+  for (const f of (pedidos ?? []) as any[]) porProv.set(f.provider, [...(porProv.get(f.provider) ?? []), Number(f.ordersCount)]);
+  for (const [prov, lista] of porProv) {
+    const orden = lista.filter((n) => n > 0).sort((a, b) => b - a);
+    if (orden.length) umbralTendencia.set(prov, orden[Math.max(0, Math.ceil(orden.length * 0.2) - 1)]);
+  }
+  const esTendencia = (provider: string, pedidosN: number | null | undefined) => {
+    const u = umbralTendencia.get(provider);
+    return u !== undefined && (pedidosN ?? 0) >= u && (pedidosN ?? 0) > 0;
+  };
+
   let consulta: any = c.from('CatalogItem').select(COL_CATALOGO, { count: 'exact' });
   if (q.provider && q.provider !== 'ALL') consulta = consulta.in('provider', String(q.provider).split(',').filter(Boolean));
   if (q.category && q.category !== 'ALL') consulta = consulta.eq('categoryName', q.category);
@@ -435,7 +450,10 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   // Almacenes de salida: puede venir una lista separada por comas; sale cualquier producto con existencias en alguno de ellos
   if (q.shipFrom) consulta = consulta.overlaps('warehouses', String(q.shipFrom).split(',').filter(Boolean));
   if (q.freeShipping) consulta = consulta.eq('freeShipping', true);
-  if (q.trending) consulta = consulta.eq('isTrending', true);
+  if (q.trending) {
+    const clausulas = [...umbralTendencia.entries()].map(([prov, u]) => `and(provider.eq.${prov},ordersCount.gte.${u})`);
+    consulta = clausulas.length ? consulta.or(clausulas.join(',')) : consulta.eq('id', '00000000-0000-0000-0000-000000000000');
+  }
   if (q.minRating !== undefined) consulta = consulta.gte('rating', q.minRating);
   if (q.search?.trim()) {
     const t = q.search.trim().replace(/[%*,()]/g, ' ');
@@ -452,7 +470,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
       consulta = consulta.order('createdAt', { ascending: false });
       break;
     case 'trending':
-      consulta = consulta.order('isTrending', { ascending: false }).order('ordersCount', { ascending: false, nullsFirst: false });
+      consulta = consulta.order('ordersCount', { ascending: false, nullsFirst: false });
       break;
     case 'rating':
       consulta = consulta.order('rating', { ascending: false, nullsFirst: false });
@@ -464,10 +482,10 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
 
   const [pag, global] = await Promise.all([
     consulta,
-    c.from('CatalogItem').select('provider,source,categoryName,freeShipping,isTrending,costPrice,lastSyncedAt,warehouses').limit(5000),
+    c.from('CatalogItem').select('provider,source,categoryName,freeShipping,isTrending,ordersCount,costPrice,lastSyncedAt,warehouses').limit(5000),
   ]);
   if (pag.error) throw new Error(pag.error.message);
-  const filas: CatalogRow[] = (pag.data as any[]).map(mapCatalogo);
+  const filas: CatalogRow[] = (pag.data as any[]).map(mapCatalogo).map((f) => ({ ...f, isTrending: esTendencia(f.provider, f.ordersCount) }));
   const todos = comprobar<any[]>(global);
   const total = pag.count ?? filas.length;
 
@@ -511,7 +529,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
       sample: muestra,
       lastSyncedAt: ultima,
       freeShipping: todos.filter((f) => f.freeShipping).length,
-      trending: todos.filter((f) => f.isTrending).length,
+      trending: todos.filter((f) => esTendencia(f.provider, f.ordersCount)).length,
     },
     priceRange: { min: precios.length ? Math.min(...precios) : 0, max: precios.length ? Math.max(...precios) : 0 },
     warehouses: [...almacenes.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),

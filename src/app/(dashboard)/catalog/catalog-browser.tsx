@@ -66,7 +66,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 
 const SORTS = [
   { value: 'relevance', label: 'Más vendidos' },
-  { value: 'trending', label: 'Tendencias' },
+  { value: 'trending', label: 'Top ventas' },
   { value: 'price-asc', label: 'Precio: de menor a mayor' },
   { value: 'price-desc', label: 'Precio: de mayor a menor' },
   { value: 'rating', label: 'Mejor valorados' },
@@ -196,7 +196,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     (minPrice || maxPrice) && { label: `${minPrice || 0}–${maxPrice || '∞'} €`, clear: () => { setMinPrice(''); setMaxPrice(''); } },
     shipFrom.length > 0 && { label: `almacén: ${shipFrom.map(nombreAlmacen).join(' + ')}`, clear: () => setShipFrom([]) },
     freeShipping && { label: 'envío gratis', clear: () => setFreeShipping(false) },
-    trending && { label: 'tendencias', clear: () => setTrending(false) },
+    trending && { label: 'top ventas', clear: () => setTrending(false) },
     minRating && { label: `≥ ${minRating}★`, clear: () => setMinRating('') },
   ].filter(Boolean) as { label: string; clear: () => void }[];
 
@@ -463,11 +463,11 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
           <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-4">
             <label className="inline-flex cursor-pointer items-center gap-2 text-[12px]">
               <input type="checkbox" checked={freeShipping} onChange={(e) => { setFreeShipping(e.target.checked); setPage(1); }} className="size-3.5 accent-indigo-500" />
-              <Truck className="size-3.5 text-indigo-300" /> Sólo envío gratis
+              <Truck className="size-3.5 text-indigo-300" /> Solo envío gratis (si el proveedor lo informa)
             </label>
             <label className="inline-flex cursor-pointer items-center gap-2 text-[12px]">
               <input type="checkbox" checked={trending} onChange={(e) => { setTrending(e.target.checked); setPage(1); }} className="size-3.5 accent-indigo-500" />
-              <Flame className="size-3.5 text-orange-300" /> Sólo tendencias
+              <span title="El 20 % de productos con más pedidos de su proveedor" className="inline-flex items-center gap-2"><Flame className="size-3.5 text-orange-300" /> Solo top ventas (el 20 % más pedido de cada proveedor)</span>
             </label>
             <span className="text-[11px] text-muted-foreground">
               Los precios de venta y el beneficio se calculan con tu regla «{ruleName}» (configúrala en <Link className="underline" href="/pricing">Precios y márgenes</Link>).
@@ -528,7 +528,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
         <Info className="size-3.5 text-indigo-300" />
         <span>
           Índice propio de la plataforma: {formatNumber(stats.total)} artículos ({formatNumber(stats.real)} reales · {formatNumber(stats.sample)} de muestra) ·
-          envío gratis {formatNumber(stats.freeShipping)} · tendencias {formatNumber(stats.trending)}
+          envío gratis {formatNumber(stats.freeShipping)} · top ventas {formatNumber(stats.trending)}
         </span>
         {stats.lastSyncedAt && (
           <span className="inline-flex items-center gap-1">

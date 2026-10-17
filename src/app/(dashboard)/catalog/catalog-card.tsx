@@ -68,7 +68,7 @@ export function CatalogCard({
         <span className="absolute right-2 top-2 flex flex-col items-end gap-1">
           {item.isTrending && (
             <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 backdrop-blur">
-              <TrendingUp className="size-3" /> <span className="hidden min-[420px]:inline">Tendencia</span>
+              <TrendingUp className="size-3" /> <span className="hidden min-[420px]:inline">Top ventas</span>
             </span>
           )}
           {item.freeShipping && (

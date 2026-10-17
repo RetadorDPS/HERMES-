@@ -150,24 +150,28 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
   }, [ficha, item]);
 
   const porOrigen = useMemo<Record<string, Record<string, Cotizacion>>>(() => ficha?.envio?.porOrigen ?? {}, [ficha]);
-  const origenes = useMemo<{ pais: string; total: number }[]>(() => ficha?.origenes ?? [], [ficha]);
+  const origenes = useMemo<{ pais: string; total: number | null }[]>(() => ficha?.origenes ?? [], [ficha]);
+  // Destinos sin servicio (guardados aparte): también se pueden elegir para ver el aviso
+  const sinServicioGlobal = useMemo<Record<string, any>>(() => ficha?.envio?.sinServicio ?? {}, [ficha]);
   const destinos = useMemo(() => {
     const s = new Set<string>();
     for (const d of Object.values(porOrigen)) for (const k of Object.keys(d)) s.add(k);
+    for (const k of Object.keys(sinServicioGlobal)) s.add(k);
     return [...s].sort((a, b) => pais(a).localeCompare(pais(b), 'es'));
-  }, [porOrigen]);
+  }, [porOrigen, sinServicioGlobal]);
   const destinoActivo = destino || (destinos.includes('ES') ? 'ES' : destinos[0] ?? '');
 
   const filasEnvio = useMemo(() => {
     if (!destinoActivo) return { filas: [] as any[], sinServicio: [] as string[], porCotizar: [] as string[] };
-    const origenesConocidos = new Set<string>([...origenes.filter((o) => o.total > 0).map((o) => o.pais), ...Object.keys(porOrigen)]);
+    const origenesConocidos = new Set<string>([...origenes.filter((o) => (o.total ?? 0) > 0).map((o) => o.pais), ...Object.keys(porOrigen)]);
     const filas: any[] = [];
     const sinServicio: string[] = [];
     const porCotizar: string[] = [];
     for (const o of origenesConocidos) {
       const q = porOrigen[o]?.[destinoActivo];
       const stock = origenes.find((x) => x.pais === o)?.total ?? null;
-      if (!q) porCotizar.push(o);
+      // En AliExpress el almacén lo decide cada cotización: que un almacén no tenga cotización para este destino no significa que falte
+      if (!q) { if (item?.provider !== 'ALIEXPRESS') porCotizar.push(o); }
       else if (q.error || !q.opciones?.length) sinServicio.push(o);
       else for (const op of q.opciones) filas.push({ origen: o, stock, ...op });
     }
@@ -175,7 +179,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     const masRapida = [...filas].sort((x, y) => (x.diasMax ?? 1e9) - (y.diasMax ?? 1e9))[0];
     const masBarata = filas[0];
     return { filas: filas.map((f) => ({ ...f, barata: f === masBarata, rapida: f === masRapida })), sinServicio, porCotizar };
-  }, [destinoActivo, origenes, porOrigen]);
+  }, [destinoActivo, origenes, porOrigen, item?.provider]);
 
   const nombreProveedor = item?.provider === 'ALIEXPRESS' ? 'AliExpress' : 'CJ';
   const variantes: any[] = ficha?.variantes ?? [];
@@ -253,6 +257,11 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                           : usd(ficha.precio.min)
                         : usd(Number(item.costPrice))}
                     </p>
+                    {ficha?.precio?.pais && (
+                      <p className="mt-1 text-[10.5px] leading-snug text-muted-foreground">
+                        Precio que cobra {nombreProveedor} por API (para {pais(ficha.precio.pais)}), consultado el {new Date(ficha.precio.consultado ?? ficha.actualizado).toLocaleDateString('es-ES')}. La app de {nombreProveedor} puede enseñar menos por ofertas personales (bienvenida, monedas, cupones): no cuentan para tu margen.
+                      </p>
+                    )}
                     {ficha?.precioSugeridoCj && <p className="text-[11px] text-muted-foreground">Precio de venta sugerido por el proveedor: {ficha.precioSugeridoCj} US$</p>}
                   </div>
 
@@ -271,14 +280,20 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
 
                   {origenes.length > 0 && (
                     <div className="space-y-1">
-                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Stock por almacén</p>
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {origenes.some((o) => o.total !== null && o.total !== undefined) ? 'Stock por almacén' : 'Sale desde'}
+                      </p>
                       <div className="flex flex-wrap gap-1.5">
                         {origenes.map((o) => (
                           <span key={o.pais} className="rounded-md border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[11px]">
-                            {pais(o.pais)} · {formatNumber(o.total)}
+                            {pais(o.pais)}
+                            {o.total !== null && o.total !== undefined ? ` · ${formatNumber(o.total)}` : ''}
                           </span>
                         ))}
                       </div>
+                      {origenes.every((o) => o.total === null || o.total === undefined) && (
+                        <p className="text-[10.5px] text-muted-foreground">{nombreProveedor} no informa del stock por almacén: arriba se suma el stock de todas las variantes.</p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -336,12 +351,13 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                               <span className="min-w-0">
                                 <span className="font-medium">{f.nombre}</span>
                                 <span className="text-muted-foreground"> · desde el almacén de {pais(f.origen)}</span>
-                                {f.stock !== null && <span className="text-muted-foreground"> ({formatNumber(f.stock)} uds)</span>}
+                                {f.stock !== null && f.stock !== undefined && <span className="text-muted-foreground"> ({formatNumber(f.stock)} uds)</span>}
                               </span>
                               <span className="flex items-center gap-2 tabular-nums">
                                 {f.barata && <Badge variant="success">más barato</Badge>}
                                 {f.rapida && <Badge variant="info">más rápido</Badge>}
                                 <span className="font-semibold">{f.precio === 0 ? 'Gratis' : usd(f.precio)}</span>
+                                {f.gratisDesde && f.precio !== 0 && <span className="text-[10.5px] text-muted-foreground">gratis desde {String(f.gratisDesde).replace('US $', '')} US$</span>}
                                 <span className="text-muted-foreground">{dias(f.diasMin, f.diasMax)}</span>
                               </span>
                             </li>
@@ -365,7 +381,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                   {esAdmin && (
                     <div className="space-y-2 border-t border-white/[0.06] pt-2">
                       <p className="text-[11px] text-muted-foreground">
-                        Solo para el administrador. Pide a CJ los precios y plazos de envío de este artículo y los guarda. Cada país cuesta unas llamadas a CJ (una por almacén).
+                        Solo para el administrador. Pide a {nombreProveedor} los precios y plazos de envío de este artículo y los guarda. Cada país cuesta {item?.provider === 'ALIEXPRESS' ? 'una llamada a AliExpress' : 'unas llamadas a CJ (una por almacén)'}.
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <Button size="sm" variant="outline" disabled={trabajando !== null} onClick={() => ejecutarCj('envio')}>

@@ -336,8 +336,6 @@ Deno.serve(async (req) => {
             rating: valoracion !== null ? Math.round((valoracion / 20) * 100) / 100 : null,
             ordersCount: pedidos,
             shipFrom: null,
-            freeShipping: false,
-            isTrending: (pedidos ?? 0) > 5000,
             rawPayload: i,
             sourceUrl: String(i.product_detail_url ?? `https://www.aliexpress.com/item/${id}.html`),
             source: "api",
@@ -350,6 +348,13 @@ Deno.serve(async (req) => {
         const { error } = await servicio.from("CatalogItem").upsert(filas, { onConflict: "provider,externalId" });
         if (error) return await fallo(`No se pudo guardar el catálogo: ${error.message}`);
         guardados += filas.length;
+        // Si el artículo ya tiene ficha, el coste vuelve a ser el de su variante más barata (el listado trae otro precio y la tarjeta no debe cambiar de número)
+        const { data: ya } = await servicio.from("CatalogItem").select("id,externalId").eq("provider", PROVEEDOR).in("externalId", filas.map((f: any) => f.externalId));
+        const { data: fichas } = await servicio.from("CatalogItemDetail").select("itemId,ficha").in("itemId", (ya ?? []).map((x: any) => x.id));
+        for (const f of fichas ?? []) {
+          const minimo = numeroONulo((f.ficha as any)?.precio?.min);
+          if (minimo !== null) await servicio.from("CatalogItem").update({ costPrice: minimo }).eq("id", f.itemId);
+        }
       }
       if (items.length < tamano) break;
     }
@@ -460,10 +465,11 @@ Deno.serve(async (req) => {
         videos: [],
         unidad: null,
         tipo: base.product_status_type ?? null,
-        precio: { moneda: MONEDA, min: precios.length ? Math.min(...precios) : null, max: precios.length ? Math.max(...precios) : null },
+        // Precio según la API de AliExpress para el país indicado (el que se usa al pedir por API); no es el precio personalizado de la app (bienvenida, monedas, cupones)
+        precio: { moneda: MONEDA, min: precios.length ? Math.min(...precios) : null, max: precios.length ? Math.max(...precios) : null, pais, consultado: ahoraIso() },
         variantes,
         almacenes: [],
-        origenes: [],
+        origenes: (previa?.ficha as any)?.origenes ?? [],
         envio: (previa?.ficha as any)?.envio ?? { porOrigen: {} },
         resenas: { total: totalResenas, media: valoracion, lista: [] },
         enlace: `https://www.aliexpress.com/item/${pid}.html`,
@@ -481,6 +487,8 @@ Deno.serve(async (req) => {
       if (ficha.descripcionHtml) cambios.description = ficha.descripcionHtml.slice(0, 5000);
       if (stockTotal > 0) cambios.stock = stockTotal;
       if (valoracion !== null) cambios.rating = valoracion;
+      // La tarjeta muestra el coste de la variante más barata de la ficha (el mismo número que ve el vendedor al abrir el producto)
+      if (precios.length) cambios.costPrice = Math.min(...precios);
       await servicio.from("CatalogItem").update(cambios).eq("id", item.id);
       informe.push({ id: item.id, ok: true, titulo: ficha.titulo, imagenes: imagenes.length, variantes: variantes.length, almacenes: 0, origenes: [], resenas: 0, avisos: ficha.avisos, formaProducto: Object.keys(nodo) });
     }
@@ -497,58 +505,94 @@ Deno.serve(async (req) => {
     if (!det || !item) return responder({ ok: false, error: "Primero hay que completar la ficha de este artículo", ...diagnostico });
     const ficha: any = det.ficha ?? {};
     const sku = (ficha.variantes ?? []).filter((v: any) => v?.vid).sort((a: any, b: any) => (a.precio ?? 1e9) - (b.precio ?? 1e9))[0];
-    const envio: any = { origen: ficha.envio?.origen ?? null, porOrigen: { ...(ficha.envio?.porOrigen ?? {}) } };
+    // El almacén de salida NO se supone: lo dice AliExpress en cada cotización (`ship_from_country`) y puede cambiar según el destino.
+    const envio: any = { origen: ficha.envio?.origen ?? null, porOrigen: { ...(ficha.envio?.porOrigen ?? {}) }, sinServicio: { ...(ficha.envio?.sinServicio ?? {}) } };
     const crudoEnvio: Record<string, any> = { ...(((det.raw as any)?.envio) ?? {}) };
     const avisos: string[] = [];
     let hechas = 0;
-    const almacenesVistos = new Set<string>(); // países desde los que AliExpress dice que sale el envío
+    const almacenesVistos = new Set<string>();
+    const hayCotizacionReciente = (d: string) =>
+      Object.values(envio.porOrigen).some((m: any) => m?.[d] && Date.now() - new Date(m[d].actualizado).getTime() < 24 * 3_600_000 && !m[d].error) ||
+      (envio.sinServicio[d] && Date.now() - new Date(envio.sinServicio[d].actualizado).getTime() < 24 * 3_600_000);
     for (const destino of destinos) {
-      const previa = envio.porOrigen.CN?.[destino];
-      if (previa && !cuerpo?.forzar && Date.now() - new Date(previa.actualizado).getTime() < 24 * 3_600_000) continue;
+      if (!cuerpo?.forzar && hayCotizacionReciente(destino)) continue;
       if (hechas >= MAX_COTIZACIONES) { avisos.push(`Se alcanzó el máximo de ${MAX_COTIZACIONES} cotizaciones por vez: vuelve a pulsar para seguir`); break; }
       const r = await ali("aliexpress.ds.freight.query", {
         queryDeliveryReq: JSON.stringify({ productId: String(item.externalId), quantity: "1", shipToCountry: destino, selectedSkuId: sku?.vid ?? "", language: "es_ES", currency: MONEDA, locale: "es_ES" }),
       });
       hechas += 1;
-      envio.porOrigen.CN = envio.porOrigen.CN ?? {};
-      crudoEnvio.CN = crudoEnvio.CN ?? {};
       if (!r.ok) {
-        envio.porOrigen.CN[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), opciones: [], error: r.mensaje };
-        crudoEnvio.CN[destino] = { error: r.mensaje, detalle: r.crudo };
+        envio.sinServicio[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), error: r.mensaje };
+        crudoEnvio[destino] = { error: r.mensaje, detalle: r.crudo };
         continue;
       }
-      crudoEnvio.CN[destino] = r.datos;
+      crudoEnvio[destino] = r.datos;
       const nodo = r.datos?.aliexpress_ds_freight_query_response?.result ?? r.datos?.aliexpress_ds_freight_query_response ?? {};
-      const opciones = lista(nodo.delivery_options?.delivery_option_d_t_o ?? nodo.delivery_options).map((o: any) => ({
-        nombre: String(o.company ?? o.service_name ?? o.code ?? "Envío AliExpress"),
-        precio: numeroONulo(o.shipping_fee ?? o.freight_amount?.amount ?? o.shipping_fee_cent),
-        diasMin: numeroONulo(o.min_delivery_days ?? o.delivery_time_min),
-        diasMax: numeroONulo(o.max_delivery_days ?? o.delivery_time_max ?? o.delivery_date_desc),
-        textoDias: o.delivery_date_desc ?? null,
-        origen: o.ship_from_country ? String(o.ship_from_country).toUpperCase() : null,
-      }));
-      for (const o of opciones) if (o.origen) almacenesVistos.add(o.origen);
-      envio.porOrigen.CN[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), opciones };
+      const opciones = lista(nodo.delivery_options?.delivery_option_d_t_o ?? nodo.delivery_options).map((o: any) => {
+        const precio = numeroONulo(o.shipping_fee ?? o.freight_amount?.amount ?? o.shipping_fee_cent);
+        return {
+          nombre: String(o.company ?? o.service_name ?? o.code ?? "Envío AliExpress"),
+          precio,
+          diasMin: numeroONulo(o.min_delivery_days ?? o.delivery_time_min),
+          diasMax: numeroONulo(o.max_delivery_days ?? o.delivery_time_max ?? o.delivery_date_desc),
+          textoDias: o.delivery_date_desc ?? null,
+          origen: o.ship_from_country ? String(o.ship_from_country).toUpperCase() : null,
+          gratis: o.free_shipping === true || precio === 0,
+          gratisDesde: o.free_shipping_threshold ?? null, // p. ej. «US $10.00»: envío gratis si el pedido llega a esa cantidad
+        };
+      });
+      if (!opciones.length) {
+        envio.sinServicio[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), error: "AliExpress no devolvió ningún método de envío para este país" };
+        for (const o of Object.keys(envio.porOrigen)) delete envio.porOrigen[o][destino];
+        continue;
+      }
+      delete envio.sinServicio[destino];
+      // Se agrupa por el almacén que informa AliExpress; si alguna opción no lo trae se marca «XX» (desconocido) en vez de suponer China
+      const grupos = new Map<string, any[]>();
+      for (const o of opciones) {
+        const origen = o.origen ?? "XX";
+        if (o.origen) almacenesVistos.add(o.origen);
+        grupos.set(origen, [...(grupos.get(origen) ?? []), o]);
+      }
+      for (const [origen, ops] of grupos) {
+        envio.porOrigen[origen] = envio.porOrigen[origen] ?? {};
+        envio.porOrigen[origen][destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), opciones: ops };
+      }
+      for (const origen of Object.keys(envio.porOrigen)) if (!grupos.has(origen)) delete envio.porOrigen[origen][destino]; // cotizaciones viejas de otro almacén ya no valen
     }
+    for (const origen of Object.keys(envio.porOrigen)) if (!Object.keys(envio.porOrigen[origen]).length) delete envio.porOrigen[origen];
     ficha.envio = envio;
-    ficha.origenes = ficha.origenes?.length ? ficha.origenes : [{ pais: "CN", total: 0 }];
+    // Almacenes de la ficha: los que AliExpress ha dicho de verdad. El stock por almacén NO existe en AliExpress: se deja sin dato (nunca 0 inventado).
+    const conocidos = new Set<string>([...Object.keys(envio.porOrigen).filter((o) => o !== "XX")]);
+    ficha.origenes = [...conocidos].map((pais) => ({ pais, total: null }));
     const { error: eEnv } = await servicio.from("CatalogItemDetail").update({ ficha, raw: { ...((det.raw as any) ?? {}), envio: crudoEnvio }, fetchedAt: ahoraIso() }).eq("itemId", id);
     if (eEnv) return await fallo(`No se pudo guardar el envío: ${eEnv.message}`);
-    // El país de salida que informa AliExpress pasa al catálogo (filtro «Almacén de salida»)
-    for (const a of almacenesVistos) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: [String(item.externalId)], p_almacen: a });
-    const detalleEnvio = (d: string) => {
-      const ops = envio.porOrigen.CN[d].opciones as any[];
+    for (const a of conocidos) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: [String(item.externalId)], p_almacen: a });
+
+    // «Envío gratis» solo se afirma si TODOS los destinos cotizados tienen una opción gratuita (para el envío por API, no para ofertas personales de la app)
+    const cotizados = Object.keys(envio.porOrigen).flatMap((o) => Object.keys(envio.porOrigen[o]));
+    const destinosConOpciones = [...new Set(cotizados)];
+    if (destinosConOpciones.length) {
+      const todosGratis = destinosConOpciones.every((d) => Object.values(envio.porOrigen).some((m: any) => (m?.[d]?.opciones ?? []).some((o: any) => o.gratis)));
+      await servicio.from("CatalogItem").update({ freeShipping: todosGratis, updatedAt: ahoraIso() }).eq("id", id);
+    }
+
+    const textoDestino = (d: string) => {
+      const ops: any[] = Object.values(envio.porOrigen).flatMap((m: any) => m?.[d]?.opciones ?? []);
       const precios = ops.map((o) => o.precio).filter((x) => x !== null);
       const dMin = Math.min(...ops.map((o) => o.diasMin ?? 999));
       const dMax = Math.max(...ops.map((o) => o.diasMax ?? 0));
-      return `${d} (${ops.length} ${ops.length === 1 ? "método" : "métodos"}, desde ${precios.length ? Math.min(...precios).toFixed(2) : "?"} USD, ${dMin === 999 ? "?" : dMin}-${dMax || "?"} días)`;
+      const desde = [...new Set(ops.map((o) => o.origen).filter(Boolean))].join("/");
+      return `${d} (${ops.length} ${ops.length === 1 ? "método" : "métodos"}, desde ${precios.length ? Math.min(...precios).toFixed(2) : "?"} USD, ${dMin === 999 ? "?" : dMin}-${dMax || "?"} días${desde ? `, sale de ${desde}` : ""})`;
     };
-    const resumen = Object.fromEntries([["CN", {
-      conServicio: destinos.filter((d) => envio.porOrigen.CN?.[d]?.opciones?.length).map(detalleEnvio),
-      sinServicio: destinos.filter((d) => envio.porOrigen.CN?.[d] && !envio.porOrigen.CN[d].opciones?.length),
-      pendientes: destinos.filter((d) => !envio.porOrigen.CN?.[d]),
-    }]]);
-    return await cerrarOk({ mensaje: `${hechas} cotizaciones nuevas`, resumen, avisos });
+    const resumen = {
+      "Según AliExpress": {
+        conServicio: destinos.filter((d) => destinosConOpciones.includes(d)).map(textoDestino),
+        sinServicio: destinos.filter((d) => envio.sinServicio[d]),
+        pendientes: destinos.filter((d) => !destinosConOpciones.includes(d) && !envio.sinServicio[d]),
+      },
+    };
+    return await cerrarOk({ mensaje: `${hechas} ${hechas === 1 ? "cotización nueva" : "cotizaciones nuevas"}`, resumen, avisos });
   }
 
   return responder({ ok: false, error: `Acción desconocida: ${accion}`, ...diagnostico });

@@ -161,7 +161,7 @@ function Resultado({ r }: { r: Respuesta }) {
         <ul className="mt-2 space-y-1 text-[12px]">
           {Object.entries(r.resumen).map(([origen, x]) => (
             <li key={origen}>
-              <p className="font-medium">Almacén de {nombrePais(origen)}</p>
+              <p className="font-medium">{origen.length === 2 ? `Almacén de ${nombrePais(origen)}` : origen}</p>
               {x.conServicio.length > 0 && <p className="opacity-90">Envía a: {x.conServicio.map((t) => `${nombrePais(t.slice(0, 2))}${t.slice(2)}`).join(' · ')}</p>}
               {x.sinServicio.length > 0 && <p className="opacity-70">Sin servicio a: {x.sinServicio.map(nombrePais).join(', ')}</p>}
               {x.pendientes.length > 0 && <p className="opacity-70">Por cotizar: {x.pendientes.map(nombrePais).join(', ')}</p>}
