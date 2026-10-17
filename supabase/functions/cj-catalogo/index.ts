@@ -118,8 +118,15 @@ Deno.serve(async (req) => {
   const pais = String(cuerpo?.pais ?? "ES").toUpperCase().slice(0, 2);
   const palabra: string | undefined = cuerpo?.palabra ? String(cuerpo.palabra).slice(0, 80) : undefined;
 
-  const apiKey = Deno.env.get("CJ_API_KEY");
-  const diagnostico = { secretoCjApiKey: Boolean(apiKey), secretosVistos: secretosVistos() };
+  const claveCruda = Deno.env.get("CJ_API_KEY") ?? "";
+  // Se quitan espacios y saltos de línea sobrantes (típicos al copiar y pegar la clave)
+  const apiKey = claveCruda.trim().replace(/^["']|["']$/g, "");
+  // Solo datos de forma (nunca la clave): ayudan a detectar un pegado incorrecto
+  const diagnostico = {
+    secretoCjApiKey: Boolean(apiKey),
+    secretosVistos: secretosVistos(),
+    formaClave: { longitud: apiKey.length, tieneEspaciosOSaltos: /\s/.test(claveCruda.trim()), contieneArrobaApi: apiKey.includes("@api@"), sobrabanEspaciosAlBorde: claveCruda !== claveCruda.trim() },
+  };
   if (!apiKey) {
     return responder({ ok: false, error: "Falta el secreto CJ_API_KEY en las funciones de Supabase", ...diagnostico });
   }

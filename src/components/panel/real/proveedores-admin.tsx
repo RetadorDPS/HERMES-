@@ -15,6 +15,7 @@ interface Respuesta {
   llamadasACj?: number;
   secretoCjApiKey?: boolean;
   secretosVistos?: string[];
+  formaClave?: { longitud: number; tieneEspaciosOSaltos: boolean; contieneArrobaApi: boolean; sobrabanEspaciosAlBorde: boolean };
   muestra?: { id: string; titulo: string; costo: number; categoria: string | null; stock: number }[];
 }
 
@@ -82,6 +83,14 @@ export function ProveedoresAdmin() {
             {!resultado.ok && resultado.secretoCjApiKey === false && (
               <p className="mt-1 text-[12px] opacity-80">
                 Secretos que empiezan por CJ o ALI en el servidor: {resultado.secretosVistos?.length ? resultado.secretosVistos.join(', ') : 'ninguno'}.
+              </p>
+            )}
+            {!resultado.ok && resultado.formaClave && resultado.secretoCjApiKey && (
+              <p className="mt-1 text-[12px] opacity-80">
+                Forma de la clave guardada (sin mostrarla): {resultado.formaClave.longitud} caracteres
+                {resultado.formaClave.contieneArrobaApi ? ', con «@api@»' : ', sin «@api@»'}
+                {resultado.formaClave.tieneEspaciosOSaltos ? ', con espacios o saltos de línea dentro' : ''}
+                {resultado.formaClave.sobrabanEspaciosAlBorde ? ', con espacios en los bordes (ya se ignoran)' : ''}.
               </p>
             )}
             {resultado.muestra && resultado.muestra.length > 0 && (
