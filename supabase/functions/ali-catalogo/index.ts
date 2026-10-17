@@ -9,7 +9,7 @@
  * Acciones (solo administrador): probar · feeds · descargar · detalle · envio
  *
  * Límite: AliExpress corta con `AppApiCallLimit` si se llama en paralelo o muy deprisa. TODAS las llamadas pasan
- * por `ali()`, una a una y con pausa. Las claves viven como secretos (ALI_APP_KEY, ALI_APP_SECRET) y nunca se devuelven.
+ * por `ali()`, una a una y con pausa. Las claves viven como secretos (ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET) y nunca se devuelven.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -87,15 +87,16 @@ Deno.serve(async (req) => {
   const cuerpo = await req.json().catch(() => ({}));
   const accion: string = cuerpo?.accion ?? "probar";
 
-  const appKey = (Deno.env.get("ALI_APP_KEY") ?? "").trim();
-  const appSecret = (Deno.env.get("ALI_APP_SECRET") ?? "").trim();
+  // Nombres de los secretos: ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET (como en el entorno original); también se acepta ALI_APP_KEY / ALI_APP_SECRET
+  const appKey = (Deno.env.get("ALIEXPRESS_APP_KEY") ?? Deno.env.get("ALI_APP_KEY") ?? "").trim();
+  const appSecret = (Deno.env.get("ALIEXPRESS_APP_SECRET") ?? Deno.env.get("ALI_APP_SECRET") ?? "").trim();
   const diagnostico = {
     secretoAppKey: Boolean(appKey),
     secretoAppSecret: Boolean(appSecret),
     secretosVistos: secretosVistos(),
     longitudes: { appKey: appKey.length, appSecret: appSecret.length },
   };
-  if (!appKey || !appSecret) return responder({ ok: false, error: "Faltan los secretos ALI_APP_KEY y ALI_APP_SECRET en las funciones de Supabase", ...diagnostico });
+  if (!appKey || !appSecret) return responder({ ok: false, error: "Faltan los secretos ALIEXPRESS_APP_KEY y ALIEXPRESS_APP_SECRET en las funciones de Supabase", ...diagnostico });
 
   // ── Fila del proveedor ──
   const { data: fila0 } = await servicio.from("PlatformCredential").select("*").eq("provider", PROVEEDOR).maybeSingle();
