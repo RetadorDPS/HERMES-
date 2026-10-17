@@ -6,7 +6,7 @@
  * App Secret, feed curado `aliexpress.ds.recommend.feed.get`, detalle `aliexpress.ds.product.get` y envío
  * `aliexpress.ds.freight.query`.
  *
- * Acciones (solo administrador): probar · feeds · descargar · detalle · envio
+ * Acciones (solo administrador): probar · feeds · sondear · descargar · detalle · envio
  *
  * Límite: AliExpress corta con `AppApiCallLimit` si se llama en paralelo o muy deprisa. TODAS las llamadas pasan
  * por `ali()`, una a una y con pausa. Las claves viven como secretos (ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET) y nunca se devuelven.
@@ -297,6 +297,31 @@ Deno.serve(async (req) => {
       );
     }
     return await cerrarOk({ mensaje: `${recibidos} recibidos de AliExpress · ${guardados} guardados`, recibidos, guardados, avisos, forma: { claves: forma }, feed });
+  }
+
+  /* ───────────────────────── sondear (diagnóstico del feed: pocas llamadas, en serie) ───────────────────────── */
+  if (accion === "sondear") {
+    const rf = await ali("aliexpress.ds.feedname.get", {});
+    if (!rf.ok) return await fallo(`AliExpress no devolvió los feeds: ${rf.mensaje}`, { codigoAli: rf.codigo, detalleError: rf.crudo });
+    const nodoF = rf.datos?.aliexpress_ds_feedname_get_response?.resp_result?.result ?? rf.datos?.aliexpress_ds_feedname_get_response ?? rf.datos;
+    const feeds = lista(nodoF?.promos?.promo ?? nodoF?.promos).map((p: any) => ({ nombre: String(p.promo_name ?? p.name ?? ""), productos: numeroONulo(p.product_num) ?? 0 })).filter((f) => f.nombre);
+    const mayor = [...feeds].sort((a, b) => b.productos - a.productos)[0];
+    const lineas: string[] = [`Feeds: ${feeds.length}. Mayor: ${mayor ? `${mayor.nombre} (${mayor.productos})` : "ninguno"}. «DS bestseller» declara ${feeds.find((f) => f.nombre === "DS bestseller")?.productos ?? "no figura"}`];
+    const pruebas: { etiqueta: string; feed: string; extra: Record<string, string> }[] = [
+      { etiqueta: "DS bestseller sin país", feed: "DS bestseller", extra: { target_currency: MONEDA, target_language: "EN" } },
+      { etiqueta: `${mayor?.nombre ?? "feed mayor"} · ES`, feed: mayor?.nombre ?? "DS bestseller", extra: { country: "ES", target_currency: MONEDA, target_language: "ES" } },
+      { etiqueta: `${mayor?.nombre ?? "feed mayor"} · sin país`, feed: mayor?.nombre ?? "DS bestseller", extra: { target_currency: MONEDA, target_language: "EN" } },
+      { etiqueta: "DS bestseller · US", feed: "DS bestseller", extra: { country: "US", target_currency: MONEDA, target_language: "EN" } },
+    ];
+    for (const t of pruebas) {
+      const r = await ali("aliexpress.ds.recommend.feed.get", { feed_name: t.feed, page_no: 1, page_size: 3, ...t.extra });
+      if (!r.ok) { lineas.push(`${t.etiqueta}: error ${r.codigo ?? ""} ${r.mensaje}`.slice(0, 220)); continue; }
+      const n = r.datos?.aliexpress_ds_recommend_feed_get_response?.resp_result?.result ?? r.datos?.aliexpress_ds_recommend_feed_get_response?.result ?? r.datos?.aliexpress_ds_recommend_feed_get_response ?? {};
+      const it = primerArray(n?.products) ?? [];
+      lineas.push(`${t.etiqueta}: total=${n?.total_record_count ?? "?"} recibidos=${it.length}${it[0] ? ` campos=${Object.keys(it[0]).slice(0, 8).join("|")}` : ""}`);
+      if (it.length) break; // en cuanto una combinación devuelve productos, se para: no hace falta gastar más llamadas
+    }
+    return await cerrarOk({ mensaje: "Sondeo del feed de AliExpress", avisos: lineas });
   }
 
   /* ───────────────────────── detalle (ficha completa) ───────────────────────── */

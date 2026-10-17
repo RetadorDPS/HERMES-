@@ -46,7 +46,7 @@ interface Respuesta {
   forma?: { claves?: string[] };
 }
 
-type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle' | 'envio' | 'feeds';
+type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle' | 'envio' | 'feeds' | 'sondear';
 type Proveedor = 'CJ_DROPSHIPPING' | 'ALIEXPRESS';
 
 const FUNCION: Record<Proveedor, string> = { CJ_DROPSHIPPING: 'cj-catalogo', ALIEXPRESS: 'ali-catalogo' };
@@ -196,7 +196,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     setTrabajando(accion);
     setResultado(null);
     try {
-      if (accion === 'probar' || accion === 'categorias' || accion === 'feeds') setResultado(await invocar(proveedor, { accion }));
+      if (accion === 'probar' || accion === 'categorias' || accion === 'feeds' || accion === 'sondear') setResultado(await invocar(proveedor, { accion }));
       else if (accion === 'descargar')
         setResultado(await invocar(proveedor, esCj ? { accion, paginas: 3, tamano: 50, orden: 1 } : { accion, paginas: 1, tamano: 50 }));
       else if (accion === 'envio') {
@@ -237,6 +237,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
           {boton('descargar', esCj ? '2. Descargar 150 productos populares' : '2. Descargar 50 productos más vendidos')}
           {boton('detalle', esCj ? '3. Completar 3 fichas' : '3. Completar 1 ficha')}
           {boton('envio', '4. Cotizar envío mundial (1 producto)', 'gradient')}
+          {!esCj && boton('sondear', 'Sondear el feed (máx. 5 llamadas)')}
         </div>
         <p className="text-[12px] text-muted-foreground">
           {esCj
