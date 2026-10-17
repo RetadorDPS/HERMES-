@@ -32,7 +32,7 @@ interface Respuesta {
   avisos?: string[];
   totalEnCj?: number | null;
   informe?: InformeFicha[];
-  resumen?: Record<string, Record<string, string>>;
+  resumen?: Record<string, { conServicio: string[]; sinServicio: string[]; pendientes: string[] }>;
 }
 
 type Accion = 'probar' | 'categorias' | 'descargar' | 'detalle' | 'envio';
@@ -65,12 +65,19 @@ async function articulosSinFicha(cantidad: number): Promise<string[]> {
   return (items ?? []).map((i: any) => i.id as string).filter((id) => !conFicha.has(id)).slice(0, cantidad);
 }
 
-/** Elige un artículo con ficha completa y sin cotización de envío todavía. */
+const DESTINOS_DEFECTO = 12;
+
+/** Elige un artículo con ficha completa al que todavía le faltan cotizaciones de envío (origen × destino). */
 async function articuloSinEnvio(): Promise<string | null> {
-  const { data, error } = await supabase().from('CatalogItemDetail').select('itemId, envio:ficha->envio');
+  const { data, error } = await supabase().from('CatalogItemDetail').select('itemId, origenes:ficha->origenes, envio:ficha->envio');
   if (error) throw new Error(error.message);
-  const sin = (data ?? []).find((d: any) => !d.envio || !d.envio.porOrigen || Object.keys(d.envio.porOrigen).length === 0);
-  return sin ? (sin as any).itemId : null;
+  const pendiente = (data ?? []).find((d: any) => {
+    const conStock = ((d.origenes ?? []) as { pais: string; total: number }[]).filter((o) => (o.total ?? 0) > 0).slice(0, 6);
+    const esperadas = Math.max(conStock.length, 1) * DESTINOS_DEFECTO;
+    const hechas = Object.values((d.envio?.porOrigen ?? {}) as Record<string, Record<string, unknown>>).reduce((n, porDestino) => n + Object.keys(porDestino).length, 0);
+    return hechas < esperadas;
+  });
+  return pendiente ? (pendiente as any).itemId : null;
 }
 
 /** Catálogo del proveedor CJ. AliExpress se añadirá aparte (son independientes). */
@@ -87,7 +94,7 @@ export function ProveedoresAdmin() {
       else if (accion === 'descargar') setResultado(await invocarCj({ accion, paginas: 3, tamano: 50 }));
       else if (accion === 'envio') {
         const id = await articuloSinEnvio();
-        if (!id) setResultado({ ok: true, mensaje: 'Todos los artículos con ficha ya tienen su envío cotizado.' });
+        if (!id) setResultado({ ok: true, mensaje: 'Todos los artículos con ficha ya tienen cotizado el envío desde sus almacenes.' });
         else setResultado(await invocarCj({ accion, ids: [id] }));
       } else {
         const ids = await articulosSinFicha(3);
@@ -151,12 +158,12 @@ export function ProveedoresAdmin() {
             {resultado.avisos && resultado.avisos.length > 0 && <p className="mt-1 text-[12px] opacity-80">{resultado.avisos.join(' · ')}</p>}
             {resultado.resumen && (
               <ul className="mt-2 space-y-1 text-[12px]">
-                {Object.entries(resultado.resumen).map(([origen, destinos]) => (
+                {Object.entries(resultado.resumen).map(([origen, r]) => (
                   <li key={origen}>
-                    <span className="font-medium">Desde {origen}:</span>{' '}
-                    {Object.entries(destinos)
-                      .map(([d, estado]) => `${d} ${estado}`)
-                      .join(' · ')}
+                    <p className="font-medium">Almacén de {origen}</p>
+                    {r.conServicio.length > 0 && <p className="opacity-90">Envía a: {r.conServicio.join(' · ')}</p>}
+                    {r.sinServicio.length > 0 && <p className="opacity-70">Sin servicio a: {r.sinServicio.join(', ')}</p>}
+                    {r.pendientes.length > 0 && <p className="opacity-70">Por cotizar: {r.pendientes.join(', ')}</p>}
                   </li>
                 ))}
               </ul>

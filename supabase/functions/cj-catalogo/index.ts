@@ -20,10 +20,12 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 const PROVEEDOR = "CJ_DROPSHIPPING";
-const PAUSA_MS = 1_300;
+const PAUSA_MS = 1_300; // CJ admite 1 petición por segundo
 /** Destinos que se cotizan por defecto (el usuario puede pedir cualquier otro código de país). */
 const DESTINOS_DEFECTO = ["ES", "US", "MX", "GB", "DE", "FR", "IT", "CA", "AU", "BR", "CO", "CL"];
-const MAX_COTIZACIONES = 30; // por llamada de la función (unos 40 s con la pausa) // CJ admite 1 petición por segundo
+const MAX_COTIZACIONES = 30; // por llamada de la función (unos 40 s con la pausa)
+const MAX_ORIGENES = 6;
+const FRESCURA_ENVIO_MS = 24 * 3_600_000; // una cotización de menos de 24 h no se repite
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -165,12 +167,18 @@ Deno.serve(async (req) => {
     if (error) return responder({ ok: false, error: `No se pudo crear la fila del proveedor: ${error.message}` });
     fila = nueva;
   }
-  const ajustes: any = fila.settings ?? {};
+  let ajustes: any = fila.settings ?? {};
   let llamadas = 0;
-  let ultimaLlamada = 0;
+  // La última llamada a CJ también se recuerda entre una pulsación y la siguiente (CJ limita por segundo y por IP)
+  let ultimaLlamada = Number(ajustes.ultimaLlamada) || 0;
+  const guardarAjustes = async (extra: Record<string, unknown>) => {
+    ajustes = { ...ajustes, ...extra };
+    await servicio.from("PlatformCredential").update({ settings: ajustes, updatedAt: ahoraIso() }).eq("provider", PROVEEDOR);
+  };
 
   const marcarError = async (mensaje: string) => {
     await servicio.from("PlatformCredential").update({ status: "ERROR", lastError: mensaje.slice(0, 500), lastTestAt: ahoraIso(), updatedAt: ahoraIso() }).eq("provider", PROVEEDOR);
+    await guardarAjustes({ ultimaLlamada });
   };
 
   /** ÚNICA puerta hacia CJ: respeta 1 petición por segundo. */
@@ -204,14 +212,11 @@ Deno.serve(async (req) => {
       return responder({ ok: false, error: mensaje, codigoCj: json?.code ?? null, ...diagnostico });
     }
     token = String(json.data.accessToken);
-    await servicio.from("PlatformCredential").update({
-      settings: { ...ajustes, accessToken: token, accessTokenExpira: json.data.accessTokenExpiryDate ?? null, refreshToken: json.data.refreshToken ?? null },
-      updatedAt: ahoraIso(),
-    }).eq("provider", PROVEEDOR);
+    await guardarAjustes({ accessToken: token, accessTokenExpira: json.data.accessTokenExpiryDate ?? null, refreshToken: json.data.refreshToken ?? null });
   }
 
   /** Llamada a un endpoint de CJ con el token. Devuelve { ok, datos, mensaje }. */
-  async function cj(ruta: string, opc: { metodo?: "GET" | "POST"; consulta?: Record<string, string | number | undefined>; cuerpo?: unknown } = {}) {
+  async function cj(ruta: string, opc: { metodo?: "GET" | "POST"; consulta?: Record<string, string | number | undefined>; cuerpo?: unknown } = {}, intento = 1): Promise<{ ok: boolean; datos: any; mensaje: string; codigo: any }> {
     const url = new URL(`${BASE}${ruta}`);
     for (const [k, v] of Object.entries(opc.consulta ?? {})) if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
     const { res, json } = await http(url.toString(), {
@@ -219,8 +224,16 @@ Deno.serve(async (req) => {
       headers: { "CJ-Access-Token": token, "Content-Type": "application/json" },
       body: opc.cuerpo ? JSON.stringify(opc.cuerpo) : undefined,
     });
-    if (json?.result === false || !res.ok) return { ok: false as const, datos: null, mensaje: String(json?.message ?? `HTTP ${res.status}`), codigo: json?.code ?? null };
-    return { ok: true as const, datos: json?.data ?? json, mensaje: "", codigo: null };
+    if (json?.result === false || !res.ok) {
+      const mensaje = String(json?.message ?? `HTTP ${res.status}`);
+      // CJ limita las peticiones por segundo y por IP: se espera de verdad y se reintenta (máximo 3 veces)
+      if ((res.status === 429 || /too many requests/i.test(mensaje)) && intento < 3) {
+        await pausa(2_500 * intento);
+        return await cj(ruta, opc, intento + 1);
+      }
+      return { ok: false, datos: null, mensaje, codigo: json?.code ?? null };
+    }
+    return { ok: true, datos: json?.data ?? json, mensaje: "", codigo: null };
   }
 
   const nombresDeCategorias = async () => {
@@ -232,6 +245,7 @@ Deno.serve(async (req) => {
 
   const cerrarOk = async (extra: Record<string, unknown>) => {
     await servicio.from("PlatformCredential").update({ status: "CONNECTED", lastError: null, lastTestAt: ahoraIso(), usedThisMonth: (fila.usedThisMonth ?? 0) + llamadas, updatedAt: ahoraIso() }).eq("provider", PROVEEDOR);
+    await guardarAjustes({ ultimaLlamada });
     return responder({ ok: true, tokenReutilizado, llamadasACj: llamadas, ...extra, ...diagnostico });
   };
 
@@ -392,6 +406,13 @@ Deno.serve(async (req) => {
         fabrica: numeroONulo(w.factoryInventoryNum ?? w.factoryInventory),
       }));
 
+      // Existencias de cada variante por país de almacén
+      const invVariantes: any[] = ri.ok && Array.isArray((ri.datos as any)?.variantInventories) ? (ri.datos as any).variantInventories : [];
+      const stockDeVariante = (vid: string | null) =>
+        vid
+          ? (invVariantes.find((x: any) => String(x.vid) === vid)?.inventory ?? []).map((w: any) => ({ pais: w.countryCode ?? null, total: numeroONulo(w.totalInventory), cj: numeroONulo(w.cjInventory), fabrica: numeroONulo(w.factoryInventory) }))
+          : [];
+
       // Países con stock (almacenes de origen), de mayor a menor existencias
       const porPaisStock = new Map<string, number>();
       for (const a of almacenes) if (a.pais) porPaisStock.set(String(a.pais).toUpperCase(), (porPaisStock.get(String(a.pais).toUpperCase()) ?? 0) + (a.total ?? 0));
@@ -402,7 +423,8 @@ Deno.serve(async (req) => {
         const vid = v.vid ? String(v.vid) : null;
         return {
           vid,
-          nombre: String(v.variantNameEn ?? v.variantName ?? v.variantKey ?? "Variante"),
+          nombre: String(v.variantKey ?? v.variantNameEn ?? v.variantName ?? "Variante"),
+          nombreCompleto: String(v.variantNameEn ?? v.variantName ?? ""),
           sku: v.variantSku ?? null,
           clave: v.variantKey ?? null,
           precio: numeroONulo(v.variantSellPrice),
@@ -414,7 +436,7 @@ Deno.serve(async (req) => {
           imagen: v.variantImage ?? null,
           propiedad: v.variantProperty ?? null,
           estandar: v.variantStandard ?? null,
-          stock: vid ? almacenes.filter((a) => a.vid && String(a.vid) === vid) : [],
+          stock: stockDeVariante(vid),
         };
       });
       const precios = variantes.map((v) => v.precio).filter((p): p is number => p !== null);
@@ -424,15 +446,19 @@ Deno.serve(async (req) => {
         pid,
         sku: prod.productSku ?? prod.sku ?? null,
         titulo: String(prod.productNameEn ?? prod.nameEn ?? item.title),
-        categoria: { id: prod.categoryId ?? null, nombre: prod.categoryName ?? null },
+        categoria: { id: prod.categoryId ?? null, ruta: String(prod.categoryName ?? "").split("/").map((x) => x.trim()).filter(Boolean) },
         imagenes,
         descripcionHtml: String(prod.description ?? item.description ?? ""),
-        peso: { gramos: numeroONulo(prod.productWeight), embalaje: prod.packingWeight ?? null },
-        material: prod.materialNameEn ?? prod.materialName ?? null,
-        embalaje: prod.packingNameEn ?? prod.packingName ?? null,
-        propiedades: prod.productProEn ?? prod.productPro ?? prod.productKeyEn ?? null,
+        peso: { gramos: numeroONulo(prod.productWeight), conEmbalaje: prod.packingWeight ?? null },
+        materiales: listaDeTextos(prod.materialNameEnSet ?? prod.materialNameEn ?? prod.materialName),
+        embalaje: listaDeTextos(prod.packingNameEnSet ?? prod.packingNameEn ?? prod.packingName),
+        caracteristicasEnvio: listaDeTextos(prod.productProEnSet ?? prod.productProEn ?? prod.productPro), // p. ej. HAVE_LIQUID, HAVE_BATTERY
+        opcionesProducto: listaDeTextos(prod.productKeyEn ?? prod.productKey), // p. ej. Color, Talla
+        precioSugeridoCj: prod.suggestSellPrice ?? null,
+        proveedorCj: prod.supplierName ?? null,
+        videos: listaDeTextos(prod.productVideo),
         unidad: prod.productUnit ?? null,
-        tipo: prod.productType ?? null,
+        tipo: prod.productType ?? null, // p. ej. SUPPLIER_SHIPPED_PRODUCT
         precio: { moneda: "USD", min: precios.length ? Math.min(...precios) : numeroONulo(prod.sellPrice), max: precios.length ? Math.max(...precios) : numeroONulo(prod.sellPrice) },
         variantes,
         almacenes: almacenes.filter((a) => !a.vid),
@@ -483,7 +509,8 @@ Deno.serve(async (req) => {
     // Almacenes de origen: los pedidos explícitamente, o los que tienen stock, o China por defecto
     const pedidos: string[] = Array.isArray(cuerpo?.origenes) ? cuerpo.origenes.map((p: string) => String(p).toUpperCase().slice(0, 2)) : [];
     const conStock: string[] = (ficha.origenes ?? []).filter((o: any) => (o.total ?? 0) > 0).map((o: any) => String(o.pais));
-    const origenes = (pedidos.length ? pedidos : conStock.length ? conStock : ["CN"]).slice(0, 4);
+    const origenes = (pedidos.length ? pedidos : conStock.length ? conStock : ["CN"]).slice(0, MAX_ORIGENES);
+    const forzar = cuerpo?.forzar === true;
 
     const envio: any = { origen: ficha.envio?.origen ?? null, porOrigen: { ...(ficha.envio?.porOrigen ?? {}) } };
     const crudoEnvio: Record<string, any> = { ...(((det.raw as any)?.envio) ?? {}) };
@@ -493,7 +520,9 @@ Deno.serve(async (req) => {
       envio.porOrigen[origen] = { ...(envio.porOrigen[origen] ?? {}) };
       crudoEnvio[origen] = { ...(crudoEnvio[origen] ?? {}) };
       for (const destino of destinos) {
-        if (hechas >= MAX_COTIZACIONES) { avisos.push(`Se alcanzó el máximo de ${MAX_COTIZACIONES} cotizaciones por vez: vuelve a pulsar para seguir con los destinos que faltan`); break; }
+        const previa = envio.porOrigen[origen][destino];
+        if (!forzar && previa && Date.now() - new Date(previa.actualizado).getTime() < FRESCURA_ENVIO_MS && !(previa.error && /too many/i.test(previa.error))) continue; // ya cotizado hace poco
+        if (hechas >= MAX_COTIZACIONES) { if (!avisos.length) avisos.push(`Se alcanzó el máximo de ${MAX_COTIZACIONES} cotizaciones por vez: vuelve a pulsar para seguir con lo que falta`); break; }
         const rf = await cj("/logistic/freightCalculate", { metodo: "POST", cuerpo: { startCountryCode: origen, endCountryCode: destino, products: [{ quantity: 1, vid }] } });
         hechas += 1;
         if (!rf.ok) {
@@ -512,8 +541,26 @@ Deno.serve(async (req) => {
     ficha.envio = envio;
     const { error: eEnv } = await servicio.from("CatalogItemDetail").update({ ficha, raw: { ...((det.raw as any) ?? {}), envio: crudoEnvio }, fetchedAt: ahoraIso() }).eq("itemId", id);
     if (eEnv) return responder({ ok: false, error: `No se pudo guardar el envío: ${eEnv.message}`, ...diagnostico });
-    const resumen = Object.fromEntries(origenes.map((o) => [o, Object.fromEntries(destinos.map((d) => { const x = envio.porOrigen[o]?.[d]; return [d, x ? (x.error ? "sin servicio" : `${x.opciones.length} opciones`) : "pendiente"]; }))]));
-    return await cerrarOk({ mensaje: `${hechas} cotizaciones hechas (${origenes.join(", ")} → ${destinos.length} destinos)`, resumen, avisos });
+    const resumen = Object.fromEntries(
+      origenes.map((o) => {
+        const con: string[] = [];
+        const sin: string[] = [];
+        const faltan: string[] = [];
+        for (const d of destinos) {
+          const x = envio.porOrigen[o]?.[d];
+          if (!x) faltan.push(d);
+          else if (x.error || !x.opciones.length) sin.push(d);
+          else {
+            const precios = x.opciones.map((p: any) => p.precio).filter((p: any) => p !== null);
+            const dMin = Math.min(...x.opciones.map((p: any) => p.diasMin ?? 999));
+            const dMax = Math.max(...x.opciones.map((p: any) => p.diasMax ?? 0));
+            con.push(`${d} (${x.opciones.length} ${x.opciones.length === 1 ? "método" : "métodos"}, desde ${precios.length ? Math.min(...precios).toFixed(2) : "?"} USD, ${dMin === 999 ? "?" : dMin}-${dMax || "?"} días)`);
+          }
+        }
+        return [o, { conServicio: con, sinServicio: sin, pendientes: faltan }];
+      }),
+    );
+    return await cerrarOk({ mensaje: `${hechas} cotizaciones nuevas (almacenes ${origenes.join(", ")} → ${destinos.length} destinos)`, resumen, avisos });
   }
 
   return responder({ ok: false, error: `Acción desconocida: ${accion}`, ...diagnostico });
