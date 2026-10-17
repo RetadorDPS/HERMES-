@@ -240,6 +240,19 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     }
   };
 
+  /** Descarga de CJ por almacén: solo productos con existencias en ese país, anotando el almacén en cada uno. */
+  const descargarAlmacen = async (pais: string) => {
+    setTrabajando('descargar');
+    setResultado(null);
+    try {
+      setResultado(await invocar(proveedor, { accion: 'descargar', paginas: 1, tamano: 50, orden: 1, pais }));
+    } catch (e) {
+      setResultado({ ok: false, error: (e as Error).message });
+    } finally {
+      setTrabajando(null);
+    }
+  };
+
   const boton = (accion: Accion, texto: string, variante: 'outline' | 'gradient' = 'outline') => (
     <Button variant={variante} size="sm" disabled={trabajando !== null} onClick={() => ejecutar(accion)}>
       {trabajando === accion && <Loader2 className="size-4 animate-spin" />}
@@ -265,6 +278,20 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
           {!esCj && boton('autorizar', '5. Autorizar la cuenta de AliExpress')}
           {!esCj && boton('sondear', 'Sondear el feed (máx. 5 llamadas)')}
         </div>
+        {esCj && (
+          <div className="space-y-1.5">
+            <p className="text-[12px] text-muted-foreground">
+              Descargar por almacén: trae 50 productos populares con existencias en ese país y anota el almacén en cada uno (1 o 2 llamadas a CJ por pulsación). Así funciona el filtro «Almacén de salida».
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {['CN', 'US', 'ES', 'DE', 'FR', 'GB'].map((pais) => (
+                <Button key={pais} variant="outline" size="sm" disabled={trabajando !== null} onClick={() => descargarAlmacen(pais)}>
+                  {nombrePais(pais)}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
         <p className="text-[12px] text-muted-foreground">
           {esCj
             ? 'Orden recomendado: categorías, productos y fichas. El envío se cotiza desde cada almacén con stock hasta 12 países principales (España, EE. UU., México, Reino Unido, Alemania, Francia, Italia, Canadá, Australia, Brasil, Colombia y Chile).'

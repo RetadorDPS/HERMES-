@@ -80,6 +80,8 @@ export interface CatalogRow {
   /** Coste de envío convertido a euros */
   shippingCostEur?: number;
   shipFrom: string | null;
+  /** Almacenes (códigos de país) donde se SABE que hay existencias; vacío si aún no se conoce */
+  warehouses?: string[];
   freeShipping: boolean;
   isTrending: boolean;
   source: string;
@@ -431,6 +433,8 @@ export interface CatalogResult {
   providers: { provider: SupplierType; count: number; hasReal: boolean }[];
   stats: { total: number; real: number; sample: number; lastSyncedAt: Date | null; freeShipping: number; trending: number };
   priceRange: { min: number; max: number };
+  /** Almacenes de salida con productos y cuántos (solo los que de verdad tienen datos) */
+  warehouses?: { code: string; count: number }[];
 }
 
 export async function queryCatalog(q: CatalogQuery = {}): Promise<CatalogResult> {

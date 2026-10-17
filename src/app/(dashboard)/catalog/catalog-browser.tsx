@@ -48,6 +48,8 @@ export interface CatalogBrowserProps {
     stats: { total: number; real: number; sample: number; lastSyncedAt: string | Date | null; freeShipping: number; trending: number };
     priceRange: { min: number; max: number };
     providers: { provider: string; count: number; hasReal: boolean }[];
+    /** Almacenes de salida con productos conocidos (solo los que tienen datos) */
+    warehouses?: { code: string; count: number }[];
   };
   credentials: { provider: string; name: string; configured: boolean; source: string | null; catalogReady: boolean; status: string | null }[];
   isAdmin: boolean;
@@ -92,7 +94,8 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   const [provider, setProvider] = useState<string[]>([]);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
-  const [shipFrom, setShipFrom] = useState('');
+  // Almacenes de salida elegidos (vacío = cualquiera). Se pueden marcar varios.
+  const [shipFrom, setShipFrom] = useState<string[]>([]);
   const [freeShipping, setFreeShipping] = useState(false);
   const [trending, setTrending] = useState(false);
   const [minRating, setMinRating] = useState('');
@@ -111,7 +114,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       if (provider.length) p.set('provider', provider.join(','));
       if (minPrice) p.set('min', minPrice);
       if (maxPrice) p.set('max', maxPrice);
-      if (shipFrom) p.set('shipFrom', shipFrom);
+      if (shipFrom.length) p.set('shipFrom', shipFrom.join(','));
       if (freeShipping) p.set('freeShipping', '1');
       if (trending) p.set('trending', '1');
       if (minRating) p.set('minRating', minRating);
@@ -178,7 +181,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     setProvider([]);
     setMinPrice('');
     setMaxPrice('');
-    setShipFrom('');
+    setShipFrom([]);
     setFreeShipping(false);
     setTrending(false);
     setMinRating('');
@@ -191,7 +194,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     category && { label: category, clear: () => setCategory('') },
     provider.length > 0 && { label: provider.map((x) => PROVIDER_LABEL[x] ?? x).join(' + '), clear: () => setProvider([]) },
     (minPrice || maxPrice) && { label: `${minPrice || 0}–${maxPrice || '∞'} €`, clear: () => { setMinPrice(''); setMaxPrice(''); } },
-    shipFrom && { label: `almacén: ${nombreAlmacen(shipFrom)}`, clear: () => setShipFrom('') },
+    shipFrom.length > 0 && { label: `almacén: ${shipFrom.map(nombreAlmacen).join(' + ')}`, clear: () => setShipFrom([]) },
     freeShipping && { label: 'envío gratis', clear: () => setFreeShipping(false) },
     trending && { label: 'tendencias', clear: () => setTrending(false) },
     minRating && { label: `≥ ${minRating}★`, clear: () => setMinRating('') },
@@ -204,10 +207,8 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     return claves.map((k) => ({ provider: k, count: cuenta.has(k) ? (cuenta.get(k) as number) : null }));
   }, [initial.providers, credentials]);
 
-  const shipFromOptions = useMemo(() => {
-    const base = ['ES', 'EU', 'CN', 'US'];
-    return [...new Set([...base, ...items.map((i) => i.shipFrom).filter(Boolean) as string[]])];
-  }, [items]);
+  // Almacenes del filtro: solo los que tienen productos de verdad (nada de listas inventadas)
+  const almacenes = initial.warehouses ?? [];
 
   const sampleOnly = stats.real === 0;
   const configured = credentials.filter((c) => c.configured);
@@ -399,14 +400,36 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
           </div>
           <div className="space-y-1.5">
             <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Almacén de salida</label>
-            <Select value={shipFrom} onChange={(e) => { setShipFrom(e.target.value); setPage(1); }}>
-              <option value="">Cualquiera</option>
-              {shipFromOptions.map((c) => (
-                <option key={c} value={c}>
-                  {nombreAlmacen(c)}
-                </option>
-              ))}
-            </Select>
+            {almacenes.length === 0 ? (
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                Todavía ningún producto tiene almacén conocido. Se rellena al completar fichas o al descargar «por almacén» en Administración.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {almacenes.map((a) => {
+                  const activo = shipFrom.includes(a.code);
+                  return (
+                    <button
+                      key={a.code}
+                      type="button"
+                      aria-pressed={activo}
+                      onClick={() => {
+                        setShipFrom((antes) => (antes.includes(a.code) ? antes.filter((x) => x !== a.code) : [...antes, a.code]));
+                        setPage(1);
+                      }}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                        activo ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-100' : 'border-white/10 bg-white/[0.03] text-muted-foreground hover:bg-white/[0.07]',
+                      )}
+                    >
+                      <span className={cn('grid size-3.5 place-items-center rounded-[4px] border text-[9px]', activo ? 'border-indigo-300 bg-indigo-400 text-black' : 'border-white/30')}>{activo ? '✓' : ''}</span>
+                      {nombreAlmacen(a.code)}
+                      <span className="text-[10.5px] opacity-70">({formatNumber(a.count)})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div className="space-y-1.5">
             <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Precio de coste (€)</label>

@@ -67,7 +67,7 @@ function coincide(f: CatalogRow, q: CatalogQuery, etiquetas: string[]): boolean 
   if (q.category && q.category !== 'ALL' && f.categoryName !== q.category) return false;
   if (q.minPrice !== undefined && f.costPrice < q.minPrice) return false;
   if (q.maxPrice !== undefined && f.costPrice > q.maxPrice) return false;
-  if (q.shipFrom && f.shipFrom !== q.shipFrom) return false;
+  if (q.shipFrom && !String(q.shipFrom).split(',').includes(f.shipFrom ?? '')) return false;
   if (q.freeShipping && !f.freeShipping) return false;
   if (q.trending && !f.isTrending) return false;
   if (q.minRating !== undefined && (f.rating ?? 0) < q.minRating) return false;
@@ -162,6 +162,7 @@ export function consultarCatalogoMemoria(q: CatalogQuery = {}): CatalogResult {
       trending: filtradas.filter((f) => f.isTrending).length,
     },
     priceRange: { min: precios.length ? Math.min(...precios) : 0, max: precios.length ? Math.max(...precios) : 0 },
+    warehouses: [...todas.reduce((m, f) => (f.shipFrom ? m.set(f.shipFrom, (m.get(f.shipFrom) ?? 0) + 1) : m), new Map<string, number>()).entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),
   };
 }
 

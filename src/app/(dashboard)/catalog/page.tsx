@@ -53,6 +53,7 @@ export default async function CatalogPage() {
               facets: catalog.facets,
               stats: catalog.stats,
               priceRange: catalog.priceRange,
+              warehouses: catalog.warehouses ?? [],
               providers,
             }}
             credentials={credentials.map((c) => ({

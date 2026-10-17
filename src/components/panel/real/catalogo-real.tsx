@@ -29,6 +29,7 @@ export function CatalogoReal() {
             facets: c.facets,
             stats: c.stats,
             priceRange: c.priceRange,
+            warehouses: c.warehouses ?? [],
             providers: ['CJ_DROPSHIPPING', 'ALIEXPRESS'].map((provider) => ({
               provider,
               count: c.providers.find((p) => p.provider === provider)?.count ?? 0,

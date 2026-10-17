@@ -19,7 +19,7 @@ const COL_USUARIO = 'id,email,name,image,role,plan,timezone,lastLoginAt,emailVer
 const COL_TIENDA = 'id,userId,platform,name,domain,apiVersion,scopes,status,lastPingAt,lastError,settings,createdAt';
 const COL_PROVEEDOR = 'id,type,name,baseUrl,logoUrl,isEnabled,rateLimitRpm';
 const COL_CATALOGO =
-  'id,provider,externalId,title,description,categoryId,categoryName,imageUrl,images,currency,costPrice,suggestedPrice,stock,rating,ordersCount,shippingCost,shippingMinDays,shippingMaxDays,shipFrom,freeShipping,isTrending,tags,sourceUrl,source,lastSyncedAt,views,importedCount';
+  'id,provider,externalId,title,description,categoryId,categoryName,imageUrl,images,currency,costPrice,suggestedPrice,stock,rating,ordersCount,shippingCost,shippingMinDays,shippingMaxDays,shipFrom,freeShipping,isTrending,tags,sourceUrl,source,lastSyncedAt,views,importedCount,warehouses';
 
 const num = (v: unknown, defecto = 0) => (v === null || v === undefined || v === '' ? defecto : Number(v));
 const fecha = (v: unknown) => (v ? new Date(v as string) : null);
@@ -399,6 +399,7 @@ const mapCatalogo = (i: any): CatalogRow => ({
   shippingMinDays: i.shippingMinDays,
   shippingMaxDays: i.shippingMaxDays,
   shipFrom: i.shipFrom,
+  warehouses: i.warehouses ?? [],
   freeShipping: i.freeShipping,
   isTrending: i.isTrending,
   source: i.source,
@@ -431,7 +432,8 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   if (q.category && q.category !== 'ALL') consulta = consulta.eq('categoryName', q.category);
   if (q.minPrice !== undefined) consulta = consulta.gte('costPrice', q.minPrice);
   if (q.maxPrice !== undefined) consulta = consulta.lte('costPrice', q.maxPrice);
-  if (q.shipFrom) consulta = consulta.eq('shipFrom', q.shipFrom);
+  // Almacenes de salida: puede venir una lista separada por comas; sale cualquier producto con existencias en alguno de ellos
+  if (q.shipFrom) consulta = consulta.overlaps('warehouses', String(q.shipFrom).split(',').filter(Boolean));
   if (q.freeShipping) consulta = consulta.eq('freeShipping', true);
   if (q.trending) consulta = consulta.eq('isTrending', true);
   if (q.minRating !== undefined) consulta = consulta.gte('rating', q.minRating);
@@ -462,7 +464,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
 
   const [pag, global] = await Promise.all([
     consulta,
-    c.from('CatalogItem').select('provider,source,categoryName,freeShipping,isTrending,costPrice,lastSyncedAt').limit(5000),
+    c.from('CatalogItem').select('provider,source,categoryName,freeShipping,isTrending,costPrice,lastSyncedAt,warehouses').limit(5000),
   ]);
   if (pag.error) throw new Error(pag.error.message);
   const filas: CatalogRow[] = (pag.data as any[]).map(mapCatalogo);
@@ -491,6 +493,8 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
     if (f.source === 'sample') muestra += 1;
     porProveedor.set(f.provider, e);
   }
+  const almacenes = new Map<string, number>();
+  for (const f of todos) for (const w of (f.warehouses ?? []) as string[]) almacenes.set(w, (almacenes.get(w) ?? 0) + 1);
   const precios = todos.map((f) => num(f.costPrice));
   const regla = await reglaPredeterminada();
 
@@ -510,6 +514,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
       trending: todos.filter((f) => f.isTrending).length,
     },
     priceRange: { min: precios.length ? Math.min(...precios) : 0, max: precios.length ? Math.max(...precios) : 0 },
+    warehouses: [...almacenes.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),
   };
 }
 

@@ -333,6 +333,8 @@ Deno.serve(async (req) => {
           return responder({ ok: false, error: `No se pudo guardar el catálogo: ${error.message}`, ...diagnostico });
         }
         guardados += filas.length;
+        // Descargar por almacén: CJ solo devuelve productos con existencias en ese país, así que se anota el almacén en cada uno
+        if (pais) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: filas.map((f: any) => f.externalId), p_almacen: pais });
       }
       if (lista.length < tamano) break; // última página
     }
@@ -478,6 +480,9 @@ Deno.serve(async (req) => {
         informe.push({ id: item.id, ok: false, error: `No se pudo guardar la ficha: ${eDet.message}` });
         continue;
       }
+
+      // Los almacenes con existencias de la ficha pasan también al catálogo (es lo que usa el filtro «Almacén de salida»)
+      for (const o of origenes) if ((o.total ?? 0) > 0 && o.pais) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: [String(item.externalId)], p_almacen: String(o.pais).toUpperCase() });
 
       // Lo más importante sube también a la tarjeta del catálogo
       const cambios: Record<string, unknown> = { updatedAt: ahoraIso() };
