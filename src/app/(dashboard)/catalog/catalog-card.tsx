@@ -132,8 +132,8 @@ export function CatalogCard({
           </div>
 
           <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-            <span className={item.stock > 0 ? '' : 'text-amber-400'}>
-              {item.stock > 0 ? `${formatNumber(item.stock)} en stock` : 'Sin stock'}
+            <span className={item.stock === null || item.stock === undefined || item.stock > 0 ? '' : 'text-amber-400'}>
+              {item.stock === null || item.stock === undefined ? 'Stock por consultar' : item.stock > 0 ? `${formatNumber(item.stock)} en stock` : 'Sin stock'}
               {item.importedCount ? ` · importado ${item.importedCount}×` : ''}
             </span>
             {item.source === 'sample' && <UiBadge variant="outline" className="hidden px-1.5 py-0 text-[9px] sm:inline-flex">datos de ejemplo</UiBadge>}

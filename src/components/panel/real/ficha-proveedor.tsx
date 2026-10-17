@@ -126,7 +126,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     if (!itemId) return;
     setTrabajando(accion);
     setAviso(null);
-    const { data, error: e } = await supabase().functions.invoke('cj-catalogo', { body: { accion, ids: [itemId], ...extra } });
+    const { data, error: e } = await supabase().functions.invoke(item?.provider === 'ALIEXPRESS' ? 'ali-catalogo' : 'cj-catalogo', { body: { accion, ids: [itemId], ...extra } });
     setTrabajando(null);
     if (e || !data?.ok) {
       let texto = e?.message ?? data?.error ?? 'No se pudo completar';
@@ -177,6 +177,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     return { filas: filas.map((f) => ({ ...f, barata: f === masBarata, rapida: f === masRapida })), sinServicio, porCotizar };
   }, [destinoActivo, origenes, porOrigen]);
 
+  const nombreProveedor = item?.provider === 'ALIEXPRESS' ? 'AliExpress' : 'CJ';
   const variantes: any[] = ficha?.variantes ?? [];
   const variantesVisibles = verVariantes ? variantes : variantes.slice(0, 6);
   const resenas = ficha?.resenas;
@@ -252,7 +253,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                           : usd(ficha.precio.min)
                         : usd(Number(item.costPrice))}
                     </p>
-                    {ficha?.precioSugeridoCj && <p className="text-[11px] text-muted-foreground">Precio de venta sugerido por CJ: {ficha.precioSugeridoCj} US$</p>}
+                    {ficha?.precioSugeridoCj && <p className="text-[11px] text-muted-foreground">Precio de venta sugerido por el proveedor: {ficha.precioSugeridoCj} US$</p>}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
@@ -265,7 +266,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                       <span>Sin reseñas todavía</span>
                     )}
                     {item.ordersCount ? <span>{formatNumber(item.ordersCount)} pedidos</span> : null}
-                    <span>{formatNumber(item.stock)} uds en total</span>
+                    <span>{item.stock === null || item.stock === undefined ? 'Stock por consultar en la ficha' : `${formatNumber(item.stock)} uds en total`}</span>
                   </div>
 
                   {origenes.length > 0 && (
@@ -347,7 +348,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                           ))}
                         </ul>
                       ) : (
-                        <Alert variant="warning" title={`CJ no envía este artículo a ${pais(destinoActivo)}`}>
+                        <Alert variant="warning" title={`${nombreProveedor} no envía este artículo a ${pais(destinoActivo)}`}>
                           Ningún almacén con stock tiene servicio de envío a ese país. No lo ofrezcas allí.
                         </Alert>
                       )}
@@ -424,7 +425,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                               <p className="mt-0.5 flex flex-wrap gap-1">
                                 {filasStock.map((s, i) => (
                                   <span key={i} title={`En almacén de CJ: ${formatNumber(s.cj ?? 0)} · en fábrica: ${formatNumber(s.fabrica ?? 0)}`} className="rounded bg-white/[0.05] px-1 text-[10.5px] text-muted-foreground">
-                                    {pais(s.pais)} {formatNumber(s.total ?? 0)}
+                                    {s.pais ? pais(s.pais) : 'Disponible'} {formatNumber(s.total ?? 0)}
                                     {(s.cj ?? 0) === 0 && (s.fabrica ?? 0) > 0 ? ' (fábrica)' : ''}
                                   </span>
                                 ))}
@@ -440,7 +441,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                       {verVariantes ? 'Ver menos' : `Ver las ${variantes.length} variantes`}
                     </button>
                   )}
-                  <p className="text-[11px] text-muted-foreground">«(fábrica)» significa que el stock está en la fábrica y no en un almacén de CJ: tarda más en salir.</p>
+                  {item?.provider !== 'ALIEXPRESS' && <p className="text-[11px] text-muted-foreground">«(fábrica)» significa que el stock está en la fábrica y no en un almacén de CJ: tarda más en salir.</p>}
                 </section>
               )}
 
@@ -482,6 +483,19 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                         <dd>{ficha.opcionesProducto.join(', ')}</dd>
                       </>
                     )}
+                    {ficha.tienda?.nombre && (
+                      <>
+                        <dt className="text-muted-foreground">Tienda</dt>
+                        <dd>{ficha.tienda.nombre}</dd>
+                      </>
+                    )}
+                    {Array.isArray(ficha.propiedades) &&
+                      ficha.propiedades.slice(0, 12).map((p: any, i: number) => (
+                        <div key={i} className="contents">
+                          <dt className="text-muted-foreground">{p.nombre}</dt>
+                          <dd>{String(p.valor ?? '')}</dd>
+                        </div>
+                      ))}
                     {ficha.tipo && (
                       <>
                         <dt className="text-muted-foreground">Tipo</dt>
@@ -541,7 +555,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
 
               {(ficha?.enlace || item.sourceUrl) && (
                 <a href={ficha?.enlace ?? item.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[12px] text-indigo-300 hover:underline">
-                  <ExternalLink className="size-3.5" /> Ver el producto en CJ
+                  <ExternalLink className="size-3.5" /> Ver el producto en {nombreProveedor}
                 </a>
               )}
               {ficha?.avisos?.length > 0 && (
