@@ -234,6 +234,29 @@ async function responder(metodo: string, ruta: string, params: URLSearchParams, 
   const get = metodo === 'GET';
   if (leerModo() === 'real') {
     if (get && ruta === '/api/health') return json(saludReal());
+    if (get && ruta === '/api/catalog') {
+      try {
+        const { consultarCatalogoSupabase } = await import('./real/datos');
+        const num = (k: string) => (params.get(k) && Number.isFinite(Number(params.get(k))) ? Number(params.get(k)) : undefined);
+        const resultado = await consultarCatalogoSupabase({
+          search: params.get('q') ?? undefined,
+          provider: (params.get('provider') as any) ?? 'ALL',
+          category: params.get('category') ?? undefined,
+          minPrice: num('min'),
+          maxPrice: num('max'),
+          shipFrom: params.get('shipFrom') ?? undefined,
+          freeShipping: params.get('freeShipping') === '1',
+          trending: params.get('trending') === '1',
+          minRating: num('minRating'),
+          sort: (params.get('sort') as any) ?? 'relevance',
+          page: num('page') ?? 1,
+          pageSize: num('pageSize') ?? 24,
+        });
+        return json({ ok: true, ...resultado });
+      } catch (e) {
+        return json({ ok: false, error: (e as Error).message }, 500);
+      }
+    }
     if (!get)
       return json({ ok: false, error: 'Esta acción todavía no está conectada a la base de datos real. Se irá activando por bloques.' }, 503);
     return json({ ok: false, error: 'Dato aún no conectado a la base de datos real.' }, 503);

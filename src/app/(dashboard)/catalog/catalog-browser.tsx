@@ -34,6 +34,8 @@ import type { CatalogFacet, CatalogRow } from '@/lib/catalog';
 import { CatalogCard } from './catalog-card';
 import { imageSrc } from './image';
 import { CatalogImportDrawer } from './import-dialog';
+import { useSesion } from '@/components/auth/sesion';
+import { FichaProveedor } from '@/components/panel/real/ficha-proveedor';
 
 export interface CatalogBrowserProps {
   initial: {
@@ -76,6 +78,9 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   const [stats, setStats] = useState(initial.stats);
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Con sesión real se muestra la ficha completa del proveedor (datos reales)
+  const { activo, modo } = useSesion();
+  const real = activo && modo === 'real';
   const [toast, setToast] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
@@ -486,14 +491,18 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
         </Link>
       </div>
 
-      <CatalogImportDrawer
-        itemId={openId}
-        onClose={() => setOpenId(null)}
-        onImported={(info) => {
-          setToast(`«${info.title}» importado a ${info.store}. El worker lo vigilará automáticamente.`);
-          void fetchItems(buildQuery());
-        }}
-      />
+      {real ? (
+        <FichaProveedor itemId={openId} onClose={() => setOpenId(null)} />
+      ) : (
+        <CatalogImportDrawer
+          itemId={openId}
+          onClose={() => setOpenId(null)}
+          onImported={(info) => {
+            setToast(`«${info.title}» importado a ${info.store}. El worker lo vigilará automáticamente.`);
+            void fetchItems(buildQuery());
+          }}
+        />
+      )}
 
       {toast && (
         <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2">
