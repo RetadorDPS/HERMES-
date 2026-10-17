@@ -6,6 +6,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { supabase } from '@/lib/supabase/cliente';
+import { nombrePais } from '@/lib/paises';
 
 interface InformeFicha {
   id: string;
@@ -137,7 +138,7 @@ export function ProveedoresAdmin() {
           {boton('envio', '4. Cotizar envío mundial (1 producto)', 'gradient')}
         </div>
         <p className="text-[12px] text-muted-foreground">
-          Orden recomendado: categorías, productos y fichas. La ficha trae variantes, stock por almacén y reseñas (unas 5 llamadas a CJ por producto). El envío mundial se cotiza aparte, desde cada almacén con stock hasta 12 países (ES, US, MX, GB, DE, FR, IT, CA, AU, BR, CO, CL): hasta 30 llamadas por producto, con pausa.
+          Orden recomendado: categorías, productos y fichas. La ficha trae variantes, stock por almacén y reseñas (unas 5 llamadas a CJ por producto). El envío mundial se cotiza aparte, desde cada almacén con stock hasta 12 países (España, EE. UU., México, Reino Unido, Alemania, Francia, Italia, Canadá, Australia, Brasil, Colombia y Chile): hasta 30 llamadas por producto, con pausa.
         </p>
 
         {resultado && (
@@ -165,10 +166,10 @@ export function ProveedoresAdmin() {
               <ul className="mt-2 space-y-1 text-[12px]">
                 {Object.entries(resultado.resumen).map(([origen, r]) => (
                   <li key={origen}>
-                    <p className="font-medium">Almacén de {origen}</p>
-                    {r.conServicio.length > 0 && <p className="opacity-90">Envía a: {r.conServicio.join(' · ')}</p>}
-                    {r.sinServicio.length > 0 && <p className="opacity-70">Sin servicio a: {r.sinServicio.join(', ')}</p>}
-                    {r.pendientes.length > 0 && <p className="opacity-70">Por cotizar: {r.pendientes.join(', ')}</p>}
+                    <p className="font-medium">Almacén de {nombrePais(origen)}</p>
+                    {r.conServicio.length > 0 && <p className="opacity-90">Envía a: {r.conServicio.map((t) => `${nombrePais(t.slice(0, 2))}${t.slice(2)}`).join(' · ')}</p>}
+                    {r.sinServicio.length > 0 && <p className="opacity-70">Sin servicio a: {r.sinServicio.map(nombrePais).join(', ')}</p>}
+                    {r.pendientes.length > 0 && <p className="opacity-70">Por cotizar: {r.pendientes.map(nombrePais).join(', ')}</p>}
                   </li>
                 ))}
               </ul>
@@ -180,8 +181,8 @@ export function ProveedoresAdmin() {
                     <p className="truncate font-medium">{f.titulo ?? f.id}</p>
                     {f.ok ? (
                       <p className="opacity-80">
-                        {f.imagenes} fotos · {f.variantes} variantes · {f.almacenes} registros de almacén · orígenes con stock:{' '}
-                        {f.origenes?.join(', ') || 'sin datos'} · {f.resenas} reseñas
+                        {f.imagenes} fotos · {f.variantes} variantes · {f.almacenes} registros de almacén · almacenes con stock:{' '}
+                        {f.origenes?.map((o) => { const [c, n] = o.split(':'); return `${nombrePais(c)} ${Number(n).toLocaleString('es-ES')}`; }).join(', ') || 'sin datos'} · {f.resenas} reseñas
                       </p>
                     ) : (
                       <p className="opacity-80">{f.error}</p>

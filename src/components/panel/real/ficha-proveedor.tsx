@@ -11,25 +11,17 @@ import { AlertCircle, ExternalLink, Loader2, Package, Star, Truck, X } from 'luc
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { formatNumber, cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase/cliente';
 import { obtenerPerfil } from '@/lib/real/datos';
+import { nombrePais, PAISES_FRECUENTES } from '@/lib/paises';
 import { ProviderBadge } from '@/app/(dashboard)/catalog/catalog-card';
 
 /* ───────────── utilidades de presentación ───────────── */
 
 const usd = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} US$`);
 
-let nombresPais: Intl.DisplayNames | null = null;
-const pais = (codigo: string) => {
-  try {
-    nombresPais = nombresPais ?? new Intl.DisplayNames(['es'], { type: 'region' });
-    return nombresPais.of(codigo.toUpperCase()) ?? codigo;
-  } catch {
-    return codigo;
-  }
-};
+const pais = nombrePais;
 
 const dias = (min: number | null, max: number | null) => (min === null && max === null ? 'sin plazo' : min === max || max === null ? `${min} días` : `${min ?? '?'}–${max} días`);
 
@@ -370,15 +362,36 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                   )}
 
                   {esAdmin && (
-                    <div className="flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-2">
-                      <Button size="sm" variant="outline" disabled={trabajando !== null} onClick={() => ejecutarCj('envio')}>
-                        {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
-                        Cotizar los 12 destinos
-                      </Button>
-                      <Input value={otroPais} onChange={(e) => setOtroPais(e.target.value.toUpperCase().slice(0, 2))} placeholder="País (ej. PT)" className="h-8 w-24 text-[12px]" />
-                      <Button size="sm" variant="outline" disabled={trabajando !== null || otroPais.length !== 2} onClick={() => ejecutarCj('envio', { paises: [otroPais] })}>
-                        Cotizar ese país
-                      </Button>
+                    <div className="space-y-2 border-t border-white/[0.06] pt-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        Solo para el administrador. Pide a CJ los precios y plazos de envío de este artículo y los guarda. Cada país cuesta unas llamadas a CJ (una por almacén).
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button size="sm" variant="outline" disabled={trabajando !== null} onClick={() => ejecutarCj('envio')}>
+                          {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
+                          Cotizar los 12 países principales
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          value={otroPais}
+                          onChange={(e) => setOtroPais(e.target.value)}
+                          className="h-8 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 text-[12px]"
+                          aria-label="Otro país de destino"
+                        >
+                          <option value="">Elegir otro país…</option>
+                          {PAISES_FRECUENTES.filter((c) => !destinos.includes(c))
+                            .sort((a, b) => pais(a).localeCompare(pais(b), 'es'))
+                            .map((c) => (
+                              <option key={c} value={c}>
+                                {pais(c)}
+                              </option>
+                            ))}
+                        </select>
+                        <Button size="sm" variant="outline" disabled={trabajando !== null || !otroPais} onClick={() => ejecutarCj('envio', { paises: [otroPais] })}>
+                          Cotizar ese país
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </section>
@@ -411,7 +424,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                               <p className="mt-0.5 flex flex-wrap gap-1">
                                 {filasStock.map((s, i) => (
                                   <span key={i} title={`En almacén de CJ: ${formatNumber(s.cj ?? 0)} · en fábrica: ${formatNumber(s.fabrica ?? 0)}`} className="rounded bg-white/[0.05] px-1 text-[10.5px] text-muted-foreground">
-                                    {s.pais} {formatNumber(s.total ?? 0)}
+                                    {pais(s.pais)} {formatNumber(s.total ?? 0)}
                                     {(s.cj ?? 0) === 0 && (s.fabrica ?? 0) > 0 ? ' (fábrica)' : ''}
                                   </span>
                                 ))}
