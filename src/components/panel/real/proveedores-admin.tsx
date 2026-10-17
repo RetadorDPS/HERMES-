@@ -40,6 +40,7 @@ interface Respuesta {
   resumen?: Record<string, { conServicio: string[]; sinServicio: string[]; pendientes: string[] }>;
   feeds?: { nombre: string | null; productos: number | null; descripcion: string | null }[];
   codigoAli?: string | null;
+  longitudes?: { appKey: number; appSecret: number };
   detalleError?: unknown;
   formaRespuesta?: string[];
   forma?: { claves?: string[] };
@@ -122,6 +123,11 @@ function Resultado({ r }: { r: Respuesta }) {
         </p>
       )}
       {!r.ok && r.codigoAli && <p className="mt-1 text-[12px] opacity-80">Código de AliExpress: {r.codigoAli}</p>}
+      {!r.ok && r.longitudes && (
+        <p className="mt-1 text-[12px] opacity-80">
+          Claves guardadas (sin mostrarlas): App Key de {r.longitudes.appKey} caracteres y App Secret de {r.longitudes.appSecret} caracteres. Lo normal en AliExpress: App Key de unos 6 a 8 dígitos y App Secret de 32 caracteres.
+        </p>
+      )}
       {!r.ok && r.detalleError !== undefined && r.detalleError !== null && (
         <p className="mt-1 break-words text-[11px] opacity-70">{JSON.stringify(r.detalleError).slice(0, 400)}</p>
       )}
