@@ -39,6 +39,8 @@ export interface CatalogQuery {
   minPrice?: number;
   maxPrice?: number;
   shipFrom?: string;
+  /** País de destino elegido (código): el catálogo enseña el envío cotizado a ese país */
+  shipTo?: string;
   freeShipping?: boolean;
   trending?: boolean;
   minRating?: number;
@@ -61,6 +63,14 @@ export interface CatalogFacet {
 }
 
 /** Registro del índice tal y como lo consume la interfaz. */
+export interface ResumenEnvioDestino {
+  precio: number;
+  diasMin: number | null;
+  diasMax: number | null;
+  origen?: string | null;
+  rapido?: { precio: number; diasMin: number | null; diasMax: number | null } | null;
+}
+
 export interface CatalogRow {
   id: string;
   provider: SupplierType;
@@ -91,6 +101,15 @@ export interface CatalogRow {
   costPriceEur?: number;
   /** Tipo de cambio aplicado, si se convirtió */
   fx?: { currency: string; rate: number; converted: boolean; unknown?: boolean; date?: string | null };
+  /** Mejor envío cotizado por país de destino (opción más barata y más rápida), derivado de la ficha */
+  envioResumen?: Record<string, ResumenEnvioDestino> | null;
+  /** Envío al país elegido: solo si hay una cotización real; si no, «sin cotizar» */
+  envio?: { destino: string; precioEur: number | null; diasMin: number | null; diasMax: number | null; origen?: string | null } | null;
+  envioSinCotizar?: boolean;
+  /** true si el precio de venta salió de la regla por defecto porque el usuario aún no tiene ninguna */
+  reglaPorDefecto?: boolean;
+  /** true si el beneficio ya descuenta el envío cotizado al destino */
+  beneficioConEnvio?: boolean;
   /** Precio de venta y beneficio con la regla del usuario (si se pasó) */
   sellingPrice?: number;
   compareAtPrice?: number | null;

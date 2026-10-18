@@ -36,7 +36,7 @@ import { imageSrc } from './image';
 import { CatalogImportDrawer } from './import-dialog';
 import { useSesion } from '@/components/auth/sesion';
 import { FichaProveedor } from '@/components/panel/real/ficha-proveedor';
-import { nombreAlmacen } from '@/lib/paises';
+import { nombreAlmacen, nombrePais, PAISES_FRECUENTES } from '@/lib/paises';
 
 export interface CatalogBrowserProps {
   initial: {
@@ -95,6 +95,16 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   const [maxPrice, setMaxPrice] = useState('');
   // Almacenes de salida elegidos (vacío = cualquiera). Se pueden marcar varios.
   const [shipFrom, setShipFrom] = useState<string[]>([]);
+  // País al que se enseña el envío cotizado (se recuerda en este navegador)
+  const [destino, setDestino] = useState('ES');
+  useEffect(() => {
+    try {
+      const guardado = window.localStorage.getItem('hermes-destino');
+      if (guardado) setDestino(guardado);
+    } catch {
+      /* sin almacenamiento: se queda España */
+    }
+  }, []);
   const [freeShipping, setFreeShipping] = useState(false);
   const [trending, setTrending] = useState(false);
   const [minRating, setMinRating] = useState('');
@@ -114,6 +124,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       if (minPrice) p.set('min', minPrice);
       if (maxPrice) p.set('max', maxPrice);
       if (shipFrom.length) p.set('shipFrom', shipFrom.join(','));
+      if (destino) p.set('shipTo', destino);
       if (freeShipping) p.set('freeShipping', '1');
       if (trending) p.set('trending', '1');
       if (minRating) p.set('minRating', minRating);
@@ -122,7 +133,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       p.set('pageSize', String(pageSize));
       return p.toString();
     },
-    [q, category, provider, minPrice, maxPrice, shipFrom, freeShipping, trending, minRating, sort, page, pageSize],
+    [q, category, provider, minPrice, maxPrice, shipFrom, destino, freeShipping, trending, minRating, sort, page, pageSize],
   );
 
   const fetchItems = useCallback(
@@ -469,7 +480,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
               <span title="El 20 % de productos con más pedidos de su proveedor" className="inline-flex items-center gap-2"><Flame className="size-3.5 text-orange-300" /> Solo top ventas (el 20 % más pedido de cada proveedor)</span>
             </label>
             <span className="text-[11px] text-muted-foreground">
-              Los precios de venta y el beneficio se calculan con tu regla «{ruleName}» (configúrala en <Link className="underline" href="/pricing">Precios y márgenes</Link>).
+              Los precios de venta y el beneficio se calculan con {ruleName.startsWith('sin regla') ? 'la regla por defecto (40 % de margen) porque aún no has creado la tuya' : <>tu regla «{ruleName}»</>} (configúrala en <Link className="underline" href="/pricing">Precios y márgenes</Link>).
             </span>
           </div>
         </div>
@@ -484,6 +495,37 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
         <span className="inline-flex items-center gap-2">
           <ArrowDownUp className="size-3.5" />
           {SORTS.find((s) => s.value === sort)?.label}
+        </span>
+      </div>
+
+      {/* Destino del envío: los plazos y el beneficio con envío salen de cotizaciones reales a ese país */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-[12px]">
+        <label className="inline-flex items-center gap-2">
+          <Truck className="size-3.5 text-indigo-300" />
+          <span className="text-muted-foreground">Enviar a</span>
+          <select
+            className="h-8 rounded-md border border-white/10 bg-white/[0.04] px-2 text-[12px]"
+            value={destino}
+            onChange={(e) => {
+              setDestino(e.target.value);
+              setPage(1);
+              try {
+                window.localStorage.setItem('hermes-destino', e.target.value);
+              } catch {
+                /* sin almacenamiento: vale solo para esta visita */
+              }
+            }}
+            aria-label="País de destino del envío"
+          >
+            {[...new Set(['ES', 'US', ...PAISES_FRECUENTES])].map((c) => (
+              <option key={c} value={c}>
+                {nombrePais(c)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="text-muted-foreground">
+          Plazo y precio de envío salen de cotizaciones reales del proveedor. Donde pone «sin cotizar» aún no se ha pedido ese envío (ábrelo en la ficha).
         </span>
       </div>
 

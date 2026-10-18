@@ -11,7 +11,7 @@
  * permitidas; un «select *» fallaría por permisos.
  */
 import { supabase } from '../supabase/cliente';
-import { computeSellingPrice } from '../pricing';
+import { computeSellingPrice, DEFAULT_RULE } from '../pricing';
 import type { PricingRuleLike } from '../types';
 import type { CatalogFacet, CatalogQuery, CatalogResult, CatalogRow } from '../catalog';
 import type { ProductListItem, StoreView } from '../data';
@@ -20,7 +20,7 @@ const COL_USUARIO = 'id,email,name,image,role,plan,timezone,lastLoginAt,emailVer
 const COL_TIENDA = 'id,userId,platform,name,domain,apiVersion,scopes,status,lastPingAt,lastError,settings,createdAt';
 const COL_PROVEEDOR = 'id,type,name,baseUrl,logoUrl,isEnabled,rateLimitRpm';
 const COL_CATALOGO =
-  'id,provider,externalId,title,description,categoryId,categoryName,imageUrl,images,currency,costPrice,suggestedPrice,stock,rating,ordersCount,shippingCost,shippingMinDays,shippingMaxDays,shipFrom,freeShipping,isTrending,tags,sourceUrl,source,lastSyncedAt,views,importedCount,warehouses';
+  'id,provider,externalId,title,description,categoryId,categoryName,imageUrl,images,currency,costPrice,suggestedPrice,stock,rating,ordersCount,shippingCost,shippingMinDays,shippingMaxDays,shipFrom,freeShipping,isTrending,tags,sourceUrl,source,lastSyncedAt,views,importedCount,warehouses,envioResumen';
 
 const num = (v: unknown, defecto = 0) => (v === null || v === undefined || v === '' ? defecto : Number(v));
 const fecha = (v: unknown) => (v ? new Date(v as string) : null);
@@ -407,6 +407,7 @@ const mapCatalogo = (i: any): CatalogRow => ({
   source: i.source,
   lastSyncedAt: new Date(i.lastSyncedAt),
   importedCount: i.importedCount ?? 0,
+  envioResumen: i.envioResumen ?? null,
 });
 
 const slugCat = (s: string) =>
@@ -447,7 +448,15 @@ export async function tasasEnEuros(): Promise<Record<string, { rate: number; fec
  * con la regla del usuario. Sin tipo de cambio NO se calcula nada (antes se trataban los dólares como si fueran euros).
  * El beneficio es ANTES del envío: el catálogo no conoce el país de destino. Tampoco se inventa un «precio antes».
  */
-function conPreciosEnEuros(filas: CatalogRow[], regla: ReglaPrecio | null, tasas: Record<string, { rate: number; fecha: string | null }>): CatalogRow[] {
+function conPreciosEnEuros(
+  filas: CatalogRow[],
+  regla: ReglaPrecio | null,
+  tasas: Record<string, { rate: number; fecha: string | null }>,
+  destino?: string,
+): CatalogRow[] {
+  // Sin regla propia se aplica la regla por defecto (40 %) y la tarjeta lo dice: es mejor ver una cifra orientativa que ninguna.
+  const reglaUso = (regla ?? DEFAULT_RULE) as unknown as PricingRuleLike;
+  const nombreRegla = regla?.name ?? 'regla por defecto';
   return filas.map((f) => {
     const moneda = (f.currency || 'USD').toUpperCase();
     const t = moneda === 'EUR' ? { rate: 1, fecha: null } : tasas[moneda];
@@ -455,18 +464,42 @@ function conPreciosEnEuros(filas: CatalogRow[], regla: ReglaPrecio | null, tasas
       return { ...f, costPriceEur: undefined, shippingCostEur: undefined, fx: { currency: moneda, rate: 0, converted: false, unknown: true } };
     }
     const costeEur = redondear2(f.costPrice * t.rate);
-    const base: CatalogRow = { ...f, costPriceEur: costeEur, fx: { currency: moneda, rate: Math.round(t.rate * 10000) / 10000, converted: moneda !== 'EUR', date: t.fecha } };
-    if (!regla) return base;
-    const b = computeSellingPrice(costeEur, 0, regla as unknown as PricingRuleLike, regla.name);
-    const beneficio = b.sellingPrice - costeEur;
+    // Envío cotizado al destino elegido (las cotizaciones de los proveedores van en USD)
+    const resumen = destino ? f.envioResumen?.[destino] : undefined;
+    const tUsd = tasas.USD;
+    const envioEur = resumen && tUsd?.rate > 0 ? redondear2(resumen.precio * tUsd.rate) : null;
+    const envio = destino && resumen ? { destino, precioEur: envioEur, diasMin: resumen.diasMin ?? null, diasMax: resumen.diasMax ?? null, origen: resumen.origen ?? null } : null;
+    const base: CatalogRow = {
+      ...f,
+      costPriceEur: costeEur,
+      fx: { currency: moneda, rate: Math.round(t.rate * 10000) / 10000, converted: moneda !== 'EUR', date: t.fecha },
+      envio,
+      envioSinCotizar: Boolean(destino) && !resumen,
+      shippingMinDays: envio?.diasMin ?? null,
+      shippingMaxDays: envio?.diasMax ?? null,
+    };
+    const b = computeSellingPrice(costeEur, envioEur ?? 0, reglaUso, nombreRegla);
+    // El beneficio real descuenta el envío cuando se conoce; si no, es «antes del envío»
+    const beneficio = b.sellingPrice - costeEur - (envioEur ?? 0);
     return {
       ...base,
       sellingPrice: b.sellingPrice,
       compareAtPrice: null,
       profit: redondear2(beneficio),
       profitMarginPct: redondear2((beneficio / Math.max(b.sellingPrice, 0.01)) * 100),
+      reglaPorDefecto: !regla,
+      beneficioConEnvio: envioEur !== null,
     };
   });
+}
+
+/** País de destino que el usuario eligió en el catálogo (se recuerda en este navegador); España si no eligió ninguno. */
+function destinoGuardado(): string {
+  try {
+    return window.localStorage.getItem('hermes-destino') || 'ES';
+  } catch {
+    return 'ES';
+  }
 }
 
 export async function reglaPredeterminada() {
@@ -570,7 +603,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   const [regla, tasas] = await Promise.all([reglaPredeterminada(), tasasEnEuros()]);
 
   return {
-    items: conPreciosEnEuros(filas, regla, tasas),
+    items: conPreciosEnEuros(filas, regla, tasas, q.shipTo ?? destinoGuardado()),
     total,
     page: pagina,
     pages: Math.max(1, Math.ceil(total / tamano)),

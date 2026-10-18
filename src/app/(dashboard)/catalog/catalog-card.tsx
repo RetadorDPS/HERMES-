@@ -12,7 +12,7 @@ import { Badge as UiBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatCurrency, formatNumber, cn } from '@/lib/utils';
 import type { CatalogRow } from '@/lib/catalog';
-import { nombreAlmacen, textoPopularidad } from '@/lib/paises';
+import { nombreAlmacen, nombrePais, textoPopularidad } from '@/lib/paises';
 
 export function ProviderBadge({ provider }: { provider: string }) {
   // Fondo oscuro propio para que se lea sobre cualquier foto (antes se perdía sobre imágenes claras)
@@ -92,12 +92,23 @@ export function CatalogCard({
           )}
           {sales > 0 && <span title="Cifra de popularidad que informa el proveedor">{textoPopularidad(item.provider, sales, formatNumber)}</span>}
           {item.shipFrom && <span className="hidden sm:inline">desde {nombreAlmacen(item.shipFrom)}</span>}
-          {item.shippingMinDays !== null && (
+          {item.envio ? (
+            <span className="inline-flex items-center gap-1" title={`Envío cotizado a ${nombrePais(item.envio.destino)}${item.envio.origen ? ` desde ${nombreAlmacen(item.envio.origen)}` : ''}`}>
+              <Truck className="size-3" />
+              {item.envio.diasMin !== null && item.envio.diasMax !== null ? (item.envio.diasMin === item.envio.diasMax ? `${item.envio.diasMin} d` : `${item.envio.diasMin}-${item.envio.diasMax} d`) : 'plazo sin dato'}
+              {' · '}
+              {item.envio.precioEur === null ? 'precio sin dato' : item.envio.precioEur === 0 ? 'envío gratis' : formatCurrency(item.envio.precioEur)}
+            </span>
+          ) : item.envioSinCotizar ? (
+            <span className="inline-flex items-center gap-1 text-amber-300/80" title="Todavía no se ha pedido la cotización de envío a este país para este producto">
+              <Truck className="size-3" /> envío sin cotizar
+            </span>
+          ) : item.shippingMinDays !== null && item.shippingMinDays !== undefined ? (
             <span className="inline-flex items-center gap-1">
               <Truck className="size-3" />
               {item.shippingMinDays}-{item.shippingMaxDays ?? item.shippingMinDays + 7} d
             </span>
-          )}
+          ) : null}
         </div>
 
         <div className="mt-auto space-y-2">
@@ -124,7 +135,13 @@ export function CatalogCard({
 
           {item.profit !== undefined && (
             <div className="flex items-center justify-between rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-2 py-1.5 text-[11px]">
-              <span className="text-emerald-300/90"><span className="sm:hidden">Beneficio (sin envío)</span><span className="hidden sm:inline">Beneficio por unidad (antes del envío)</span></span>
+              <span className="text-emerald-300/90">
+                {item.beneficioConEnvio ? (
+                  <><span className="sm:hidden">Beneficio (con envío)</span><span className="hidden sm:inline">Beneficio por unidad (con el envío cotizado)</span></>
+                ) : (
+                  <><span className="sm:hidden">Beneficio (sin envío)</span><span className="hidden sm:inline">Beneficio por unidad (antes del envío)</span></>
+                )}
+              </span>
               <span className="font-semibold tabular-nums text-emerald-300">
                 +{formatCurrency(item.profit)} · {Math.round(item.profitMarginPct ?? 0)}%
               </span>
