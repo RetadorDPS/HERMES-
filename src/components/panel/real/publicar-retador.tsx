@@ -39,6 +39,7 @@ interface Preparacion {
   contenido: { titulo: string; descripcion: string; imagenes: string[] };
   variantes: VarianteServidor[];
   yaPublicado: { productId: string; estado: string } | null;
+  costeReferencia?: { pais: string | null; proveedor: 'cj' | 'aliexpress' };
 }
 
 const usd = (n: number) => `${n.toFixed(2)} US$`;
@@ -118,19 +119,22 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         m.set(v.sku, null);
         continue;
       }
-      const l = liquidacion(precio, v.coste.total, prep.tarifas);
-      m.set(v.sku, { precio, neto: l.neto, margen: l.margenNetoPct, minimo: precioMinimoSinPerdida(v.coste.total, prep.tarifas) });
+      const l = liquidacion(precio, v.coste.total, prep.tarifas, v.coste.producto);
+      m.set(v.sku, { precio, neto: l.neto, margen: l.margenNetoPct, minimo: precioMinimoSinPerdida(v.coste.total, prep.tarifas, v.coste.producto) });
     }
     return m;
   }, [prep, precios]);
 
-  const perdidas = marcadas.filter((v) => (cuentas.get(v.sku)?.neto ?? -1) < 0);
+  const perdidas = marcadas.filter((v) => {
+    const c = cuentas.get(v.sku);
+    return !c || c.neto < 0 || c.precio < c.minimo;
+  });
   const sinPrecio = marcadas.filter((v) => !cuentas.get(v.sku));
   const problemas: string[] = [];
   if (!marcadas.length) problemas.push('Elige al menos una variante.');
   if (marcadas.length > MAX_VARIANTES) problemas.push(`Como máximo ${MAX_VARIANTES} variantes.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
-  if (perdidas.length) problemas.push('Hay variantes con las que pierdes dinero. Sube el precio.');
+  if (perdidas.length) problemas.push('Hay variantes por debajo del precio mínimo (coste puesto en Cuba). Sube el precio.');
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!provincia) problemas.push('Elige la provincia.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
@@ -275,9 +279,9 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                               US$
                             </label>
                             {c ? (
-                              <span className={cn('font-medium', c.neto < 0 ? 'text-rose-300' : 'text-emerald-300')}>
+                              <span className={cn('font-medium', c.neto < 0 || c.precio < c.minimo ? 'text-rose-300' : 'text-emerald-300')}>
                                 Te quedan {usd(c.neto)} netos ({c.margen.toFixed(0)} %)
-                                {c.neto < 0 && ` · mínimo ${usd(c.minimo)}`}
+                                {c.precio < c.minimo && ` · mínimo ${usd(c.minimo)}`}
                               </span>
                             ) : (
                               <span className="text-amber-300">Pon un precio</span>
@@ -290,9 +294,15 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                 </div>
                 {prep.tarifas && (
                   <p className="text-[11px] text-muted-foreground">
-                    Neto = precio − coste − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de la ganancia) − pasarela ({prep.tarifas.pasarelaPct} % + {usd(prep.tarifas.pasarelaFijaUsd)}
-                    {prep.tarifas.pasarelaACargo === 'comprador' ? ', a cargo del comprador' : ''}). Es una estimación con las tarifas que informa Retador.
+                    Neto = (precio − costo del producto) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia)
+                    {prep.tarifas.pasarelaACargo === 'retador' ? '. La pasarela de pago la asume Retador.' : prep.tarifas.pasarelaACargo === 'comprador' ? '. La pasarela la paga el comprador.' : ` − pasarela (${prep.tarifas.pasarelaPct} % + ${usd(prep.tarifas.pasarelaFijaUsd)}).`}{' '}
+                    El precio mínimo que acepta Retador es el coste puesto en Cuba. Estimación con las tarifas que informa Retador.
                   </p>
+                )}
+                {prep.costeReferencia?.proveedor === 'aliexpress' && prep.costeReferencia.pais !== 'US' && (
+                  <Alert variant="warning" title="Coste de AliExpress para otro país">
+                    El coste de tu ficha es el de {prep.costeReferencia.pais ? prep.costeReferencia.pais : 'un país no registrado'}; Retador usa el precio para EE. UU. Si difiere, Retador te dirá el mínimo real al publicar.
+                  </Alert>
                 )}
               </section>
 

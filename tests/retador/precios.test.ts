@@ -16,7 +16,13 @@ assert.deepEqual(datosQueFaltan({ costeUsd: 10, envioHubUsd: null, pesoGramos: 0
 // Envío 0 es un dato real (envío gratis cotizado), no «falta»
 assert.ok(costePuestoEnCuba({ costeUsd: 10, envioHubUsd: 0, pesoGramos: 100, tarifas: t }));
 
-// Liquidación: precio 30, coste 17,39 → ganancia 12,61; comisión 8 % = 1,01; pasarela 4,4 % de 30 + 0,30 = 1,62 → neto 9,98
+// Reparto real de Retador: pasarela a cargo de Retador y comisión sobre (precio − costo del producto), sin envío
+const real = { ...t, pasarelaACargo: 'retador' as const, comisionBase: 'precio_venta_menos_costo_producto' as const };
+const lr = liquidacion(30, 17.39, real, 10);
+assert.equal(lr.ganancia, 20); assert.equal(lr.comision, 1.6); assert.equal(lr.neto, 18.4); // (30 − 10) × 0,92
+assert.equal(precioMinimoSinPerdida(17.39, real, 10), 17.39); // manda el mínimo de Retador: el coste puesto en Cuba
+
+// Liquidación (modelo antiguo, sin costo de producto): precio 30, coste 17,39 → ganancia 12,61; comisión 8 % = 1,01; pasarela 4,4 % de 30 + 0,30 = 1,62 → neto 9,98
 const l = liquidacion(30, 17.39, t);
 assert.equal(l.ganancia, 12.61); assert.equal(l.comision, 1.01); assert.equal(l.pasarela, 1.62); assert.equal(l.neto, 9.98);
 // Si la pasarela la paga el comprador, no se descuenta al vendedor

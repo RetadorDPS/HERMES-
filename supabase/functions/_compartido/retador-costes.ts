@@ -16,8 +16,14 @@ export interface TarifasRetador {
   comisionPctGanancia: number;
   pasarelaPct: number;
   pasarelaFijaUsd: number;
-  /** Quién paga la pasarela. Si Retador no lo dice se asume al vendedor (la opción más prudente). */
-  pasarelaACargo?: 'vendedor' | 'comprador';
+  /** Quién paga la pasarela de pago. «retador»: sale de lo que retiene Retador y al vendedor no se le descuenta nada. Si no lo dice se asume al vendedor (lo más prudente). */
+  pasarelaACargo?: 'vendedor' | 'comprador' | 'retador';
+  /**
+   * Sobre qué se calcula la comisión de Retador: «precio_venta_menos_costo_producto» (valor real de Retador: precio de venta menos el costo
+   * del producto del proveedor, sin envío) o «precio_venta_menos_costo_cuba» (menos el coste puesto en Cuba). Si no lo dice se usa el producto,
+   * que da la comisión más alta y por tanto el neto más prudente.
+   */
+  comisionBase?: 'precio_venta_menos_costo_producto' | 'precio_venta_menos_costo_cuba';
 }
 
 export interface EntradaCoste {
@@ -70,23 +76,41 @@ export interface Liquidacion {
   margenNetoPct: number;
 }
 
-/** Lo que queda al vendedor tras la comisión de Retador (sobre la ganancia) y la pasarela de pago. */
-export function liquidacion(precio: number, costeTotal: number, t: TarifasRetador): Liquidacion {
-  const ganancia = round2(precio - costeTotal);
-  const comision = round2(Math.max(0, ganancia) * (t.comisionPctGanancia / 100));
-  const pasarela = round2(precio * (t.pasarelaPct / 100) + t.pasarelaFijaUsd);
-  const paga = t.pasarelaACargo === 'comprador' ? 0 : pasarela;
-  const neto = round2(ganancia - comision - paga);
-  return { precio: round2(precio), coste: round2(costeTotal), ganancia, comision, pasarela, neto, margenNetoPct: precio > 0 ? round2((neto / precio) * 100) : 0 };
+/** Coste que se descuenta al calcular la ganancia: el del producto (valor real de Retador) o el puesto en Cuba si Retador así lo declara. */
+function costeBase(costeTotal: number, costeProducto: number | undefined, t: TarifasRetador): number {
+  if (t.comisionBase === 'precio_venta_menos_costo_cuba' || costeProducto === undefined) return costeTotal;
+  return costeProducto;
 }
 
-/** Precio mínimo para no perder dinero: el coste puesto en Cuba, más lo que se lleva Retador y la pasarela si las paga el vendedor. */
-export function precioMinimoSinPerdida(costeTotal: number, t: TarifasRetador): number {
-  // neto >= 0  ⇒  p - c - (p-c)·k - (p·g + f) >= 0   con k = comisión y g = pasarela% (si la paga el vendedor)
+/** Cuánto de la pasarela de pago sale del bolsillo del vendedor (0 si la paga el comprador o Retador). */
+function pasarelaDelVendedor(precio: number, t: TarifasRetador): number {
+  if (t.pasarelaACargo === 'comprador' || t.pasarelaACargo === 'retador') return 0;
+  return round2(precio * (t.pasarelaPct / 100) + t.pasarelaFijaUsd);
+}
+
+/**
+ * Lo que queda al vendedor por unidad: (precio − costo base) − comisión de Retador − pasarela si la paga él.
+ * Con el reparto real de Retador es (precio − costo del producto) × (1 − comisión %); el envío lo paga el comprador aparte.
+ */
+export function liquidacion(precio: number, costeTotal: number, t: TarifasRetador, costeProducto?: number): Liquidacion {
+  const base = costeBase(costeTotal, costeProducto, t);
+  const ganancia = round2(precio - base);
+  const comision = round2(Math.max(0, ganancia) * (t.comisionPctGanancia / 100));
+  const pasarela = round2(precio * (t.pasarelaPct / 100) + t.pasarelaFijaUsd);
+  const neto = round2(ganancia - comision - pasarelaDelVendedor(precio, t));
+  return { precio: round2(precio), coste: round2(base), ganancia, comision, pasarela, neto, margenNetoPct: precio > 0 ? round2((neto / precio) * 100) : 0 };
+}
+
+/**
+ * Precio mínimo: el mayor entre lo que exige Retador (el coste puesto en Cuba) y el precio con el que el vendedor deja de perder dinero.
+ */
+export function precioMinimoSinPerdida(costeTotal: number, t: TarifasRetador, costeProducto?: number): number {
+  const base = costeBase(costeTotal, costeProducto, t);
   const k = t.comisionPctGanancia / 100;
-  const g = t.pasarelaACargo === 'comprador' ? 0 : t.pasarelaPct / 100;
-  const f = t.pasarelaACargo === 'comprador' ? 0 : t.pasarelaFijaUsd;
+  const vendedorPaga = t.pasarelaACargo === 'vendedor' || t.pasarelaACargo === undefined;
+  const g = vendedorPaga ? t.pasarelaPct / 100 : 0;
+  const f = vendedorPaga ? t.pasarelaFijaUsd : 0;
   const denominador = 1 - k - g;
-  if (denominador <= 0) return Number.POSITIVE_INFINITY;
-  return Math.ceil(((costeTotal * (1 - k) + f) / denominador) * 100) / 100;
+  const sinPerdida = denominador <= 0 ? Number.POSITIVE_INFINITY : Math.ceil(((base * (1 - k) + f) / denominador) * 100) / 100;
+  return Math.max(sinPerdida, Math.ceil(costeTotal * 100) / 100);
 }

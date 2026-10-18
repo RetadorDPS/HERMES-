@@ -54,7 +54,7 @@ Deno.serve(async (req) => {
   if (accion === "config") {
     return ok({
       vendedor: { plan: "pro", productos_usados: 0, tope_productos: 55, suspendido: false, deuda_comisiones: false },
-      tarifas: { hub_usd_por_libra: 1.99, dias_hub_cuba: [8, 15], comision_pct_ganancia: 8, pasarela_pct: 4.4, pasarela_fija_usd: 0.3, pasarela_a_cargo: "vendedor" },
+      tarifas: { hub_usd_por_libra: 1.99, dias_hub_cuba: [8, 15], comision_pct_ganancia: 8, pasarela_pct: 4.4, pasarela_fija_usd: 0.3, pasarela_a_cargo: "retador", comision_base: "precio_venta_menos_costo_producto" },
       categorias: CATEGORIAS, provincias: PROVINCIAS,
       limites: { publicar_por_hora: 10, actualizar_por_hora: 60, retirar_por_hora: 60, estado_por_hora: 300 },
       token: { prefijo: token.slice(0, 12), caduca_en: new Date(Date.now() + 90 * 864e5).toISOString() },

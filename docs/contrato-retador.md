@@ -111,3 +111,15 @@ Cuerpo (todo opcional salvo `ref`):
 - Avisos de Retador hacia DropshipPilot (venta, moderación) por webhook firmado.
 - Pedidos para cumplimiento desde DropshipPilot.
 - Copiar las fotos del proveedor al almacenamiento de Retador.
+
+## Cambios acordados tras la implementación en Retador (v1.1, mismo `version_contrato: 1`)
+Resumen del informe de Retador del 18/10/2026. Donde choca con el texto de arriba, manda esto.
+- `tarifas.pasarela_a_cargo` vale `"retador"` (valor real hoy), además de `"vendedor"` o `"comprador"`. Con `"retador"` al vendedor no se le descuenta pasarela.
+- `tarifas.comision_base = "precio_venta_menos_costo_producto"`: la comisión es `comision_pct_ganancia` % de (precio de venta − costo del producto del proveedor, sin envío). Neto del vendedor por unidad = (precio − costo del producto) × (1 − comisión %). En AliExpress el costo es el precio para EE. UU.
+- Precio mínimo: el coste puesto en Cuba (producto + tramo al hub + hub→Cuba).
+- Códigos nuevos: `publicacion_en_curso` (409, `reintentar_en_s`), `ref_no_encontrada` (404), `producto_eliminado` (409), `error_interno` (500). `sku_inexistente` va con 400 e incluye `sku` y `skus`. `precio_bajo_minimo` incluye `variantes: [{sku, minimo_usd}]`.
+- `config` también tiene cupo (60 por hora) y devuelve `stock_sin_dato` y `cupo_proveedor_diario`; `dias_hub_cuba = [mín, máx]`.
+- `deuda_comisiones` solo bloquea publicar y actualizar.
+- Publicar hace una sola lectura al proveedor + el flete al hub (sin vista previa). Sin provincia se usa la de la tienda del vendedor. Todas las variantes a 0 → `agotado`.
+- Las fichas de `estado` traen además `atributos` por variante, `provincia`, `actualizado_en` y `origen_ultimo_cambio`.
+- Stock `null` en publicar o actualizar → se usa `stock_sin_dato` (5) y se marca `stock_estimado`; nunca 50.

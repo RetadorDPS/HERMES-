@@ -107,7 +107,8 @@ export function tarifasDeConfig(cfg: any) {
     comisionPctGanancia: com,
     pasarelaPct: pct,
     pasarelaFijaUsd: fija,
-    pasarelaACargo: t.pasarela_a_cargo === "comprador" ? ("comprador" as const) : ("vendedor" as const),
+    pasarelaACargo: t.pasarela_a_cargo === "comprador" ? ("comprador" as const) : t.pasarela_a_cargo === "retador" ? ("retador" as const) : ("vendedor" as const),
+    comisionBase: t.comision_base === "precio_venta_menos_costo_cuba" ? ("precio_venta_menos_costo_cuba" as const) : ("precio_venta_menos_costo_producto" as const),
   };
 }
 

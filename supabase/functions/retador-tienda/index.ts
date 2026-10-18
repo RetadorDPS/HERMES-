@@ -81,6 +81,13 @@ async function conRetador(tienda: any, accion: Parameters<typeof llamarRetador>[
   }
 }
 
+/** Si Retador dice que el producto ya no existe o fue eliminado, aquí queda archivado y con el motivo, en vez de seguir «activo». */
+async function marcarProductoSiDesaparecio(productId: string, e: unknown) {
+  if (e instanceof ErrorRetador && (e.codigo === "ref_no_encontrada" || e.codigo === "producto_eliminado")) {
+    await servicio.from("Product").update({ status: "ARCHIVED", lastSyncStatus: "FAILED", lastSyncError: e.message, updatedAt: ahora() }).eq("id", productId);
+  }
+}
+
 async function marcarTiendaConError(id: string, mensaje: string) {
   await servicio.from("Store").update({ status: "ERROR", lastError: mensaje, updatedAt: ahora() }).eq("id", id);
 }
@@ -101,6 +108,8 @@ async function guardarConfig(tienda: any, cfg: any) {
     categorias: cfg.categorias ?? [],
     provincias: cfg.provincias ?? [],
     limites: cfg.limites ?? null,
+    stockSinDato: cfg.stock_sin_dato ?? null,
+    cupoProveedorDiario: cfg.cupo_proveedor_diario ?? null,
     token: cfg.token ?? null,
     configActualizada: ahora(),
   };
@@ -179,7 +188,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       stock: stockVerificado(v, proveedor),
       coste,
       faltan: datosQueFaltan(entrada),
-      precioMinimoUsd: coste && tarifas ? precioMinimoSinPerdida(coste.total, tarifas) : null,
+      precioMinimoUsd: coste && tarifas ? precioMinimoSinPerdida(coste.total, tarifas, coste.producto) : null,
     };
   });
   return { variantes, hub };
@@ -276,6 +285,8 @@ async function accionPreparar(uid: string, cuerpo: any) {
     vendedor: cfg.vendedor ?? null,
     proveedor,
     envioHub: hub,
+    // País para el que se consultó el coste de la ficha: AliExpress en Retador cobra el precio para EE. UU.
+    costeReferencia: { pais: typeof ficha?.precio?.pais === "string" ? ficha.precio.pais : null, proveedor },
     contenido: contenidoPorDefecto(item, ficha),
     variantes,
     yaPublicado: yaPublicado ? { productId: yaPublicado.id, estado: yaPublicado.status } : null,
@@ -317,8 +328,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
     const precio = Number(e.precioVentaUsd);
     if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", `Pon un precio válido a «${v.nombre}»`, { sku: v.sku });
     if (!v.coste) throw new ErrorApp("faltan_datos", `No se puede calcular tu beneficio de «${v.nombre}»: falta ${v.faltan.join(", ")}. Completa la ficha (peso y envío a EE. UU.) y vuelve a intentarlo.`, { sku: v.sku, faltan: v.faltan });
-    const liq = liquidacion(redondear(precio), v.coste.total, tarifas);
-    if (liq.neto < 0) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: con ese precio pierdes dinero (te quedarían ${liq.neto.toFixed(2)} USD tras comisión y pasarela). Mínimo para no perder: ${precioMinimoSinPerdida(v.coste.total, tarifas).toFixed(2)} USD.`, { sku: v.sku, minimoUsd: precioMinimoSinPerdida(v.coste.total, tarifas) });
+    const liq = liquidacion(redondear(precio), v.coste.total, tarifas, v.coste.producto);
+    if (liq.neto < 0 || precio < precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (coste puesto en Cuba y sin pérdida tras comisión).`, { sku: v.sku, minimoUsd: precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto) });
     return { v, precio: redondear(precio), liq };
   });
 
@@ -326,13 +337,14 @@ async function accionPublicar(uid: string, cuerpo: any) {
   const { data: yaExiste } = await servicio.from("Product").select("id").eq("storeId", tienda.id).eq("supplierProductId", item.externalId).maybeSingle();
   if (yaExiste) throw new ErrorApp("ya_publicado", "Este producto ya está publicado en tu tienda de Retador. Edítalo desde «Productos».", { productId: yaExiste.id });
 
-  // Registro local en borrador (la restricción única evita publicar dos veces a la vez)
+  // Registro local en borrador (la restricción única evita publicar dos veces a la vez).
+  // Product tiene un índice único (usuario, sourceUrl): el fragmento «#tienda-…» (no cambia el enlace) permite el mismo producto en tiendas distintas.
   const productId = crypto.randomUUID();
   const ref = `dsp:${tienda.id}:${productId}`;
   const minima = lineas.reduce((a, b) => (b.precio < a.precio ? b : a));
   const { error: eProd } = await servicio.from("Product").insert({
     id: productId, userId: uid, storeId: tienda.id, supplierId: ID_PROVEEDOR[item.provider], supplierProductId: item.externalId,
-    sourceUrl: ficha.enlace ?? item.sourceUrl ?? "", title: contenido.titulo, description: contenido.descripcion, category: categoria.nombre ?? cat,
+    sourceUrl: `${ficha.enlace ?? item.sourceUrl ?? ""}#tienda-${tienda.id.slice(0, 8)}`, title: contenido.titulo, description: contenido.descripcion, category: categoria.nombre ?? cat,
     currency: "USD", costPrice: minima.v.coste!.producto, shippingCost: redondear(minima.v.coste!.envioHub + minima.v.coste!.hubCuba), sellingPrice: minima.precio,
     marginPct: minima.liq.margenNetoPct, profitAmount: minima.liq.neto, stockTotal: 0, status: "DRAFT", lastSyncStatus: "RUNNING", updatedAt: ahora(),
   });
@@ -419,8 +431,8 @@ async function accionActualizar(uid: string, cuerpo: any) {
         if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", "Pon un precio válido", { sku: local.sku });
         if (tarifas) {
           const coste = Number(local.costPrice) + Number(local.shippingCost);
-          const liq = liquidacion(precio, coste, tarifas);
-          if (liq.neto < 0) throw new ErrorApp("precio_bajo_minimo", `Con ${precio.toFixed(2)} USD pierdes dinero en «${local.sku}». Mínimo para no perder: ${precioMinimoSinPerdida(coste, tarifas).toFixed(2)} USD.`, { sku: local.sku, minimoUsd: precioMinimoSinPerdida(coste, tarifas) });
+          const minimo = precioMinimoSinPerdida(coste, tarifas, Number(local.costPrice));
+          if (precio < minimo) throw new ErrorApp("precio_bajo_minimo", `Con ${precio.toFixed(2)} USD queda por debajo del mínimo en «${local.sku}». Mínimo: ${minimo.toFixed(2)} USD.`, { sku: local.sku, minimoUsd: minimo });
         }
         salida.precio_venta_usd = precio;
         cambios.push(`${local.sku}: precio ${precio.toFixed(2)}`);
@@ -451,6 +463,7 @@ async function accionActualizar(uid: string, cuerpo: any) {
     remoto = await conRetador(tienda, "actualizar", envio);
   } catch (e) {
     await servicio.from("Product").update({ lastSyncStatus: "FAILED", lastSyncError: (e as Error).message, updatedAt: ahora() }).eq("id", p.id);
+    await marcarProductoSiDesaparecio(p.id, e);
     await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "FAILED", `No se pudo actualizar en Retador: ${(e as Error).message}`);
     throw e;
   }
@@ -486,7 +499,13 @@ async function aplicarRemotoALocal(productId: string, remoto: any) {
 
 async function accionRetirar(uid: string, cuerpo: any) {
   const { p, tienda, ref } = await productoPropio(uid, cuerpo.productId);
-  const remoto = await conRetador(tienda, "retirar", { ref });
+  let remoto: any;
+  try {
+    remoto = await conRetador(tienda, "retirar", { ref });
+  } catch (e) {
+    await marcarProductoSiDesaparecio(p.id, e);
+    throw e;
+  }
   await servicio.from("Product").update({ status: "PAUSED", lastSyncedAt: ahora(), lastSyncStatus: "SUCCESS", lastSyncError: null, updatedAt: ahora() }).eq("id", p.id);
   await registrar(uid, tienda.id, p.id, "DELETE", "SUCCESS", "Producto retirado (pausado) en Retador");
   return { productId: p.id, estado: remoto.estado ?? "pausado" };

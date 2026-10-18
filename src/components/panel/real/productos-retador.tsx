@@ -196,7 +196,7 @@ function EditorProducto({
     <div className="space-y-2 rounded-lg border border-indigo-400/30 bg-indigo-500/[0.05] p-2.5">
       {producto.variantes.map((v) => {
         const precio = Number(precios[v.sku]);
-        const liq = tienda.tarifas && Number.isFinite(precio) && precio > 0 ? liquidacion(precio, v.costPrice + v.shippingCost, tienda.tarifas) : null;
+        const liq = tienda.tarifas && Number.isFinite(precio) && precio > 0 ? liquidacion(precio, v.costPrice + v.shippingCost, tienda.tarifas, v.costPrice) : null;
         return (
           <div key={v.sku} className="space-y-1 border-b border-white/[0.06] pb-2 text-[12px] last:border-0 last:pb-0">
             <p className="truncate font-medium">{v.title}</p>
