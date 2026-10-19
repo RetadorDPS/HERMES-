@@ -6,12 +6,13 @@
  * viene construida con los datos de ejemplo y aquí se sustituye por la real.
  */
 import { usePathname } from 'next/navigation';
-import { Factory, RefreshCw, Shield } from 'lucide-react';
+import { Factory, Shield } from 'lucide-react';
 import { sinBase } from '@/lib/ruta';
 import { CatalogoReal } from './real/catalogo-real';
 import { AdminReal, AjustesReal, PuestaEnMarchaReal } from './real/cuenta-real';
 import { FacturacionReal } from './real/facturacion-real';
 import { ImportarReal } from './real/importar-real';
+import { MonitorReal } from './real/monitor-real';
 import { PedidosReal, ProductosReal, TiendasReal } from './real/listados-real';
 import { PreciosReal } from './real/precios-real';
 import { Proximamente } from './real/proximamente';
@@ -32,16 +33,7 @@ export function PanelReal() {
   if (ruta === '/setup') return <PuestaEnMarchaReal />;
 
   if (ruta === '/import') return <ImportarReal />;
-  if (ruta === '/monitor')
-    return (
-      <Proximamente
-        titulo="Monitor de sincronización"
-        subtitulo="Cola de tareas y registro de cambios"
-        icono={RefreshCw}
-        queHara={['Ver cada cuánto se revisan precios y stock.', 'Consultar el registro de cambios aplicados a tus productos.', 'Reintentar las tareas que fallaron.']}
-        queFalta="Se activa cuando existan productos importados y las tareas programadas del servidor."
-      />
-    );
+  if (ruta === '/monitor') return <MonitorReal />;
   if (ruta === '/suppliers')
     return (
       <Proximamente

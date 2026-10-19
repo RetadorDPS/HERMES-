@@ -15,6 +15,7 @@
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { compararVariantes, vigilarVariantes } from "./cambios.ts";
 
 const GATEWAY = "https://api-sg.aliexpress.com/sync";
 const PROVEEDOR = "ALIEXPRESS";
@@ -74,6 +75,32 @@ async function firmar(params: Record<string, string>, secreto: string) {
   return [...new Uint8Array(firma)].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
+/** Variantes en el formato común de la ficha a partir de los SKU de AliExpress y su paquete (peso en kg, medidas en cm). */
+function variantesDeAli(skus: any[], paquete: any) {
+  const peso = numeroONulo(paquete?.gross_weight); // kg
+  const cm = (v: unknown) => (numeroONulo(v) !== null ? (numeroONulo(v) as number) * 10 : null);
+  return skus.map((s: any, i: number) => {
+    const propiedades = lista(s.ae_sku_property_dtos?.ae_sku_property_d_t_o ?? s.ae_sku_property_dtos);
+    const nombre = propiedades.map((p: any) => p.property_value_definition_name ?? p.sku_property_value).filter(Boolean).join(" · ") || String(s.sku_attr ?? `Variante ${i + 1}`);
+    const imagenSku = propiedades.map((p: any) => p.sku_image).find(Boolean) ?? null;
+    const stock = numeroONulo(s.sku_available_stock ?? s.sku_available_quantity);
+    return {
+      vid: s.sku_id ? String(s.sku_id) : null,
+      nombre,
+      nombreCompleto: nombre,
+      sku: s.sku_code ?? s.id ?? null,
+      clave: s.sku_attr ?? null,
+      precio: numeroONulo(s.offer_sale_price ?? s.sku_price),
+      pesoGramos: peso !== null ? Math.round(peso * 1000) : null,
+      largoMm: cm(paquete?.package_length),
+      anchoMm: cm(paquete?.package_width),
+      altoMm: cm(paquete?.package_height),
+      imagen: imagenSku,
+      stock: stock !== null ? [{ pais: null, total: stock, cj: null, fabrica: null }] : [],
+    };
+  });
+}
+
 const MENSAJES: Record<string, string> = {
   "15": "App Key o App Secret incorrectos",
   "16": "Firma inválida: revisa el App Secret",
@@ -91,21 +118,21 @@ Deno.serve(async (req) => {
 
   // ── Solo administradores, salvo la vía interna ──
   // La función central `importar-enlace` (que ya comprobó la sesión, el límite diario y que no haya otra importación en curso)
-  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar` y `envio`.
+  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar`, `envio` y `refrescar` (esta última, el monitor de precio y existencias).
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const cuerpo = await req.json().catch(() => ({}));
   let accion: string = cuerpo?.accion ?? "probar";
   const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   let uid = "";
   if (interna) {
-    if (accion !== "importar" && accion !== "envio") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
   } else {
     const { data: auth } = await servicio.auth.getUser(jwt);
     uid = auth?.user?.id ?? "";
     if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
     const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
     if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
-    if (accion === "importar") return responder({ ok: false, error: "Importar por enlace se pide desde la pantalla «Importar por enlace»" }, 403);
+    if (accion === "importar" || accion === "refrescar") return responder({ ok: false, error: "Esta acción solo se pide desde las funciones internas (importar-enlace y monitor-proveedor)" }, 403);
   }
 
   // Nombres de los secretos: ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET (como en el entorno original); también se acepta ALI_APP_KEY / ALI_APP_SECRET
@@ -404,6 +431,58 @@ Deno.serve(async (req) => {
     return await cerrarOk({ mensaje: "Sondeo del feed de AliExpress", avisos: lineas });
   }
 
+  /* ───────────────────────── refrescar (monitor: precio y existencias actuales; solo vía interna) ───────────────────────── */
+  // Una llamada a AliExpress por producto. Compara con la ficha guardada, la actualiza y devuelve los cambios que importan.
+  if (accion === "refrescar") {
+    const ids: string[] = (Array.isArray(cuerpo?.ids) ? cuerpo.ids : []).map(String).slice(0, 3);
+    if (!ids.length) return responder({ ok: false, error: "Indica al menos un artículo", ...diagnostico });
+    if (!ajustes.aliToken?.accessToken) return responder({ ok: false, error: "La cuenta de AliExpress todavía no está autorizada, así que no se pueden revisar los productos.", ...diagnostico });
+    const { data: items } = await servicio.from("CatalogItem").select("id,externalId,title").eq("provider", PROVEEDOR).in("id", ids);
+    const informe: any[] = [];
+    for (const item of items ?? []) {
+      const pid = String(item.externalId);
+      const { data: previa } = await servicio.from("CatalogItemDetail").select("ficha").eq("itemId", item.id).maybeSingle();
+      const ficha: any = previa?.ficha;
+      if (!Array.isArray(ficha?.variantes) || !ficha.variantes.length) {
+        informe.push({ id: item.id, ok: false, error: "Todavía no tiene la ficha completa" });
+        continue;
+      }
+      // El precio se pide para el mismo país con el que se guardó la ficha, para que las cifras sean comparables
+      const paisPrecio = String(ficha.precio?.pais ?? "ES").toUpperCase().slice(0, 2);
+      const r = await ali("aliexpress.ds.product.get", { product_id: pid, target_currency: MONEDA, target_language: "ES", country: paisPrecio, ship_to_country: paisPrecio });
+      if (!r.ok) {
+        informe.push({ id: item.id, ok: false, error: `Detalle: ${r.mensaje}`, codigoAli: r.codigo });
+        continue;
+      }
+      const nodo = r.datos?.aliexpress_ds_product_get_response?.result ?? r.datos?.aliexpress_ds_product_get_response ?? {};
+      const skus = lista(nodo.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? nodo.ae_item_sku_info_dtos);
+      const nuevas = variantesDeAli(skus, nodo.package_info_dto ?? {});
+      if (!nuevas.length) {
+        informe.push({ id: item.id, ok: false, posibleRetirada: true, error: "AliExpress no devolvió variantes: puede que el producto ya no esté disponible" });
+        continue;
+      }
+      const cambios = compararVariantes(vigilarVariantes(ficha.variantes), vigilarVariantes(nuevas));
+      const precios = nuevas.map((v) => v.precio).filter((p): p is number => p !== null);
+      const stockTotalAli = nuevas.reduce((a, v) => a + (v.stock[0]?.total ?? 0), 0);
+
+      ficha.variantes = nuevas;
+      if (precios.length) ficha.precio = { ...(ficha.precio ?? {}), moneda: MONEDA, min: Math.min(...precios), max: Math.max(...precios), pais: paisPrecio, consultado: ahoraIso() };
+      ficha.fuentes = { ...(ficha.fuentes ?? {}), variantes: true, inventario: stockTotalAli > 0 };
+      ficha.actualizado = ahoraIso();
+      const { error: eDet } = await servicio.from("CatalogItemDetail").update({ ficha, fetchedAt: ahoraIso() }).eq("itemId", item.id);
+      if (eDet) {
+        informe.push({ id: item.id, ok: false, error: `No se pudo guardar la ficha: ${eDet.message}` });
+        continue;
+      }
+      const tarjeta: Record<string, unknown> = { updatedAt: ahoraIso(), lastSyncedAt: ahoraIso() };
+      if (precios.length) tarjeta.costPrice = Math.min(...precios);
+      if (stockTotalAli > 0) tarjeta.stock = stockTotalAli;
+      await servicio.from("CatalogItem").update(tarjeta).eq("id", item.id);
+      informe.push({ id: item.id, ok: true, titulo: ficha.titulo ?? item.title, variantes: nuevas.length, cambios });
+    }
+    return await cerrarOk({ mensaje: `${informe.filter((i) => i.ok).length} de ${informe.length} productos revisados`, informe });
+  }
+
   /* ───────────────────────── importar (un producto por su identificador; solo vía interna) ───────────────────────── */
   // Si el producto no está en el catálogo común, crea una fila mínima y sigue con la ficha completa (acción «detalle»), que la rellena.
   // Si AliExpress no devuelve el producto, la fila nueva se borra: no queda nada a medias.
@@ -454,26 +533,7 @@ Deno.serve(async (req) => {
       const props = lista(nodo.ae_item_properties?.ae_item_property ?? nodo.ae_item_properties);
       const imagenes = sinRepetidos(lista(media.image_urls).map(String));
       const peso = numeroONulo(paquete.gross_weight); // kg
-      const variantes = skus.map((s: any, i: number) => {
-        const propiedades = lista(s.ae_sku_property_dtos?.ae_sku_property_d_t_o ?? s.ae_sku_property_dtos);
-        const nombre = propiedades.map((p: any) => p.property_value_definition_name ?? p.sku_property_value).filter(Boolean).join(" · ") || String(s.sku_attr ?? `Variante ${i + 1}`);
-        const imagenSku = propiedades.map((p: any) => p.sku_image).find(Boolean) ?? null;
-        const stock = numeroONulo(s.sku_available_stock ?? s.sku_available_quantity);
-        return {
-          vid: s.sku_id ? String(s.sku_id) : null,
-          nombre,
-          nombreCompleto: nombre,
-          sku: s.sku_code ?? s.id ?? null,
-          clave: s.sku_attr ?? null,
-          precio: numeroONulo(s.offer_sale_price ?? s.sku_price),
-          pesoGramos: peso !== null ? Math.round(peso * 1000) : null,
-          largoMm: numeroONulo(paquete.package_length) !== null ? (numeroONulo(paquete.package_length) as number) * 10 : null,
-          anchoMm: numeroONulo(paquete.package_width) !== null ? (numeroONulo(paquete.package_width) as number) * 10 : null,
-          altoMm: numeroONulo(paquete.package_height) !== null ? (numeroONulo(paquete.package_height) as number) * 10 : null,
-          imagen: imagenSku,
-          stock: stock !== null ? [{ pais: null, total: stock, cj: null, fabrica: null }] : [],
-        };
-      });
+      const variantes = variantesDeAli(skus, paquete);
       if (filaNuevaId && filaNuevaId === item.id && !variantes.length) {
         await servicio.from("CatalogItem").delete().eq("id", item.id);
         informe.push({ id: item.id, ok: false, error: "AliExpress no devolvió variantes de ese producto: puede estar retirado o no estar disponible para el dropshipping." });

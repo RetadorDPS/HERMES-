@@ -17,6 +17,7 @@
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { compararVariantes, vigilarVariantes } from "./cambios.ts";
 
 const BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 const PROVEEDOR = "CJ_DROPSHIPPING";
@@ -129,6 +130,55 @@ function aplanarCategorias(nodos: any[], ruta: string[] = []): { id: string; nom
 }
 const slug = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60);
 
+/** Almacenes, existencias por variante y países de origen a partir de la respuesta de inventario de CJ (null si CJ no la dio). */
+function inventarioDeCj(datos: any) {
+  const lista: any[] = datos ? (Array.isArray(datos) ? datos : Array.isArray(datos?.inventories) ? datos.inventories : extraerLista(datos)) : [];
+  const almacenes = lista.map((w: any) => ({
+    vid: w.vid ?? null,
+    almacen: w.areaEn ?? w.warehouseName ?? w.storageName ?? null,
+    pais: w.countryCode ?? null,
+    total: numeroONulo(w.totalInventoryNum ?? w.totalInventory ?? w.totalNum),
+    cj: numeroONulo(w.cjInventoryNum ?? w.cjInventory),
+    fabrica: numeroONulo(w.factoryInventoryNum ?? w.factoryInventory),
+  }));
+  // Existencias de cada variante por país de almacén
+  const invVariantes: any[] = datos && Array.isArray(datos?.variantInventories) ? datos.variantInventories : [];
+  // Países con stock (almacenes de origen), de mayor a menor existencias
+  const porPaisStock = new Map<string, number>();
+  for (const a of almacenes) if (a.pais) porPaisStock.set(String(a.pais).toUpperCase(), (porPaisStock.get(String(a.pais).toUpperCase()) ?? 0) + (a.total ?? 0));
+  const origenes = [...porPaisStock.entries()].map(([pais, total]) => ({ pais, total })).sort((x, y) => y.total - x.total);
+  return { almacenes, invVariantes, origenes };
+}
+
+/** Variantes en el formato común de la ficha, con su precio y sus existencias por país. */
+function variantesDeCj(variantesCrudas: any[], invVariantes: any[]) {
+  const stockDeVariante = (vid: string | null) =>
+    vid
+      ? (invVariantes.find((x: any) => String(x.vid) === vid)?.inventory ?? []).map((w: any) => ({ pais: w.countryCode ?? null, total: numeroONulo(w.totalInventory), cj: numeroONulo(w.cjInventory), fabrica: numeroONulo(w.factoryInventory) }))
+      : [];
+  return variantesCrudas.map((v: any) => {
+    const vid = v.vid ? String(v.vid) : null;
+    return {
+      vid,
+      nombre: String(v.variantKey ?? v.variantNameEn ?? v.variantName ?? "Variante"),
+      nombreCompleto: String(v.variantNameEn ?? v.variantName ?? ""),
+      sku: v.variantSku ?? null,
+      clave: v.variantKey ?? null,
+      precio: numeroONulo(v.variantSellPrice),
+      pesoGramos: numeroONulo(v.variantWeight),
+      largoMm: numeroONulo(v.variantLength),
+      anchoMm: numeroONulo(v.variantWidth),
+      altoMm: numeroONulo(v.variantHeight),
+      volumen: numeroONulo(v.variantVolume),
+      imagen: v.variantImage ?? null,
+      propiedad: v.variantProperty ?? null,
+      estandar: v.variantStandard ?? null,
+      stock: stockDeVariante(vid),
+    };
+  });
+}
+
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return responder({ ok: false, error: "Usa POST" }, 405);
@@ -137,20 +187,20 @@ Deno.serve(async (req) => {
 
   // ── Solo administradores, salvo la vía interna ──
   // La función central `importar-enlace` (que ya comprobó la sesión, el límite diario y que no haya otra importación en curso)
-  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar` y `envio`.
+  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar`, `envio` y `refrescar` (esta última, el monitor de precio y existencias).
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const cuerpo = await req.json().catch(() => ({}));
   let accion: string = cuerpo?.accion ?? "probar";
   const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (interna) {
-    if (accion !== "importar" && accion !== "envio") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
   } else {
     const { data: auth } = await servicio.auth.getUser(jwt);
     const uid = auth?.user?.id;
     if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
     const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
     if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
-    if (accion === "importar") return responder({ ok: false, error: "Importar por enlace se pide desde la pantalla «Importar por enlace»" }, 403);
+    if (accion === "importar" || accion === "refrescar") return responder({ ok: false, error: "Esta acción solo se pide desde las funciones internas (importar-enlace y monitor-proveedor)" }, 403);
   }
 
   const claveCruda = Deno.env.get("CJ_API_KEY") ?? "";
@@ -351,6 +401,63 @@ Deno.serve(async (req) => {
     });
   }
 
+  /* ───────────────────────────── refrescar (monitor: precio y existencias actuales; solo vía interna) ───────────────────────────── */
+  // Dos llamadas a CJ por producto (variantes + inventario). Compara con la ficha guardada, la actualiza y devuelve los cambios que importan.
+  if (accion === "refrescar") {
+    const ids: string[] = (Array.isArray(cuerpo?.ids) ? cuerpo.ids : []).map(String).slice(0, 3);
+    if (!ids.length) return responder({ ok: false, error: "Indica al menos un artículo", ...diagnostico });
+    const { data: items } = await servicio.from("CatalogItem").select("id,externalId,title").eq("provider", PROVEEDOR).in("id", ids);
+    const informe: any[] = [];
+    for (const item of items ?? []) {
+      const pid = String(item.externalId);
+      const { data: previa } = await servicio.from("CatalogItemDetail").select("ficha").eq("itemId", item.id).maybeSingle();
+      const ficha: any = previa?.ficha;
+      if (!Array.isArray(ficha?.variantes) || !ficha.variantes.length) {
+        informe.push({ id: item.id, ok: false, error: "Todavía no tiene la ficha completa" });
+        continue;
+      }
+      let rv = await cj("/product/variant/query", { consulta: { pid } });
+      if (!rv.ok) rv = await cj("/product/variant/queryByPid", { consulta: { pid } });
+      if (!rv.ok) {
+        informe.push({ id: item.id, ok: false, error: `Variantes: ${rv.mensaje}` });
+        continue;
+      }
+      const variantesCrudas: any[] = Array.isArray(rv.datos) ? rv.datos : extraerLista(rv.datos);
+      if (!variantesCrudas.length) {
+        informe.push({ id: item.id, ok: false, posibleRetirada: true, error: "CJ no devolvió ninguna variante: puede que el producto ya no exista" });
+        continue;
+      }
+      const ri = await cj("/product/stock/getInventoryByPid", { consulta: { pid } });
+      if (!ri.ok) {
+        informe.push({ id: item.id, ok: false, error: `Inventario: ${ri.mensaje}` });
+        continue;
+      }
+      const { almacenes, invVariantes, origenes } = inventarioDeCj(ri.datos);
+      const nuevas = variantesDeCj(variantesCrudas, invVariantes);
+      const cambios = compararVariantes(vigilarVariantes(ficha.variantes), vigilarVariantes(nuevas));
+      const precios = nuevas.map((v) => v.precio).filter((p): p is number => p !== null);
+
+      ficha.variantes = nuevas;
+      ficha.origenes = origenes;
+      ficha.almacenes = almacenes.filter((a) => !a.vid);
+      if (precios.length) ficha.precio = { ...(ficha.precio ?? {}), moneda: "USD", min: Math.min(...precios), max: Math.max(...precios) };
+      ficha.fuentes = { ...(ficha.fuentes ?? {}), variantes: true, inventario: true };
+      ficha.actualizado = ahoraIso();
+      const { error: eDet } = await servicio.from("CatalogItemDetail").update({ ficha, fetchedAt: ahoraIso() }).eq("itemId", item.id);
+      if (eDet) {
+        informe.push({ id: item.id, ok: false, error: `No se pudo guardar la ficha: ${eDet.message}` });
+        continue;
+      }
+      for (const o of origenes) if ((o.total ?? 0) > 0 && o.pais) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: [pid], p_almacen: String(o.pais).toUpperCase() });
+      const tarjeta: Record<string, unknown> = { updatedAt: ahoraIso(), lastSyncedAt: ahoraIso() };
+      if (precios.length) tarjeta.costPrice = Math.min(...precios);
+      if (origenes.length) tarjeta.stock = origenes.reduce((a, o) => a + (o.total ?? 0), 0);
+      await servicio.from("CatalogItem").update(tarjeta).eq("id", item.id);
+      informe.push({ id: item.id, ok: true, titulo: ficha.titulo ?? item.title, variantes: nuevas.length, cambios });
+    }
+    return await cerrarOk({ mensaje: `${informe.filter((i) => i.ok).length} de ${informe.length} productos revisados`, informe });
+  }
+
   /* ───────────────────────────── importar (un producto por su identificador; solo vía interna) ───────────────────────────── */
   // Si el producto no está en el catálogo común, lo crea con lo que dice CJ y sigue con la ficha completa (acción «detalle»).
   // Si ya estaba, solo completa su ficha. Un producto que CJ no devuelve no deja nada a medias.
@@ -444,50 +551,10 @@ Deno.serve(async (req) => {
       const media = puntuadas.length ? Math.round((puntuadas.reduce((a, r) => a + (r.puntuacion as number), 0) / puntuadas.length) * 100) / 100 : null;
       const totalResenas = numeroONulo((rr.ok ? (rr.datos as any)?.total : null)) ?? resenas.length;
 
-      // ── Inventario normalizado (por variante, si trae identificador) ──
-      const inventarioLista: any[] = ri.ok ? (Array.isArray(ri.datos) ? ri.datos : Array.isArray((ri.datos as any)?.inventories) ? (ri.datos as any).inventories : extraerLista(ri.datos)) : [];
-      const almacenes = inventarioLista.map((w: any) => ({
-        vid: w.vid ?? null,
-        almacen: w.areaEn ?? w.warehouseName ?? w.storageName ?? null,
-        pais: w.countryCode ?? null,
-        total: numeroONulo(w.totalInventoryNum ?? w.totalInventory ?? w.totalNum),
-        cj: numeroONulo(w.cjInventoryNum ?? w.cjInventory),
-        fabrica: numeroONulo(w.factoryInventoryNum ?? w.factoryInventory),
-      }));
-
-      // Existencias de cada variante por país de almacén
-      const invVariantes: any[] = ri.ok && Array.isArray((ri.datos as any)?.variantInventories) ? (ri.datos as any).variantInventories : [];
-      const stockDeVariante = (vid: string | null) =>
-        vid
-          ? (invVariantes.find((x: any) => String(x.vid) === vid)?.inventory ?? []).map((w: any) => ({ pais: w.countryCode ?? null, total: numeroONulo(w.totalInventory), cj: numeroONulo(w.cjInventory), fabrica: numeroONulo(w.factoryInventory) }))
-          : [];
-
-      // Países con stock (almacenes de origen), de mayor a menor existencias
-      const porPaisStock = new Map<string, number>();
-      for (const a of almacenes) if (a.pais) porPaisStock.set(String(a.pais).toUpperCase(), (porPaisStock.get(String(a.pais).toUpperCase()) ?? 0) + (a.total ?? 0));
-      const origenes = [...porPaisStock.entries()].map(([pais, total]) => ({ pais, total })).sort((x, y) => y.total - x.total);
-
+      // ── Inventario y variantes normalizados ──
+      const { almacenes, invVariantes, origenes } = inventarioDeCj(ri.ok ? ri.datos : null);
       const imagenes = sinRepetidos([...listaDeTextos(prod.productImageSet), ...listaDeTextos(prod.productImage), ...listaDeTextos(prod.bigImage)]);
-      const variantes = variantesCrudas.map((v: any) => {
-        const vid = v.vid ? String(v.vid) : null;
-        return {
-          vid,
-          nombre: String(v.variantKey ?? v.variantNameEn ?? v.variantName ?? "Variante"),
-          nombreCompleto: String(v.variantNameEn ?? v.variantName ?? ""),
-          sku: v.variantSku ?? null,
-          clave: v.variantKey ?? null,
-          precio: numeroONulo(v.variantSellPrice),
-          pesoGramos: numeroONulo(v.variantWeight),
-          largoMm: numeroONulo(v.variantLength),
-          anchoMm: numeroONulo(v.variantWidth),
-          altoMm: numeroONulo(v.variantHeight),
-          volumen: numeroONulo(v.variantVolume),
-          imagen: v.variantImage ?? null,
-          propiedad: v.variantProperty ?? null,
-          estandar: v.variantStandard ?? null,
-          stock: stockDeVariante(vid),
-        };
-      });
+      const variantes = variantesDeCj(variantesCrudas, invVariantes);
       const precios = variantes.map((v) => v.precio).filter((p): p is number => p !== null);
 
       const ficha = {
