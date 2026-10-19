@@ -141,3 +141,37 @@ export async function revisarAhora(): Promise<ResultadoRevision> {
     ocupado: Boolean(data.ocupado),
   };
 }
+
+/* ───────────────────────── Proveedores y APIs ───────────────────────── */
+
+export interface EstadoProveedor {
+  proveedor: 'CJ_DROPSHIPPING' | 'ALIEXPRESS';
+  nombre: string;
+  /** CONNECTED = responde · ERROR = falló la última comprobación · otro = sin comprobar */
+  estado: string;
+  ultimaComprobacion: Date | null;
+  /** Solo AliExpress: hace falta una cuenta autorizada para leer fichas y cotizar envío */
+  cuentaAutorizada: boolean;
+  /** Solo el administrador los recibe */
+  ultimoError: string | null;
+  llamadasMes: number | null;
+}
+
+/** Estado de CJ y AliExpress. Nunca incluye claves ni tokens: la función de la base de datos solo devuelve datos inocuos. */
+export async function obtenerEstadoProveedores(): Promise<EstadoProveedor[]> {
+  const { data, error } = await supabase().rpc('estado_proveedores');
+  if (error) throw new Error(error.message);
+  const filas = (data ?? []) as any[];
+  return (['CJ_DROPSHIPPING', 'ALIEXPRESS'] as const).map((p) => {
+    const f = filas.find((x) => x.provider === p);
+    return {
+      proveedor: p,
+      nombre: NOMBRE_PROVEEDOR[p],
+      estado: f?.estado ?? 'SIN_DATOS',
+      ultimaComprobacion: fechaUtc(f?.ultima_comprobacion),
+      cuentaAutorizada: Boolean(f?.cuenta_autorizada),
+      ultimoError: f?.ultimo_error ?? null,
+      llamadasMes: f?.llamadas_mes === null || f?.llamadas_mes === undefined ? null : Number(f.llamadas_mes),
+    };
+  });
+}

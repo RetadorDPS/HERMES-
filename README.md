@@ -1,5 +1,7 @@
 # DropshipPilot — Clon full-stack de AutoDS (dropshipping automatizado)
 
+> **Aviso:** este documento describe la versión COMPLETA con servidor propio, que NO es la que está publicada hoy. Para saber qué funciona de verdad, lee [`docs/estado-real.md`](./docs/estado-real.md).
+
 Plataforma SaaS completa de automatización de dropshipping, construida con **Next.js 14 + TypeScript + Prisma + PostgreSQL + BullMQ/Redis + FastAPI/Playwright**.
 
 Extiende información completa de productos de **AliExpress, Amazon, CJ Dropshipping, Alibaba y Temu** (variantes, stock, imágenes HD, reseñas y envíos), los publica en **Shopify y WooCommerce**, y mantiene precio y stock sincronizados **24/7** con una cola de workers que además envía los pedidos al proveedor de forma automática.

@@ -6,7 +6,7 @@
  * viene construida con los datos de ejemplo y aquí se sustituye por la real.
  */
 import { usePathname } from 'next/navigation';
-import { Factory, Shield } from 'lucide-react';
+import { Shield } from 'lucide-react';
 import { sinBase } from '@/lib/ruta';
 import { CatalogoReal } from './real/catalogo-real';
 import { AdminReal, AjustesReal, PuestaEnMarchaReal } from './real/cuenta-real';
@@ -15,6 +15,7 @@ import { ImportarReal } from './real/importar-real';
 import { MonitorReal } from './real/monitor-real';
 import { PedidosReal, ProductosReal, TiendasReal } from './real/listados-real';
 import { PreciosReal } from './real/precios-real';
+import { ProveedoresReal } from './real/proveedores-real';
 import { Proximamente } from './real/proximamente';
 import { ResumenReal } from './real/resumen-real';
 
@@ -34,16 +35,7 @@ export function PanelReal() {
 
   if (ruta === '/import') return <ImportarReal />;
   if (ruta === '/monitor') return <MonitorReal />;
-  if (ruta === '/suppliers')
-    return (
-      <Proximamente
-        titulo="Proveedores y APIs"
-        subtitulo="Conecta las APIs oficiales de CJ y AliExpress"
-        icono={Factory}
-        queHara={['Guardar tus claves de forma cifrada (nunca visibles desde el navegador).', 'Probar la conexión con cada proveedor.', 'Usar tu cuenta para comprar los pedidos automáticamente.']}
-        queFalta="La conexión con los proveedores se construye en la siguiente fase, uno a uno y con pocas llamadas de prueba."
-      />
-    );
+  if (ruta === '/suppliers') return <ProveedoresReal />;
   if (ruta === '/proxies')
     return (
       <Proximamente

@@ -1,5 +1,7 @@
 # Catálogo servido por la plataforma
 
+> **Aviso:** este documento describe la versión COMPLETA con servidor propio, que NO es la que está publicada hoy. Para saber qué funciona de verdad, lee [`docs/estado-real.md`](./docs/estado-real.md).
+
 Esta es la pieza que convierte el panel en un producto que se puede vender: **el cliente entra y
 encuentra un escaparate lleno**, con categorías con imagen, precios finales y beneficio calculados
 con *su* regla de margen, y un botón de importar que funciona a la primera.

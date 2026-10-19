@@ -1,5 +1,7 @@
 # 🚀 Despliegue en un solo comando (Docker)
 
+> **Aviso:** este documento describe la versión COMPLETA con servidor propio, que NO es la que está publicada hoy. Para saber qué funciona de verdad, lee [`docs/estado-real.md`](./docs/estado-real.md).
+
 Esta es la vía **automática**: HTTPS con Let's Encrypt, renovación de certificados,
 esquema de base de datos, workers 24/7 (sync, pedidos y catálogo) y copias de seguridad diarias, todo levantado
 con un comando.

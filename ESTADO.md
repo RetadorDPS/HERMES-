@@ -1,5 +1,7 @@
 # DropshipPilot — Estado real del proyecto
 
+> **Aviso:** este documento describe la versión COMPLETA con servidor propio, que NO es la que está publicada hoy. Para saber qué funciona de verdad, lee [`docs/estado-real.md`](./docs/estado-real.md).
+
 Fecha: 15/10/2026 · Autor: el asistente de Arena · **sin adornos: lo que está probado va con su número, lo que no, se dice**
 
 ---

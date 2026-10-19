@@ -1,5 +1,7 @@
 # 📍 GUÍA: dónde ves todo esto
 
+> **Aviso:** este documento describe la versión COMPLETA con servidor propio, que NO es la que está publicada hoy. Para saber qué funciona de verdad, lee [`docs/estado-real.md`](./docs/estado-real.md).
+
 No es “solo código en un archivo”. Hay **tres formas** de verlo funcionando, de la más rápida a la más completa.
 
 ---

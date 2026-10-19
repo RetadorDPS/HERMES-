@@ -1,5 +1,7 @@
 # 🎯 ¿Está listo para producción? — Auditoría honesta
 
+> **Aviso:** este documento describe la versión COMPLETA con servidor propio, que NO es la que está publicada hoy. Para saber qué funciona de verdad, lee [`docs/estado-real.md`](./docs/estado-real.md).
+
 Fecha: 15/10/2026 · Autor: la IA que ha construido y probado el proyecto.
 Sin marketing: lo que sigue es lo que **se ha ejecutado y comprobado** y lo que no.
 
