@@ -80,7 +80,7 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Productos en Retador</CardTitle>
         <CardDescription>
-          {productos.length ? `${productos.length} publicados desde DropshipPilot. El neto es una estimación con las tarifas de Retador.` : 'Todavía no has publicado ninguno. Ábrelos desde el catálogo con «Publicar en Retador».'}
+          {productos.length ? `${productos.length} publicados desde DropshipPilot. El neto es una estimación con las tarifas de Retador.` : 'Todavía no has publicado ninguno. Ábrelos desde el catálogo con «Publicar en…» y elige Retador.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

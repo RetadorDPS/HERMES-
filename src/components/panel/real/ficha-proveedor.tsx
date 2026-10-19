@@ -16,6 +16,7 @@ import { supabase } from '@/lib/supabase/cliente';
 import { obtenerPerfil } from '@/lib/real/datos';
 import { nombrePais, PAISES_FRECUENTES, textoPopularidad } from '@/lib/paises';
 import { ProviderBadge } from '@/app/(dashboard)/catalog/catalog-card';
+import { ElegirDestino, type DestinoPublicacion } from './destino-publicacion';
 import { PublicarEnRetador } from './publicar-retador';
 
 /* ───────────── utilidades de presentación ───────────── */
@@ -83,7 +84,9 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
   const [trabajando, setTrabajando] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [otroPais, setOtroPais] = useState('');
-  const [publicando, setPublicando] = useState(false);
+  // Primero se elige el destino; solo después se abre la pantalla de publicar de ese destino
+  const [eligiendoDestino, setEligiendoDestino] = useState(false);
+  const [publicando, setPublicando] = useState<DestinoPublicacion | null>(null);
 
   const cargar = useCallback(async (id: string) => {
     setCargando(true);
@@ -586,14 +589,24 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
         </div>
 
         <footer className="border-t border-white/[0.07] px-4 py-2.5">
-          <Button className="w-full" variant="gradient" disabled={!item || !ficha} onClick={() => setPublicando(true)}>
-            Publicar en Retador
+          <Button className="w-full" variant="gradient" disabled={!item || !ficha} onClick={() => setEligiendoDestino(true)}>
+            Publicar en…
           </Button>
           <p className="mt-1 text-center text-[11px] text-muted-foreground">
-            {ficha ? 'Calcula tu beneficio real puesto en Cuba y lo publica en tu tienda de Retador.' : 'Completa antes la ficha (variantes, peso y envío) para poder publicar.'}
+            {ficha ? 'Elige a qué tienda lo publicas. Con Retador, calcula tu beneficio real puesto en Cuba.' : 'Completa antes la ficha (variantes, peso y envío) para poder publicar.'}
           </p>
         </footer>
-        {publicando && item && <PublicarEnRetador itemId={item.id} titulo={ficha?.titulo ?? item.title} onClose={() => setPublicando(false)} />}
+        {eligiendoDestino && item && (
+          <ElegirDestino
+            titulo={ficha?.titulo ?? item.title}
+            onClose={() => setEligiendoDestino(false)}
+            onElegir={(destino) => {
+              setEligiendoDestino(false);
+              setPublicando(destino);
+            }}
+          />
+        )}
+        {publicando === 'RETADOR' && item && <PublicarEnRetador itemId={item.id} titulo={ficha?.titulo ?? item.title} onClose={() => setPublicando(null)} />}
       </aside>
     </div>
   );
