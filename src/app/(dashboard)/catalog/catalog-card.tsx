@@ -33,10 +33,13 @@ export function CatalogCard({
   item,
   onOpen,
   onImport,
+  etiquetaImportar = 'Importar',
 }: {
   item: CatalogRow;
   onOpen: (item: CatalogRow) => void;
   onImport: (item: CatalogRow) => void;
+  /** Texto del botón principal (en «Importar por enlace», donde el producto ya está importado, dice «Publicar»). */
+  etiquetaImportar?: string;
 }) {
   const sales = item.ordersCount ?? 0;
   const estrellas = item.rating ? Math.round(item.rating * 10) / 10 : null;
@@ -150,7 +153,7 @@ export function CatalogCard({
 
           <div className="flex items-center gap-2">
             <Button size="sm" variant="gradient" className="flex-1" onClick={() => onImport(item)}>
-              Importar
+              {etiquetaImportar}
             </Button>
             <Button size="sm" variant="outline" className="hidden sm:inline-flex" onClick={() => onOpen(item)}>
               Ver ficha

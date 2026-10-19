@@ -6,11 +6,12 @@
  * viene construida con los datos de ejemplo y aquí se sustituye por la real.
  */
 import { usePathname } from 'next/navigation';
-import { Download, Factory, RefreshCw, Shield } from 'lucide-react';
+import { Factory, RefreshCw, Shield } from 'lucide-react';
 import { sinBase } from '@/lib/ruta';
 import { CatalogoReal } from './real/catalogo-real';
 import { AdminReal, AjustesReal, PuestaEnMarchaReal } from './real/cuenta-real';
 import { FacturacionReal } from './real/facturacion-real';
+import { ImportarReal } from './real/importar-real';
 import { PedidosReal, ProductosReal, TiendasReal } from './real/listados-real';
 import { PreciosReal } from './real/precios-real';
 import { Proximamente } from './real/proximamente';
@@ -30,16 +31,7 @@ export function PanelReal() {
   if (ruta === '/admin') return <AdminReal />;
   if (ruta === '/setup') return <PuestaEnMarchaReal />;
 
-  if (ruta === '/import')
-    return (
-      <Proximamente
-        titulo="Importar por enlace"
-        subtitulo="Trae un producto de un proveedor pegando su dirección"
-        icono={Download}
-        queHara={['Pegar el enlace de un producto de CJ o AliExpress.', 'Ver variantes, fotos, envío y tu precio final con tu regla de margen.', 'Publicarlo en tu tienda con un clic.']}
-        queFalta="Necesita conectar las APIs oficiales de los proveedores (siguiente fase). Mientras tanto, el catálogo común y las reglas de margen ya funcionan."
-      />
-    );
+  if (ruta === '/import') return <ImportarReal />;
   if (ruta === '/monitor')
     return (
       <Proximamente

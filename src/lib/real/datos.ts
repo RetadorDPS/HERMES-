@@ -507,6 +507,15 @@ export async function reglaPredeterminada() {
   return reglas.find((r) => r.isDefault) ?? reglas[0] ?? null;
 }
 
+/** Una tarjeta del catálogo por su identificador, con precio de venta y beneficio de la regla del usuario (para enseñar un producto recién importado). */
+export async function consultarItemCatalogo(id: string, destino?: string): Promise<CatalogRow | null> {
+  const { data, error } = await supabase().from('CatalogItem').select(COL_CATALOGO).eq('id', id).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const [regla, tasas] = await Promise.all([reglaPredeterminada(), tasasEnEuros()]);
+  return conPreciosEnEuros([mapCatalogo(data)], regla, tasas, destino ?? destinoGuardado())[0] ?? null;
+}
+
 /** Consulta el catálogo común (CatalogItem) con filtros, orden, facetas y precio final con la regla del cliente. */
 export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<CatalogResult> {
   const c = supabase();

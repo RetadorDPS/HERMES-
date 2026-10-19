@@ -89,16 +89,24 @@ Deno.serve(async (req) => {
 
   const servicio = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 
-  // ── Solo administradores ──
+  // ── Solo administradores, salvo la vía interna ──
+  // La función central `importar-enlace` (que ya comprobó la sesión, el límite diario y que no haya otra importación en curso)
+  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar` y `envio`.
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const { data: auth } = await servicio.auth.getUser(jwt);
-  const uid = auth?.user?.id;
-  if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
-  const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
-  if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
-
   const cuerpo = await req.json().catch(() => ({}));
-  const accion: string = cuerpo?.accion ?? "probar";
+  let accion: string = cuerpo?.accion ?? "probar";
+  const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  let uid = "";
+  if (interna) {
+    if (accion !== "importar" && accion !== "envio") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+  } else {
+    const { data: auth } = await servicio.auth.getUser(jwt);
+    uid = auth?.user?.id ?? "";
+    if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
+    const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
+    if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
+    if (accion === "importar") return responder({ ok: false, error: "Importar por enlace se pide desde la pantalla «Importar por enlace»" }, 403);
+  }
 
   // Nombres de los secretos: ALIEXPRESS_APP_KEY / ALIEXPRESS_APP_SECRET (como en el entorno original); también se acepta ALI_APP_KEY / ALI_APP_SECRET
   const appKey = (Deno.env.get("ALIEXPRESS_APP_KEY") ?? Deno.env.get("ALI_APP_KEY") ?? "").trim();
@@ -396,6 +404,32 @@ Deno.serve(async (req) => {
     return await cerrarOk({ mensaje: "Sondeo del feed de AliExpress", avisos: lineas });
   }
 
+  /* ───────────────────────── importar (un producto por su identificador; solo vía interna) ───────────────────────── */
+  // Si el producto no está en el catálogo común, crea una fila mínima y sigue con la ficha completa (acción «detalle»), que la rellena.
+  // Si AliExpress no devuelve el producto, la fila nueva se borra: no queda nada a medias.
+  let filaNuevaId: string | null = null;
+  let actualizarTarjeta = false;
+  if (accion === "importar") {
+    const pid = String(cuerpo?.pid ?? "").trim();
+    if (!/^\d{8,20}$/.test(pid)) return responder({ ok: false, error: "El identificador del producto de AliExpress no es válido", ...diagnostico });
+    if (!ajustes.aliToken?.accessToken) return responder({ ok: false, error: "La cuenta de AliExpress todavía no está autorizada, así que no se pueden leer fichas. El administrador debe pulsar «Autorizar» en Administración.", ...diagnostico });
+    const { data: existente } = await servicio.from("CatalogItem").select("id").eq("provider", PROVEEDOR).eq("externalId", pid).maybeSingle();
+    let idItem: string | undefined = existente?.id;
+    if (!idItem) {
+      const { data: creado, error: eNuevo } = await servicio
+        .from("CatalogItem")
+        .insert({ provider: PROVEEDOR, externalId: pid, title: "Producto AliExpress", description: "", currency: MONEDA, costPrice: 0, images: [], tags: [], rawPayload: {}, sourceUrl: `https://www.aliexpress.com/item/${pid}.html`, source: "api", lastSyncedAt: ahoraIso(), updatedAt: ahoraIso() })
+        .select("id")
+        .single();
+      if (eNuevo || !creado) return responder({ ok: false, error: `No se pudo guardar el producto en el catálogo: ${eNuevo?.message ?? "sin respuesta"}`, ...diagnostico });
+      idItem = creado.id as string;
+      filaNuevaId = idItem;
+    }
+    cuerpo.ids = [idItem];
+    actualizarTarjeta = true;
+    accion = "detalle"; // sigue con la ficha completa
+  }
+
   /* ───────────────────────── detalle (ficha completa) ───────────────────────── */
   if (accion === "detalle") {
     const ids: string[] = (Array.isArray(cuerpo?.ids) ? cuerpo.ids : []).map(String).slice(0, 2);
@@ -407,6 +441,7 @@ Deno.serve(async (req) => {
       const pid = String(item.externalId);
       const r = await ali("aliexpress.ds.product.get", { product_id: pid, target_currency: MONEDA, target_language: "ES", country: pais, ship_to_country: pais });
       if (!r.ok) {
+        if (filaNuevaId && filaNuevaId === item.id) await servicio.from("CatalogItem").delete().eq("id", item.id);
         informe.push({ id: item.id, ok: false, error: `Detalle: ${r.mensaje}`, codigoAli: r.codigo });
         continue;
       }
@@ -439,6 +474,11 @@ Deno.serve(async (req) => {
           stock: stock !== null ? [{ pais: null, total: stock, cj: null, fabrica: null }] : [],
         };
       });
+      if (filaNuevaId && filaNuevaId === item.id && !variantes.length) {
+        await servicio.from("CatalogItem").delete().eq("id", item.id);
+        informe.push({ id: item.id, ok: false, error: "AliExpress no devolvió variantes de ese producto: puede estar retirado o no estar disponible para el dropshipping." });
+        continue;
+      }
       const precios = variantes.map((v) => v.precio).filter((p): p is number => p !== null);
       const stockTotal = variantes.reduce((a, v) => a + (v.stock[0]?.total ?? 0), 0);
       const valoracion = numeroONulo(base.avg_evaluation_rating);
@@ -479,6 +519,7 @@ Deno.serve(async (req) => {
       };
       const { error: eDet } = await servicio.from("CatalogItemDetail").upsert({ itemId: item.id, ficha, raw: { ...((previa?.raw as any) ?? {}), producto: nodo }, fetchedAt: ahoraIso() }, { onConflict: "itemId" });
       if (eDet) {
+        if (filaNuevaId && filaNuevaId === item.id) await servicio.from("CatalogItem").delete().eq("id", item.id);
         informe.push({ id: item.id, ok: false, error: `No se pudo guardar la ficha: ${eDet.message}` });
         continue;
       }
@@ -489,6 +530,11 @@ Deno.serve(async (req) => {
       if (valoracion !== null) cambios.rating = valoracion;
       // La tarjeta muestra el coste de la variante más barata de la ficha (el mismo número que ve el vendedor al abrir el producto)
       if (precios.length) cambios.costPrice = Math.min(...precios);
+      // Producto importado por enlace: la tarjeta toma también el título y la categoría de la ficha
+      if (actualizarTarjeta) {
+        if (ficha.titulo) cambios.title = ficha.titulo.slice(0, 250);
+        if (base.category_id) cambios.categoryId = String(base.category_id);
+      }
       await servicio.from("CatalogItem").update(cambios).eq("id", item.id);
       informe.push({ id: item.id, ok: true, titulo: ficha.titulo, imagenes: imagenes.length, variantes: variantes.length, almacenes: 0, origenes: [], resenas: 0, avisos: ficha.avisos, formaProducto: Object.keys(nodo) });
     }

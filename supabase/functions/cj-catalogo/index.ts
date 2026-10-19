@@ -135,16 +135,23 @@ Deno.serve(async (req) => {
 
   const servicio = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 
-  // ── Solo administradores ──
+  // ── Solo administradores, salvo la vía interna ──
+  // La función central `importar-enlace` (que ya comprobó la sesión, el límite diario y que no haya otra importación en curso)
+  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar` y `envio`.
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const { data: auth } = await servicio.auth.getUser(jwt);
-  const uid = auth?.user?.id;
-  if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
-  const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
-  if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
-
   const cuerpo = await req.json().catch(() => ({}));
-  const accion: string = cuerpo?.accion ?? "probar";
+  let accion: string = cuerpo?.accion ?? "probar";
+  const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (interna) {
+    if (accion !== "importar" && accion !== "envio") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+  } else {
+    const { data: auth } = await servicio.auth.getUser(jwt);
+    const uid = auth?.user?.id;
+    if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
+    const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
+    if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
+    if (accion === "importar") return responder({ ok: false, error: "Importar por enlace se pide desde la pantalla «Importar por enlace»" }, 403);
+  }
 
   const claveCruda = Deno.env.get("CJ_API_KEY") ?? "";
   const apiKey = claveCruda.trim().replace(/^["']|["']$/g, "");
@@ -344,6 +351,44 @@ Deno.serve(async (req) => {
     });
   }
 
+  /* ───────────────────────────── importar (un producto por su identificador; solo vía interna) ───────────────────────────── */
+  // Si el producto no está en el catálogo común, lo crea con lo que dice CJ y sigue con la ficha completa (acción «detalle»).
+  // Si ya estaba, solo completa su ficha. Un producto que CJ no devuelve no deja nada a medias.
+  let consultaPrevia: { pid: string; datos: any } | null = null;
+  let filaNuevaId: string | null = null;
+  let actualizarTarjeta = false;
+  if (accion === "importar") {
+    const pid = String(cuerpo?.pid ?? "").trim();
+    if (!/^[0-9A-Za-z][0-9A-Za-z-]{6,62}$/.test(pid)) return responder({ ok: false, error: "El identificador del producto de CJ no es válido", ...diagnostico });
+    const q = await cj("/product/query", { consulta: { pid } });
+    const prod: any = q.ok ? q.datos ?? {} : {};
+    if (!q.ok || !(prod.productNameEn ?? prod.nameEn ?? prod.productName)) {
+      return await cerrarFallo(q.ok ? "CJ no devolvió datos de ese producto: puede estar retirado o el enlace no es de un producto." : `CJ no pudo darme ese producto: ${q.mensaje}`);
+    }
+    consultaPrevia = { pid, datos: prod };
+    const { data: existente } = await servicio.from("CatalogItem").select("id").eq("provider", PROVEEDOR).eq("externalId", pid).maybeSingle();
+    let idItem: string | undefined = existente?.id;
+    if (!idItem) {
+      const nuevo = normalizarListado({ ...prod, id: String(prod.pid ?? pid), nameEn: prod.productNameEn ?? prod.nameEn ?? prod.productName, bigImage: prod.productImage ?? prod.bigImage }, null, await nombresDeCategorias());
+      nuevo.externalId = pid;
+      nuevo.categoryName = String(prod.categoryName ?? "").split(/[>/]/).map((x: string) => x.trim()).filter(Boolean).pop() ?? nuevo.categoryName; // CJ separa la ruta con « > »
+      const { data: creado, error: eNuevo } = await servicio.from("CatalogItem").insert(nuevo).select("id").single();
+      if (eNuevo || !creado) return await cerrarFallo(`No se pudo guardar el producto en el catálogo: ${eNuevo?.message ?? "sin respuesta"}`);
+      idItem = creado.id as string;
+      filaNuevaId = idItem;
+    }
+    cuerpo.ids = [idItem];
+    actualizarTarjeta = true;
+    accion = "detalle"; // sigue con la ficha completa
+  }
+
+  /** Respuesta de error de «importar»: anota el fallo del proveedor y no deja ninguna fila a medias. */
+  async function cerrarFallo(mensaje: string) {
+    await servicio.from("PlatformCredential").update({ usedThisMonth: (fila.usedThisMonth ?? 0) + llamadas, updatedAt: ahoraIso() }).eq("provider", PROVEEDOR);
+    await guardarAjustes({ ultimaLlamada });
+    return responder({ ok: false, error: mensaje, llamadasACj: llamadas, ...diagnostico });
+  }
+
   /* ───────────────────────────── detalle (ficha completa) ───────────────────────────── */
   if (accion === "detalle") {
     const ids: string[] = (Array.isArray(cuerpo?.ids) ? cuerpo.ids : []).map(String).slice(0, 3);
@@ -357,8 +402,8 @@ Deno.serve(async (req) => {
       const avisos: string[] = [];
       const crudo: Record<string, unknown> = {};
 
-      // 1) Detalle del producto
-      const q = await cj("/product/query", { consulta: { pid } });
+      // 1) Detalle del producto (si «importar» ya lo pidió, no se repite la llamada)
+      const q = consultaPrevia && consultaPrevia.pid === pid ? { ok: true, datos: consultaPrevia.datos, mensaje: "", codigo: null } : await cj("/product/query", { consulta: { pid } });
       if (!q.ok) {
         informe.push({ id: item.id, ok: false, error: `Detalle: ${q.mensaje}` });
         continue;
@@ -477,6 +522,7 @@ Deno.serve(async (req) => {
 
       const { error: eDet } = await servicio.from("CatalogItemDetail").upsert({ itemId: item.id, ficha, raw: { ...((previa?.raw as any) ?? {}), ...crudo }, fetchedAt: ahoraIso() }, { onConflict: "itemId" });
       if (eDet) {
+        if (filaNuevaId && filaNuevaId === item.id) await servicio.from("CatalogItem").delete().eq("id", item.id);
         informe.push({ id: item.id, ok: false, error: `No se pudo guardar la ficha: ${eDet.message}` });
         continue;
       }
@@ -489,6 +535,13 @@ Deno.serve(async (req) => {
       if (imagenes.length) { cambios.images = imagenes.slice(0, 12); cambios.imageUrl = imagenes[0]; }
       if (ficha.descripcionHtml) cambios.description = ficha.descripcionHtml.slice(0, 5000);
       if (media !== null) cambios.rating = media;
+      // Producto importado por enlace: la tarjeta toma el título y el coste de la variante más barata de la ficha (igual que el resto de fichas)
+      if (actualizarTarjeta) {
+        if (ficha.titulo) cambios.title = ficha.titulo.slice(0, 250);
+        if (precios.length) cambios.costPrice = Math.min(...precios);
+        const stockTotalCj = origenes.reduce((a, o) => a + (o.total ?? 0), 0);
+        if (origenes.length) cambios.stock = stockTotalCj;
+      }
       await servicio.from("CatalogItem").update(cambios).eq("id", item.id);
 
       informe.push({
