@@ -1,6 +1,6 @@
 // Pruebas de las cuentas de Retador. Ejecutar: npx tsx tests/retador/precios.test.ts
 import assert from 'node:assert/strict';
-import { costePuestoEnCuba, datosQueFaltan, esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
+import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
 
 const t = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3 };
 
@@ -78,4 +78,20 @@ assert.equal(liquidacion(25, 25.31, v13r, 15.28).neto, 8.94); // (25 − 15,28) 
 const perd = liquidacion(10, 25.31, v13, 15.28); assert.equal(perd.comision, 0); assert.ok(perd.neto < 0);
 // La versión 1 del contrato (sin ganancia mínima) sigue calculándose igual que antes
 assert.equal(liquidacion(30, 17.39, t).neto, 9.98);
+
+// ───────── Publicar sin envío cotizado ni peso (contrato v1.3: el envío va aparte y Retador lo cotiza al comprar) ─────────
+const sinDatos = { costeUsd: 7.76, envioHubUsd: null, pesoGramos: null, tarifas: v13 };
+assert.deepEqual(faltanParaPublicar(sinDatos), []);
+assert.deepEqual(costeParaPublicar(sinDatos), { producto: 7.76, envioHub: 0, hubCuba: 0, total: 7.76, sinEnvio: true });
+assert.deepEqual(faltanParaPublicar({ ...sinDatos, costeUsd: null }), ['coste de la variante']); // el coste del producto sigue siendo imprescindible
+assert.equal(costeParaPublicar({ ...sinDatos, costeUsd: null }), null);
+// Con datos completos se sigue estimando el envío como antes
+assert.deepEqual(costeParaPublicar({ costeUsd: 10, envioHubUsd: 3, pesoGramos: 1000, tarifas: v13 }), { producto: 10, envioHub: 3, hubCuba: 4.39, total: 17.39 });
+// Sin envío, el mínimo es el del Importador de Retador y el neto se calcula sin envío
+const sinEnv = costeParaPublicar(sinDatos)!;
+assert.equal(precioMinimoSinPerdida(sinEnv.total, v13, sinEnv.producto), 9.48); // (7,76 + 0,30 + 1) / 0,956 = 9,4770 → 9,48
+assert.equal(liquidacion(9.48, sinEnv.total, v13, sinEnv.producto).neto > 0, true);
+// Con la versión 1 del contrato (sin ganancia mínima) siguen exigiéndose el envío al hub y el peso
+assert.deepEqual(faltanParaPublicar({ costeUsd: 7.76, envioHubUsd: null, pesoGramos: null, tarifas: t }), ['envío del proveedor al hub de EE. UU.', 'peso real']);
+assert.equal(costeParaPublicar({ costeUsd: 7.76, envioHubUsd: null, pesoGramos: null, tarifas: t }), null);
 console.log('✔ cuentas de Retador correctas');

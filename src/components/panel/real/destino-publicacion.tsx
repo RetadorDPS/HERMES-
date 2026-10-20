@@ -23,7 +23,7 @@ interface OpcionDestino {
 }
 
 const OPCIONES: OpcionDestino[] = [
-  { id: 'RETADOR', nombre: 'Retador', detalle: 'Marketplace para Cuba: calcula tu beneficio real puesto en Cuba y publica en tu tienda.', disponible: true },
+  { id: 'RETADOR', nombre: 'Retador', detalle: 'Publica en tu tienda de Retador. El envío a sus compradores lo cotiza Retador.', disponible: true },
   { id: 'SHOPIFY', nombre: 'Shopify', detalle: 'La publicación en Shopify todavía no está disponible.', disponible: false },
   { id: 'WOOCOMMERCE', nombre: 'WooCommerce', detalle: 'La publicación en WooCommerce todavía no está disponible.', disponible: false },
 ];

@@ -593,7 +593,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
             Publicar en…
           </Button>
           <p className="mt-1 text-center text-[11px] text-muted-foreground">
-            {ficha ? 'Elige a qué tienda lo publicas. Con Retador, calcula tu beneficio real puesto en Cuba.' : 'Completa antes la ficha (variantes, peso y envío) para poder publicar.'}
+            {ficha ? 'Elige a qué tienda lo publicas. Cada destino calcula con sus propias reglas.' : 'Completa antes la ficha (variantes, peso y envío) para poder publicar.'}
           </p>
         </footer>
         {eligiendoDestino && item && (

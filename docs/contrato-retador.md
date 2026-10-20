@@ -136,4 +136,4 @@ Campos nuevos de `tarifas`: `ganancia_minima_retador_usd`, `pasarela_a_cargo` (`
 - DropshipPilot, además, no publica ni actualiza con un precio con el que el vendedor pierda dinero con el envío estimado (si lo pierde, exige el precio que no pierde aunque Retador aceptara menos).
 - Si Retador no informa `ganancia_minima_retador_usd`, siguen valiendo las cuentas de la versión 1 de arriba.
 - Ejemplo del contrato (verificado en `tests/retador/precios.test.ts`): costo 15,28 · precio 25 · envío cobrado 10,03 · comisión 8 % → pasarela 1,84, base 7,88, comisión 0,63, neto 7,25.
-
+- **Publicar** solo exige el coste de la variante: el peso y la cotización al hub de EE. UU. ya no son obligatorios (el envío lo cotiza Retador al comprar). Si faltan, el neto se estima «sin envío» y la pantalla lo avisa.

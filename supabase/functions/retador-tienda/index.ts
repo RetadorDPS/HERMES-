@@ -29,7 +29,7 @@ import {
   tarifasDeConfig,
   tokenConFormato,
 } from "./retador.ts";
-import { costePuestoEnCuba, datosQueFaltan, liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
+import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -167,7 +167,7 @@ interface VariantePreparada {
   costeUsd: number | null;
   pesoGramos: number | null;
   stock: number | null;
-  coste: ReturnType<typeof costePuestoEnCuba>;
+  coste: ReturnType<typeof costeParaPublicar>;
   faltan: string[];
   precioMinimoUsd: number | null;
 }
@@ -177,7 +177,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
   const variantes: VariantePreparada[] = ficha.variantes.map((v: any) => {
     const peso = typeof v.pesoGramos === "number" && v.pesoGramos > 0 ? v.pesoGramos : typeof ficha?.peso?.gramos === "number" && ficha.peso.gramos > 0 ? ficha.peso.gramos : null;
     const entrada = { costeUsd: typeof v.precio === "number" ? v.precio : null, envioHubUsd: hub?.precio ?? null, pesoGramos: peso, tarifas };
-    const coste = costePuestoEnCuba(entrada);
+    const coste = costeParaPublicar(entrada);
     return {
       sku: String(v.sku ?? ""),
       vid: v.vid ? String(v.vid) : null,
@@ -187,7 +187,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       pesoGramos: peso,
       stock: stockVerificado(v, proveedor),
       coste,
-      faltan: datosQueFaltan(entrada),
+      faltan: faltanParaPublicar(entrada),
       precioMinimoUsd: coste && tarifas ? precioMinimoSinPerdida(coste.total, tarifas, coste.producto) : null,
     };
   });
@@ -327,7 +327,7 @@ async function accionPublicar(uid: string, cuerpo: any) {
     vistos.add(v.sku);
     const precio = Number(e.precioVentaUsd);
     if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", `Pon un precio válido a «${v.nombre}»`, { sku: v.sku });
-    if (!v.coste) throw new ErrorApp("faltan_datos", `No se puede calcular tu beneficio de «${v.nombre}»: falta ${v.faltan.join(", ")}. Completa la ficha (peso y envío a EE. UU.) y vuelve a intentarlo.`, { sku: v.sku, faltan: v.faltan });
+    if (!v.coste) throw new ErrorApp("faltan_datos", `No se puede calcular tu beneficio de «${v.nombre}»: falta ${v.faltan.join(", ")}. Completa la ficha del producto y vuelve a intentarlo.`, { sku: v.sku, faltan: v.faltan });
     const liq = liquidacion(redondear(precio), v.coste.total, tarifas, v.coste.producto);
     if (liq.neto < 0 || precio < precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (coste puesto en Cuba y sin pérdida tras comisión).`, { sku: v.sku, minimoUsd: precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto) });
     return { v, precio: redondear(precio), liq };

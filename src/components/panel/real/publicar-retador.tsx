@@ -227,8 +227,9 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
               <section className="space-y-2">
                 <h3 className="text-[13px] font-semibold">Variantes y precio de venta (en dólares)</h3>
                 <p className="text-[12px] text-muted-foreground">
-                  Coste puesto en Cuba = producto + envío del proveedor al hub de EE. UU.
-                  {prep.envioHub ? ` (${usd(prep.envioHub.precio)}, desde ${prep.envioHub.origen})` : ' (sin cotización: pide el envío a EE. UU. desde la ficha)'} + hub→Cuba por peso.
+                  {esContratoV13(prep.tarifas)
+                    ? 'El envío al comprador lo cotiza Retador cuando compra y se paga aparte: no forma parte del precio. Aquí solo se estima (proveedor → hub de EE. UU. → destino de Retador) si ya está cotizado; si no, el neto se calcula sin envío y se dice.'
+                    : `Coste puesto en Cuba = producto + envío del proveedor al hub de EE. UU.${prep.envioHub ? ` (${usd(prep.envioHub.precio)}, desde ${prep.envioHub.origen})` : ' (sin cotización: pide el envío a EE. UU. desde la ficha)'} + hub→Cuba por peso.`}
                 </p>
                 <div className="space-y-2">
                   {prep.variantes.map((v) => {
@@ -252,7 +253,15 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                             <span className="block truncate font-medium">{v.nombre}</span>
                             {v.coste ? (
                               <span className="block text-muted-foreground">
-                                Producto {usd(v.coste.producto)} · envío al hub {usd(v.coste.envioHub)} · hub→Cuba {usd(v.coste.hubCuba)} = <b className="text-foreground">{usd(v.coste.total)}</b>
+                                {v.coste.sinEnvio ? (
+                                  <>
+                                    Producto <b className="text-foreground">{usd(v.coste.producto)}</b> · envío sin estimar (Retador lo cotiza al comprar): el neto se calcula sin envío
+                                  </>
+                                ) : (
+                                  <>
+                                    Producto {usd(v.coste.producto)} · envío al hub {usd(v.coste.envioHub)} · hub→Cuba {usd(v.coste.hubCuba)} = <b className="text-foreground">{usd(v.coste.total)}</b>
+                                  </>
+                                )}
                               </span>
                             ) : (
                               <span className="flex items-start gap-1 text-amber-300">
@@ -297,7 +306,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                     {esContratoV13(prep.tarifas) && prep.tarifas.pasarelaACargo !== 'retador' && prep.tarifas.pasarelaACargo !== 'comprador' ? (
                       <>
                         Neto = (precio − costo del producto − pasarela) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia). La pasarela ({prep.tarifas.pasarelaPct} % + {usd(prep.tarifas.pasarelaFijaUsd)}) se calcula sobre el total
-                        que paga el comprador (producto + envío) y la pagas tú. El envío lo paga el comprador aparte: aquí se estima con el coste puesto en Cuba; el real lo cotiza Retador al comprar. El precio mínimo es el mismo del Importador de Retador y no incluye el envío.
+                        que paga el comprador (producto + envío) y la pagas tú. El envío lo paga el comprador aparte: aquí se estima con el envío cotizado si lo hay (si no, se calcula sin envío); el real lo cotiza Retador al comprar. El precio mínimo es el mismo del Importador de Retador y no incluye el envío.
                       </>
                     ) : (
                       <>

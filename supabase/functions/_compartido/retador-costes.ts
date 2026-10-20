@@ -51,6 +51,8 @@ export interface CostePuestoEnCuba {
   envioHub: number;
   hubCuba: number;
   total: number;
+  /** Verdadero si el envío NO se pudo estimar (falta la cotización al hub o el peso): envioHub y hubCuba van a 0 solo como «sin dato»; Retador cotiza el envío real al comprar. */
+  sinEnvio?: boolean;
 }
 
 const esNumero = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
@@ -72,6 +74,26 @@ export function costePuestoEnCuba(e: EntradaCoste): CostePuestoEnCuba | null {
   const envioHub = round2(e.envioHubUsd as number);
   const hubCuba = round2(((e.pesoGramos as number) / GRAMOS_POR_LIBRA) * (e.tarifas as TarifasRetador).hubUsdPorLibra);
   return { producto, envioHub, hubCuba, total: round2(producto + envioHub + hubCuba) };
+}
+
+/**
+ * Qué falta para PUBLICAR una variante. Con el contrato v1.3 el envío va aparte (lo cotiza Retador al comprar) y el precio mínimo no lo incluye,
+ * así que publicar solo exige el coste de la variante; peso y envío al hub solo sirven para estimar el neto. Con la versión 1 del contrato siguen siendo obligatorios.
+ */
+export function faltanParaPublicar(e: EntradaCoste): string[] {
+  if (esContratoV13(e.tarifas)) return esNumero(e.costeUsd) ? [] : ['coste de la variante'];
+  return datosQueFaltan(e);
+}
+
+/** Coste con el que se publica: el completo si hay datos para estimarlo; con el contrato v1.3, solo el del producto marcado «sinEnvio». */
+export function costeParaPublicar(e: EntradaCoste): CostePuestoEnCuba | null {
+  const completo = costePuestoEnCuba(e);
+  if (completo) return completo;
+  if (esContratoV13(e.tarifas) && esNumero(e.costeUsd)) {
+    const producto = round2(e.costeUsd);
+    return { producto, envioHub: 0, hubCuba: 0, total: producto, sinEnvio: true };
+  }
+  return null;
 }
 
 export interface Liquidacion {
