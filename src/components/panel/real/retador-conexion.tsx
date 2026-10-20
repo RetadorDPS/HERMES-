@@ -173,7 +173,7 @@ export function RetadorConexion() {
                   titulo="Pasarela de pago"
                   valor={
                     tienda.tarifas
-                      ? `${tienda.tarifas.pasarelaPct}% + ${usd(tienda.tarifas.pasarelaFijaUsd)}${tienda.tarifas.pasarelaACargo === "comprador" ? " (la paga el comprador)" : ""}`
+                      ? `${tienda.tarifas.pasarelaPct}% + ${usd(tienda.tarifas.pasarelaFijaUsd)}${tienda.tarifas.pasarelaACargo === "comprador" ? " (la paga el comprador)" : tienda.tarifas.pasarelaACargo === "retador" ? " (la asume Retador)" : " (la pagas tú, sobre el total que paga el comprador)"}`
                       : "No informado"
                   }
                 />
