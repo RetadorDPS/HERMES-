@@ -17,7 +17,7 @@ import { Input, Textarea } from '@/components/ui/input';
 import { DEFAULT_RULE } from '@/lib/pricing';
 import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
-import { liquidacion, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
+import { esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
 import { cn } from '@/lib/utils';
 
 interface VarianteServidor {
@@ -134,7 +134,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   if (!marcadas.length) problemas.push('Elige al menos una variante.');
   if (marcadas.length > MAX_VARIANTES) problemas.push(`Como máximo ${MAX_VARIANTES} variantes.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
-  if (perdidas.length) problemas.push('Hay variantes por debajo del precio mínimo (coste puesto en Cuba). Sube el precio.');
+  if (perdidas.length) problemas.push(esContratoV13(prep?.tarifas) ? 'Hay variantes por debajo del precio mínimo (el del Importador de Retador) o con las que perderías dinero. Sube el precio.' : 'Hay variantes por debajo del precio mínimo (coste puesto en Cuba). Sube el precio.');
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!provincia) problemas.push('Elige la provincia.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
@@ -294,9 +294,19 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                 </div>
                 {prep.tarifas && (
                   <p className="text-[11px] text-muted-foreground">
-                    Neto = (precio − costo del producto) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia)
-                    {prep.tarifas.pasarelaACargo === 'retador' ? '. La pasarela de pago la asume Retador.' : prep.tarifas.pasarelaACargo === 'comprador' ? '. La pasarela la paga el comprador.' : ` − pasarela (${prep.tarifas.pasarelaPct} % + ${usd(prep.tarifas.pasarelaFijaUsd)}).`}{' '}
-                    El precio mínimo que acepta Retador es el coste puesto en Cuba. Estimación con las tarifas que informa Retador.
+                    {esContratoV13(prep.tarifas) && prep.tarifas.pasarelaACargo !== 'retador' && prep.tarifas.pasarelaACargo !== 'comprador' ? (
+                      <>
+                        Neto = (precio − costo del producto − pasarela) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia). La pasarela ({prep.tarifas.pasarelaPct} % + {usd(prep.tarifas.pasarelaFijaUsd)}) se calcula sobre el total
+                        que paga el comprador (producto + envío) y la pagas tú. El envío lo paga el comprador aparte: aquí se estima con el coste puesto en Cuba; el real lo cotiza Retador al comprar. El precio mínimo es el mismo del Importador de Retador y no incluye el envío.
+                      </>
+                    ) : (
+                      <>
+                        Neto = (precio − costo del producto) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia)
+                        {prep.tarifas.pasarelaACargo === 'retador' ? '. La pasarela de pago la asume Retador.' : prep.tarifas.pasarelaACargo === 'comprador' ? '. La pasarela la paga el comprador.' : ` − pasarela (${prep.tarifas.pasarelaPct} % + ${usd(prep.tarifas.pasarelaFijaUsd)}).`}{' '}
+                        {esContratoV13(prep.tarifas) ? 'El precio mínimo es el mismo del Importador de Retador y no incluye el envío.' : 'El precio mínimo que acepta Retador es el coste puesto en Cuba.'}
+                      </>
+                    )}{' '}
+                    Estimación con las tarifas que informa Retador.
                   </p>
                 )}
                 {prep.costeReferencia?.proveedor === 'aliexpress' && prep.costeReferencia.pais !== 'US' && (

@@ -1,6 +1,6 @@
 // Pruebas de las cuentas de Retador. Ejecutar: npx tsx tests/retador/precios.test.ts
 import assert from 'node:assert/strict';
-import { costePuestoEnCuba, datosQueFaltan, liquidacion, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
+import { costePuestoEnCuba, datosQueFaltan, esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
 
 const t = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3 };
 
@@ -39,4 +39,43 @@ assert.ok(liquidacion(min - 0.02, 17.39, t).neto < 0);
 const prop = precioPropuesto(c, { markupPct: 40, minProfit: 1.5, roundTo: 0.99 });
 assert.ok(prop >= 24.35 && prop <= 24.99, `propuesto ${prop}`);
 assert.ok(prop > c.total);
+
+// ───────── Contrato v1.3 (parte A): pasarela del vendedor sobre el total cobrado, envío aparte, mínimo del Importador ─────────
+const v13 = { ...t, pasarelaACargo: 'vendedor' as const, comisionBase: 'precio_venta_menos_costo_producto_menos_pasarela' as const, gananciaMinimaRetadorUsd: 1 };
+assert.equal(esContratoV13(v13), true);
+assert.equal(esContratoV13(t), false);
+assert.equal(esContratoV13({ ...t, gananciaMinimaRetadorUsd: NaN }), false);
+
+// Ejemplo real del contrato: costo 15,28 · precio 25 · envío cobrado 10,03 · plan Pro 8 % → cobrado 35,03, pasarela 1,84, base 7,88, comisión 0,63, neto 7,25
+const ej = liquidacion(25, 15.28 + 10.03, v13, 15.28);
+assert.equal(ej.pasarela, 1.84); assert.equal(ej.ganancia, 9.72); assert.equal(ej.comision, 0.63); assert.equal(ej.neto, 7.25);
+
+// La fórmula escrita en el contrato (neto_formula) da lo mismo
+const netoContrato = (precio: number, costo: number, envio: number) => {
+  const pasarela = Math.round(((precio + envio) * (t.pasarelaPct / 100) + t.pasarelaFijaUsd) * 100) / 100;
+  const base = Math.max(0, precio - costo - pasarela);
+  return Math.round((base - Math.round(base * 0.08 * 100) / 100) * 100) / 100;
+};
+for (const [precio, costo, envio] of [[25, 15.28, 10.03], [12.99, 4.2, 3.5], [40, 20, 0], [9.99, 5.5, 8.25]] as const) {
+  assert.equal(liquidacion(precio, costo + envio, v13, costo).neto, netoContrato(precio, costo, envio), `neto ${precio}/${costo}/${envio}`);
+}
+
+// Precio mínimo = el del Importador de Retador: ceil((costo + fija + ganancia mínima) / (1 − pasarela %) × 100) / 100 (el envío no entra)
+assert.equal(precioMinimoSinPerdida(15.28 + 10.03, v13, 15.28), 17.35);
+assert.equal(precioMinimoSinPerdida(10 + 1, v13, 10), 11.83); // (10 + 0,30 + 1) / 0,956 = 11,8201 → 11,83
+// Con un envío enorme manda «no perder con la pasarela sobre el total cobrado»: (5 + 99 × 0,044 + 0,30) / 0,956 = 10,10 → 10,11 (el del Importador sería 6,59)
+assert.equal(precioMinimoSinPerdida(5 + 99, v13, 5), 10.11);
+// Con ese precio mínimo el vendedor no pierde y un precio claramente menor sí
+for (const [costo, envio] of [[15.28, 10.03], [4.2, 3.5], [8, 0], [2.5, 30]] as const) {
+  const m = precioMinimoSinPerdida(costo + envio, v13, costo);
+  assert.ok(liquidacion(m, costo + envio, v13, costo).neto >= 0, `neto en el mínimo ${m} (${costo}/${envio})`);
+  assert.ok(liquidacion(m - 0.5, costo + envio, v13, costo).neto < liquidacion(m, costo + envio, v13, costo).neto);
+}
+// Pasarela a cargo de Retador (antes de aplicar el SQL 44): no se descuenta nada al vendedor
+const v13r = { ...v13, pasarelaACargo: 'retador' as const, comisionBase: 'precio_venta_menos_costo_producto' as const };
+assert.equal(liquidacion(25, 25.31, v13r, 15.28).neto, 8.94); // (25 − 15,28) × 0,92
+// Vender por debajo del costo del producto: sin comisión y neto negativo (nunca se publicaría)
+const perd = liquidacion(10, 25.31, v13, 15.28); assert.equal(perd.comision, 0); assert.ok(perd.neto < 0);
+// La versión 1 del contrato (sin ganancia mínima) sigue calculándose igual que antes
+assert.equal(liquidacion(30, 17.39, t).neto, 9.98);
 console.log('✔ cuentas de Retador correctas');

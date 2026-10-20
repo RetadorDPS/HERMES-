@@ -123,3 +123,17 @@ Resumen del informe de Retador del 18/10/2026. Donde choca con el texto de arrib
 - Publicar hace una sola lectura al proveedor + el flete al hub (sin vista previa). Sin provincia se usa la de la tienda del vendedor. Todas las variantes a 0 → `agotado`.
 - Las fichas de `estado` traen además `atributos` por variante, `provincia`, `actualizado_en` y `origen_ultimo_cambio`.
 - Stock `null` en publicar o actualizar → se usa `stock_sin_dato` (5) y se marca `stock_estimado`; nunca 50.
+
+## Versión 1.3, parte A (dinero) — definitiva desde el 19/10/2026
+
+Retador la sirve desde `dropship-config` cuando informa `tarifas.ganancia_minima_retador_usd` (SQL 43 y 44 aplicados). `version_contrato` sigue en `1`. La parte B (venta fuera de Cuba, campo `destinos`) es solo una propuesta de Retador y **no se programa**.
+
+Campos nuevos de `tarifas`: `ganancia_minima_retador_usd`, `pasarela_a_cargo` (`vendedor`), `pasarela_base` (`total_cobrado`), `envio` (`aparte`), `comision_base` (`precio_venta_menos_costo_producto_menos_pasarela`), `minimo_formula`, `neto_formula`.
+
+- **Precio mínimo** = el del Importador de Retador: `ceil((costo_producto + pasarela_fija_usd + ganancia_minima_retador_usd) / (1 − pasarela_pct / 100) × 100) / 100`. El envío no entra. En CJ el costo del producto es el precio de la variante; en AliExpress, el precio para EE. UU. Debajo del mínimo: `409 precio_bajo_minimo` con `minimo_usd`.
+- **Neto por unidad (pasarela del vendedor)**: `pasarela = round((precio + envío cobrado) × pasarela % + pasarela fija, 2)`; `base = (precio − costo del producto) − pasarela`; `comisión = round(max(0, base) × comisión %, 2)`; `neto = base − comisión`. El envío lo paga el comprador aparte y lo cotiza Retador al comprar; DropshipPilot solo lo **estima** con el coste puesto en Cuba (coste puesto en Cuba − costo del producto).
+- Con `pasarela_a_cargo` = `retador` o `comprador` no se descuenta pasarela al vendedor.
+- DropshipPilot, además, no publica ni actualiza con un precio con el que el vendedor pierda dinero con el envío estimado (si lo pierde, exige el precio que no pierde aunque Retador aceptara menos).
+- Si Retador no informa `ganancia_minima_retador_usd`, siguen valiendo las cuentas de la versión 1 de arriba.
+- Ejemplo del contrato (verificado en `tests/retador/precios.test.ts`): costo 15,28 · precio 25 · envío cobrado 10,03 · comisión 8 % → pasarela 1,84, base 7,88, comisión 0,63, neto 7,25.
+

@@ -108,7 +108,12 @@ export function tarifasDeConfig(cfg: any) {
     pasarelaPct: pct,
     pasarelaFijaUsd: fija,
     pasarelaACargo: t.pasarela_a_cargo === "comprador" ? ("comprador" as const) : t.pasarela_a_cargo === "retador" ? ("retador" as const) : ("vendedor" as const),
-    comisionBase: t.comision_base === "precio_venta_menos_costo_cuba" ? ("precio_venta_menos_costo_cuba" as const) : ("precio_venta_menos_costo_producto" as const),
+    comisionBase: t.comision_base === "precio_venta_menos_costo_cuba"
+      ? ("precio_venta_menos_costo_cuba" as const)
+      : t.comision_base === "precio_venta_menos_costo_producto_menos_pasarela"
+        ? ("precio_venta_menos_costo_producto_menos_pasarela" as const)
+        : ("precio_venta_menos_costo_producto" as const),
+    ...(num(t.ganancia_minima_retador_usd) !== null ? { gananciaMinimaRetadorUsd: num(t.ganancia_minima_retador_usd) as number } : {}),
   };
 }
 

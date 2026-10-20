@@ -68,7 +68,13 @@ export function tarifasDeAjustes(t: any): TarifasRetador | null {
     pasarelaPct: t.pasarela_pct,
     pasarelaFijaUsd: t.pasarela_fija_usd,
     pasarelaACargo: t.pasarela_a_cargo === 'comprador' ? 'comprador' : t.pasarela_a_cargo === 'retador' ? 'retador' : 'vendedor',
-    comisionBase: t.comision_base === 'precio_venta_menos_costo_cuba' ? 'precio_venta_menos_costo_cuba' : 'precio_venta_menos_costo_producto',
+    comisionBase:
+      t.comision_base === 'precio_venta_menos_costo_cuba'
+        ? 'precio_venta_menos_costo_cuba'
+        : t.comision_base === 'precio_venta_menos_costo_producto_menos_pasarela'
+          ? 'precio_venta_menos_costo_producto_menos_pasarela'
+          : 'precio_venta_menos_costo_producto',
+    ...(n(t.ganancia_minima_retador_usd) !== null ? { gananciaMinimaRetadorUsd: t.ganancia_minima_retador_usd as number } : {}),
   };
 }
 
