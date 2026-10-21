@@ -51,7 +51,8 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   const [error, setError] = useState<string | null>(null);
   const [cargando, setCargando] = useState(true);
   const [enviando, setEnviando] = useState(false);
-  const [hecho, setHecho] = useState<{ url: string | null; moderacion: string | null } | null>(null);
+  const [hecho, setHecho] = useState<{ url: string | null; moderacion: string | null; estado: string | null } | null>(null);
+  const [confirmaAgotado, setConfirmaAgotado] = useState(false);
 
   const [elegidas, setElegidas] = useState<Record<string, boolean>>({});
   const [precios, setPrecios] = useState<Record<string, string>>({});
@@ -130,7 +131,9 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
     return !c || c.neto < 0 || c.precio < c.minimo;
   });
   const sinPrecio = marcadas.filter((v) => !cuentas.get(v.sku));
+  const todasAgotadas = marcadas.length > 0 && marcadas.every((v) => v.stock === 0);
   const problemas: string[] = [];
+  if (todasAgotadas && !confirmaAgotado) problemas.push('Todas las variantes elegidas tienen 0 de stock: el producto saldría AGOTADO y los compradores NO lo verían. Marca la casilla de confirmación si aun así quieres publicarlo.');
   if (!marcadas.length) problemas.push('Elige al menos una variante.');
   if (marcadas.length > MAX_VARIANTES) problemas.push(`Como máximo ${MAX_VARIANTES} variantes.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
@@ -147,7 +150,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
     setEnviando(true);
     setError(null);
     try {
-      const r = await llamarTienda<{ url: string | null; moderacion: string | null }>({
+      const r = await llamarTienda<{ url: string | null; moderacion: string | null; estado: string | null }>({
         accion: 'publicar',
         storeId: tienda.id,
         itemId,
@@ -157,7 +160,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         variantes: marcadas.map((v) => ({ sku: v.sku, precioVentaUsd: Number(precios[v.sku]) })),
         contenido: { titulo: tituloEdit.trim(), descripcion: descripcion.trim(), imagenes: fotos },
       });
-      setHecho({ url: r.url, moderacion: r.moderacion });
+      setHecho({ url: r.url, moderacion: r.moderacion, estado: r.estado ?? null });
     } catch (e) {
       const err = e as ErrorTiendaRetador;
       setError(err.message);
@@ -197,6 +200,12 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
           )}
 
           {error && <Alert variant="danger">{error}</Alert>}
+
+          {hecho && hecho.estado === 'agotado' && (
+            <Alert variant="warning" title="Publicado, pero AGOTADO: los compradores no lo ven">
+              Retador lo dejó agotado porque no tiene existencias. Aparece en tu panel de productos, pero no en el mercado ni en tu tienda. Cuando quieras venderlo, ponle existencias desde «Productos en Retador» (Precio y stock).
+            </Alert>
+          )}
 
           {hecho && (
             <Alert variant="success" title="Publicado en Retador">
@@ -412,6 +421,12 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         </div>
 
         <footer className="space-y-1.5 border-t border-white/[0.07] px-4 py-3">
+          {todasAgotadas && prep && !hecho && !prep.yaPublicado && (
+            <label className="flex items-start gap-2 text-[12px] text-amber-300">
+              <input type="checkbox" className="mt-0.5" checked={confirmaAgotado} onChange={(e) => setConfirmaAgotado(e.target.checked)} />
+              <span>Entiendo que se publicará AGOTADO y no se verá en el mercado hasta que le ponga existencias.</span>
+            </label>
+          )}
           {problemas.length > 0 && prep && !hecho && !prep.yaPublicado && <p className="text-[11px] text-amber-300">{problemas[0]}</p>}
           {hecho ? (
             <Button className="w-full" variant="gradient" onClick={onClose}>

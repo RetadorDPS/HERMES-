@@ -392,7 +392,7 @@ async function accionPublicar(uid: string, cuerpo: any) {
   }
   const stockTotal = lineas.reduce((s, { v }) => s + (confirmadas.get(v.sku)?.stock ?? v.stock ?? 0), 0);
   await servicio.from("Product").update({
-    storeProductId: remoto.producto_id, storeHandle: remoto.url ?? null, status: remoto.estado === "pausado" ? "PAUSED" : "ACTIVE", stockTotal,
+    storeProductId: remoto.producto_id, storeHandle: remoto.url ?? null, status: remoto.estado === "pausado" ? "PAUSED" : remoto.estado === "agotado" ? "OUT_OF_STOCK" : "ACTIVE", stockTotal,
     lastSyncedAt: ahora(), lastSyncStatus: "SUCCESS", lastSyncError: null,
     rawPayload: { retador: { ref, moderacion: remoto.moderacion ?? null, publicadoEn: ahora(), origenUltimoCambio: "dropship" } }, updatedAt: ahora(),
   }).eq("id", productId);
