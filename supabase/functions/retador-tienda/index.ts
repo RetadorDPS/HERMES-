@@ -30,6 +30,7 @@ import {
   tokenConFormato,
 } from "./retador.ts";
 import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
+import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -133,32 +134,6 @@ async function leerCatalogo(itemId: unknown) {
   return { item, ficha, proveedor };
 }
 
-/** Envío real al hub de EE. UU.: la cotización más barata del producto hacia US entre sus orígenes. */
-function envioAlHub(ficha: any): { precio: number; origen: string; dias: [number, number] | null } | null {
-  let mejor: { precio: number; origen: string; dias: [number, number] | null } | null = null;
-  const porOrigen = ficha?.envio?.porOrigen ?? {};
-  for (const [origen, destinos] of Object.entries<any>(porOrigen)) {
-    const opciones = destinos?.US?.opciones;
-    if (!Array.isArray(opciones)) continue;
-    for (const o of opciones) {
-      if (typeof o?.precio !== "number" || !Number.isFinite(o.precio)) continue;
-      if (!mejor || o.precio < mejor.precio) mejor = { precio: o.precio, origen, dias: typeof o.diasMin === "number" && typeof o.diasMax === "number" ? [o.diasMin, o.diasMax] : null };
-    }
-  }
-  return mejor;
-}
-
-/** Stock REAL de una variante: AliExpress informa el de la variante; en CJ solo cuenta el de sus almacenes (no el de fábrica). Null = no se sabe. */
-function stockVerificado(variante: any, proveedor: "cj" | "aliexpress"): number | null {
-  const filas: any[] = Array.isArray(variante?.stock) ? variante.stock : [];
-  if (proveedor === "aliexpress") {
-    const totales = filas.map((f) => f?.total).filter((n) => typeof n === "number" && Number.isFinite(n));
-    return totales.length ? Math.max(0, ...totales) : null;
-  }
-  const propios = filas.map((f) => f?.cj).filter((n) => typeof n === "number" && Number.isFinite(n));
-  return propios.length ? propios.reduce((a: number, b: number) => a + b, 0) : null;
-}
-
 interface VariantePreparada {
   sku: string;
   vid: string | null;
@@ -167,6 +142,8 @@ interface VariantePreparada {
   costeUsd: number | null;
   pesoGramos: number | null;
   stock: number | null;
+  stockAlmacen: number | null;
+  stockFabrica: number | null;
   coste: ReturnType<typeof costeParaPublicar>;
   faltan: string[];
   precioMinimoUsd: number | null;
@@ -176,8 +153,19 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
   const hub = envioAlHub(ficha);
   const variantes: VariantePreparada[] = ficha.variantes.map((v: any) => {
     const peso = typeof v.pesoGramos === "number" && v.pesoGramos > 0 ? v.pesoGramos : typeof ficha?.peso?.gramos === "number" && ficha.peso.gramos > 0 ? ficha.peso.gramos : null;
-    const entrada = { costeUsd: typeof v.precio === "number" ? v.precio : null, envioHubUsd: hub?.precio ?? null, pesoGramos: peso, tarifas };
-    const coste = costeParaPublicar(entrada);
+    const existencias = stockPorOrigen(v, proveedor);
+    // El envío debe estar cotizado DESDE el almacén que tiene el stock (en AliExpress lo decide la cotización)
+    const origenesConStock = new Set([...existencias.origenes].filter(([, n]) => n > 0).map(([o]) => o));
+    const hubVariante = proveedor === "cj" ? envioAlHub(ficha, origenesConStock) : hub;
+    const entrada = { costeUsd: typeof v.precio === "number" ? v.precio : null, envioHubUsd: hubVariante?.precio ?? null, pesoGramos: peso, tarifas };
+    // Sin stock no se publica (da igual si está en almacén o en fábrica) y tampoco sin envío cotizado desde donde sale
+    const bloqueos: string[] = [];
+    if (existencias.total === null) bloqueos.push("existencias (el proveedor no informa su stock)");
+    else if (existencias.total <= 0) bloqueos.push("existencias (sin stock ni en almacén ni en fábrica)");
+    else if (!hubVariante) bloqueos.push("envío cotizado desde el almacén que tiene el stock");
+    const costeCalculado = costeParaPublicar(entrada);
+    const faltan = bloqueos.length ? bloqueos : faltanParaPublicar(entrada);
+    const coste = bloqueos.length ? null : costeCalculado;
     return {
       sku: String(v.sku ?? ""),
       vid: v.vid ? String(v.vid) : null,
@@ -185,9 +173,11 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       imagen: typeof v.imagen === "string" ? v.imagen : null,
       costeUsd: entrada.costeUsd,
       pesoGramos: peso,
-      stock: stockVerificado(v, proveedor),
+      stock: existencias.total,
+      stockAlmacen: existencias.almacen,
+      stockFabrica: existencias.fabrica,
       coste,
-      faltan: faltanParaPublicar(entrada),
+      faltan,
       precioMinimoUsd: coste && tarifas ? precioMinimoSinPerdida(coste.total, tarifas, coste.producto) : null,
     };
   });
@@ -327,9 +317,9 @@ async function accionPublicar(uid: string, cuerpo: any) {
     vistos.add(v.sku);
     const precio = Number(e.precioVentaUsd);
     if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", `Pon un precio válido a «${v.nombre}»`, { sku: v.sku });
-    if (!v.coste) throw new ErrorApp("faltan_datos", `No se puede calcular tu beneficio de «${v.nombre}»: falta ${v.faltan.join(", ")}. Completa la ficha del producto y vuelve a intentarlo.`, { sku: v.sku, faltan: v.faltan });
+    if (!v.coste) throw new ErrorApp("faltan_datos", `«${v.nombre}» no se puede publicar: falta ${v.faltan.join(", ")}.`, { sku: v.sku, faltan: v.faltan });
     const liq = liquidacion(redondear(precio), v.coste.total, tarifas, v.coste.producto);
-    if (liq.neto < 0 || precio < precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (coste puesto en Cuba y sin pérdida tras comisión).`, { sku: v.sku, minimoUsd: precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto) });
+    if (liq.neto < 0 || precio < precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (mínimo de Retador y sin pérdida tras la comisión).`, { sku: v.sku, minimoUsd: precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto) });
     return { v, precio: redondear(precio), liq };
   });
 

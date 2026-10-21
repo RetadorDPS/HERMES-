@@ -117,7 +117,7 @@ export function RetadorConexion() {
           </div>
           <CardDescription>
             Publica tus productos de CJ y AliExpress en tu tienda de Retador
-            (envío a Cuba) y mantenlos al día desde aquí.
+            y mantenlos al día desde aquí.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -154,7 +154,7 @@ export function RetadorConexion() {
                   }
                 />
                 <Dato
-                  titulo="Hub → Cuba"
+                  titulo="Tarifa de envío de Retador"
                   valor={
                     tienda.tarifas
                       ? `${tienda.tarifas.hubUsdPorLibra.toFixed(2)} USD/lb`
@@ -178,7 +178,7 @@ export function RetadorConexion() {
                   }
                 />
                 <Dato
-                  titulo="Tránsito hub → Cuba"
+                  titulo="Tránsito de Retador"
                   valor={
                     tienda.tarifas && tienda.tarifas.diasHubCuba[1] > 0
                       ? `${tienda.tarifas.diasHubCuba[0]}–${tienda.tarifas.diasHubCuba[1]} días`

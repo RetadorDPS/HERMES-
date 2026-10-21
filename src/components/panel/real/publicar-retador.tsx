@@ -27,6 +27,8 @@ interface VarianteServidor {
   costeUsd: number | null;
   pesoGramos: number | null;
   stock: number | null;
+  stockAlmacen?: number | null;
+  stockFabrica?: number | null;
   coste: CostePuestoEnCuba | null;
   faltan: string[];
 }
@@ -52,7 +54,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   const [cargando, setCargando] = useState(true);
   const [enviando, setEnviando] = useState(false);
   const [hecho, setHecho] = useState<{ url: string | null; moderacion: string | null; estado: string | null } | null>(null);
-  const [confirmaAgotado, setConfirmaAgotado] = useState(false);
 
   const [elegidas, setElegidas] = useState<Record<string, boolean>>({});
   const [precios, setPrecios] = useState<Record<string, string>>({});
@@ -131,13 +132,11 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
     return !c || c.neto < 0 || c.precio < c.minimo;
   });
   const sinPrecio = marcadas.filter((v) => !cuentas.get(v.sku));
-  const todasAgotadas = marcadas.length > 0 && marcadas.every((v) => v.stock === 0);
   const problemas: string[] = [];
-  if (todasAgotadas && !confirmaAgotado) problemas.push('Todas las variantes elegidas tienen 0 de stock: el producto saldría AGOTADO y los compradores NO lo verían. Marca la casilla de confirmación si aun así quieres publicarlo.');
   if (!marcadas.length) problemas.push('Elige al menos una variante.');
   if (marcadas.length > MAX_VARIANTES) problemas.push(`Como máximo ${MAX_VARIANTES} variantes.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
-  if (perdidas.length) problemas.push(esContratoV13(prep?.tarifas) ? 'Hay variantes por debajo del precio mínimo (el del Importador de Retador) o con las que perderías dinero. Sube el precio.' : 'Hay variantes por debajo del precio mínimo (coste puesto en Cuba). Sube el precio.');
+  if (perdidas.length) problemas.push(esContratoV13(prep?.tarifas) ? 'Hay variantes por debajo del precio mínimo (el del Importador de Retador) o con las que perderías dinero. Sube el precio.' : 'Hay variantes por debajo del precio mínimo (coste estimado). Sube el precio.');
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!provincia) problemas.push('Elige la provincia.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
@@ -237,8 +236,8 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                 <h3 className="text-[13px] font-semibold">Variantes y precio de venta (en dólares)</h3>
                 <p className="text-[12px] text-muted-foreground">
                   {esContratoV13(prep.tarifas)
-                    ? 'El envío al comprador lo cotiza Retador cuando compra y se paga aparte: no forma parte del precio. Aquí solo se estima (proveedor → hub de EE. UU. → destino de Retador) si ya está cotizado; si no, el neto se calcula sin envío y se dice.'
-                    : `Coste puesto en Cuba = producto + envío del proveedor al hub de EE. UU.${prep.envioHub ? ` (${usd(prep.envioHub.precio)}, desde ${prep.envioHub.origen})` : ' (sin cotización: pide el envío a EE. UU. desde la ficha)'} + hub→Cuba por peso.`}
+                    ? 'El envío al comprador lo cotiza Retador cuando compra y se paga aparte: no forma parte del precio. Aquí solo se estima con las cotizaciones del proveedor.'
+                    : 'Coste estimado = producto + envío estimado.'}
                 </p>
                 <div className="space-y-2">
                   {prep.variantes.map((v) => {
@@ -268,7 +267,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                                   </>
                                 ) : (
                                   <>
-                                    Producto {usd(v.coste.producto)} · envío al hub {usd(v.coste.envioHub)} · hub→Cuba {usd(v.coste.hubCuba)} = <b className="text-foreground">{usd(v.coste.total)}</b>
+                                    Producto {usd(v.coste.producto)} · envío estimado {usd(Math.round((v.coste.envioHub + v.coste.hubCuba) * 100) / 100)} = <b className="text-foreground">{usd(v.coste.total)}</b>
                                   </>
                                 )}
                               </span>
@@ -279,7 +278,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                             )}
                             <span className="block text-muted-foreground">
                               Stock:{' '}
-                              {v.stock === null ? 'sin dato del proveedor (Retador usará una cifra prudente y la marcará como estimada)' : v.stock === 0 ? <span className="text-amber-300">0 verificado: saldría agotado</span> : `${v.stock} verificados`}
+                              {v.stock === null ? <span className="text-amber-300">sin dato del proveedor</span> : v.stock === 0 ? <span className="text-amber-300">sin stock (ni en almacén ni en fábrica)</span> : v.stockAlmacen !== null && v.stockAlmacen !== undefined && v.stockFabrica !== null && v.stockFabrica !== undefined ? `${v.stock.toLocaleString('es-ES')} (${v.stockAlmacen.toLocaleString('es-ES')} en almacén + ${v.stockFabrica.toLocaleString('es-ES')} en fábrica)` : `${v.stock.toLocaleString('es-ES')} verificados`}
                             </span>
                           </span>
                         </label>
@@ -315,13 +314,13 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                     {esContratoV13(prep.tarifas) && prep.tarifas.pasarelaACargo !== 'retador' && prep.tarifas.pasarelaACargo !== 'comprador' ? (
                       <>
                         Neto = (precio − costo del producto − pasarela) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia). La pasarela ({prep.tarifas.pasarelaPct} % + {usd(prep.tarifas.pasarelaFijaUsd)}) se calcula sobre el total
-                        que paga el comprador (producto + envío) y la pagas tú. El envío lo paga el comprador aparte: aquí se estima con el envío cotizado si lo hay (si no, se calcula sin envío); el real lo cotiza Retador al comprar. El precio mínimo es el mismo del Importador de Retador y no incluye el envío.
+                        que paga el comprador (producto + envío) y la pagas tú. El envío lo paga el comprador aparte: aquí se estima con la cotización del proveedor; el real lo cotiza Retador al comprar. El precio mínimo es el mismo del Importador de Retador y no incluye el envío.
                       </>
                     ) : (
                       <>
                         Neto = (precio − costo del producto) − comisión de Retador ({prep.tarifas.comisionPctGanancia} % de esa ganancia)
                         {prep.tarifas.pasarelaACargo === 'retador' ? '. La pasarela de pago la asume Retador.' : prep.tarifas.pasarelaACargo === 'comprador' ? '. La pasarela la paga el comprador.' : ` − pasarela (${prep.tarifas.pasarelaPct} % + ${usd(prep.tarifas.pasarelaFijaUsd)}).`}{' '}
-                        {esContratoV13(prep.tarifas) ? 'El precio mínimo es el mismo del Importador de Retador y no incluye el envío.' : 'El precio mínimo que acepta Retador es el coste puesto en Cuba.'}
+                        {esContratoV13(prep.tarifas) ? 'El precio mínimo es el mismo del Importador de Retador y no incluye el envío.' : 'El precio mínimo que acepta Retador es el coste estimado.'}
                       </>
                     )}{' '}
                     Estimación con las tarifas que informa Retador.
@@ -421,12 +420,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         </div>
 
         <footer className="space-y-1.5 border-t border-white/[0.07] px-4 py-3">
-          {todasAgotadas && prep && !hecho && !prep.yaPublicado && (
-            <label className="flex items-start gap-2 text-[12px] text-amber-300">
-              <input type="checkbox" className="mt-0.5" checked={confirmaAgotado} onChange={(e) => setConfirmaAgotado(e.target.checked)} />
-              <span>Entiendo que se publicará AGOTADO y no se verá en el mercado hasta que le ponga existencias.</span>
-            </label>
-          )}
           {problemas.length > 0 && prep && !hecho && !prep.yaPublicado && <p className="text-[11px] text-amber-300">{problemas[0]}</p>}
           {hecho ? (
             <Button className="w-full" variant="gradient" onClick={onClose}>

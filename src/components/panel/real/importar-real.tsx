@@ -128,7 +128,7 @@ export function ImportarReal() {
                   }}
                   aria-label="País de destino del envío"
                 >
-                  {[...new Set(['ES', 'US', ...PAISES_FRECUENTES])].map((c) => (
+                  {[...new Set(['CU', 'ES', 'US', ...PAISES_FRECUENTES])].map((c) => (
                     <option key={c} value={c}>
                       {nombrePais(c)}
                     </option>

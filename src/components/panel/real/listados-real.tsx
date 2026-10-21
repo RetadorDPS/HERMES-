@@ -1,34 +1,49 @@
 'use client';
 
+import Link from 'next/link';
 import { Suspense, useMemo } from 'react';
 import { OrdersTable } from '@/app/(dashboard)/orders/orders-table';
-import { ProductTableEstatico } from '@/app/(dashboard)/products/product-table-estatico';
 import { StoreManager } from '@/app/(dashboard)/stores/store-manager';
-import { obtenerPedidos, obtenerProductos, obtenerProveedores, obtenerTiendas } from '@/lib/real/datos';
+import { obtenerPedidos, obtenerProveedores, obtenerTiendas } from '@/lib/real/datos';
+import { Alert } from '@/components/ui/alert';
+import { obtenerTiendaRetador } from '@/lib/real/retador';
+import { ProductosRetador } from './productos-retador';
 import { RetadorConexion } from './retador-conexion';
 import { formatNumber } from '@/lib/utils';
 import { PantallaReal, useCarga } from './comun';
 
 export function ProductosReal() {
-  const { datos, error, cargando, recargar } = useCarga(obtenerProductos);
-  const tiendas = useMemo(() => {
-    const mapa = new Map<string, string>();
-    for (const p of datos ?? []) if (p.storeId) mapa.set(p.storeId, p.storeName);
-    return [...mapa.entries()].map(([id, name]) => ({ id, name }));
-  }, [datos]);
+  // Pantalla real: sin las acciones de demostración (sus botones y enlaces apuntaban a páginas que no existen). Cada producto publicado
+  // se gestiona aquí mismo: precio y stock, pausar, reactivar y retirar, con las reglas reales de cada tienda.
+  const { datos, error, cargando, recargar } = useCarga(async () => ({ tienda: await obtenerTiendaRetador() }));
+  const tienda = datos?.tienda ?? null;
   return (
-    <PantallaReal
-      titulo="Gestión de productos"
-      subtitulo={datos ? `${formatNumber(datos.length)} productos importados` : 'Tus productos importados'}
-      cargando={cargando}
-      error={error}
-      alRecargar={recargar}
-      tour="screen:products"
-    >
+    <PantallaReal titulo="Gestión de productos" subtitulo="Tus productos publicados en tus tiendas" cargando={cargando} error={error} alRecargar={recargar} tour="screen:products">
       {datos && (
-        <Suspense fallback={null}>
-          <ProductTableEstatico items={datos} stores={tiendas} />
-        </Suspense>
+        <>
+          {tienda && tienda.status === 'CONNECTED' ? (
+            <ProductosRetador tienda={tienda} />
+          ) : (
+            <Alert variant="info" title="Todavía no tienes ninguna tienda conectada">
+              Conecta tu tienda en{' '}
+              <Link href="/stores" className="underline">
+                Tiendas
+              </Link>{' '}
+              y publica desde el catálogo con «Publicar en…». Tus productos publicados aparecerán aquí para cambiar su precio y stock, pausarlos o retirarlos.
+            </Alert>
+          )}
+          <p className="text-[12px] text-muted-foreground">
+            ¿Quieres añadir más? Búscalos en el{' '}
+            <Link href="/catalog" className="underline">
+              catálogo
+            </Link>{' '}
+            o impórtalos por enlace desde{' '}
+            <Link href="/import" className="underline">
+              Importar
+            </Link>
+            .
+          </p>
+        </>
       )}
     </PantallaReal>
   );

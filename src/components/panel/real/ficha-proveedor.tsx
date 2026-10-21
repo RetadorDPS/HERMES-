@@ -18,6 +18,9 @@ import { nombrePais, PAISES_FRECUENTES, textoPopularidad } from '@/lib/paises';
 import { ProviderBadge } from '@/app/(dashboard)/catalog/catalog-card';
 import { ElegirDestino, type DestinoPublicacion } from './destino-publicacion';
 import { PublicarEnRetador } from './publicar-retador';
+import Link from 'next/link';
+import { envioACuba } from '@/lib/retador/envio-cuba';
+import { obtenerTiendaRetador } from '@/lib/real/retador';
 
 /* ───────────── utilidades de presentación ───────────── */
 
@@ -87,6 +90,17 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
   // Primero se elige el destino; solo después se abre la pantalla de publicar de ese destino
   const [eligiendoDestino, setEligiendoDestino] = useState(false);
   const [publicando, setPublicando] = useState<DestinoPublicacion | null>(null);
+  // Tarifa de Retador (solo para explicar el envío a Cuba cuando se elige Cuba como destino); si no hay tienda conectada, queda sin datos
+  const [tarifaRetador, setTarifaRetador] = useState<{ hubUsdPorLibra: number; diasHubCuba: [number, number] } | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    obtenerTiendaRetador()
+      .then((t) => vivo && setTarifaRetador(t?.tarifas ? { hubUsdPorLibra: t.tarifas.hubUsdPorLibra, diasHubCuba: t.tarifas.diasHubCuba } : null))
+      .catch(() => vivo && setTarifaRetador(null));
+    return () => {
+      vivo = false;
+    };
+  }, []);
 
   const cargar = useCallback(async (id: string) => {
     setCargando(true);
@@ -158,13 +172,22 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
   const origenes = useMemo<{ pais: string; total: number | null }[]>(() => ficha?.origenes ?? [], [ficha]);
   // Destinos sin servicio (guardados aparte): también se pueden elegir para ver el aviso
   const sinServicioGlobal = useMemo<Record<string, any>>(() => ficha?.envio?.sinServicio ?? {}, [ficha]);
-  const destinos = useMemo(() => {
+  const destinosReales = useMemo(() => {
     const s = new Set<string>();
     for (const d of Object.values(porOrigen)) for (const k of Object.keys(d)) s.add(k);
     for (const k of Object.keys(sinServicioGlobal)) s.add(k);
-    return [...s].sort((a, b) => pais(a).localeCompare(pais(b), 'es'));
+    return [...s].filter((c) => c !== 'CU').sort((a, b) => pais(a).localeCompare(pais(b), 'es'));
   }, [porOrigen, sinServicioGlobal]);
-  const destinoActivo = destino || (destinos.includes('ES') ? 'ES' : destinos[0] ?? '');
+  // Cuba va siempre la primera de la lista (para quien vende o compra allí); no se elige por defecto salvo que el usuario ya la eligiera en el catálogo
+  const destinos = useMemo(() => ['CU', ...destinosReales], [destinosReales]);
+  const guardado = useMemo(() => {
+    try {
+      return window.localStorage.getItem('hermes-destino') || '';
+    } catch {
+      return '';
+    }
+  }, []);
+  const destinoActivo = destino || (destinos.includes(guardado) ? guardado : destinosReales.includes('ES') ? 'ES' : destinosReales[0] ?? 'CU');
 
   const filasEnvio = useMemo(() => {
     if (!destinoActivo) return { filas: [] as any[], sinServicio: [] as string[], porCotizar: [] as string[] };
@@ -329,7 +352,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
                       <Truck className="size-4 text-indigo-300" /> Envío a tu cliente
                     </h3>
-                    {destinos.length > 0 && (
+                    {(
                       <select
                         value={destinoActivo}
                         onChange={(e) => setDestino(e.target.value)}
@@ -345,7 +368,9 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     )}
                   </div>
 
-                  {destinos.length === 0 ? (
+                  {destinoActivo === 'CU' ? (
+                    <EnvioACubaPanel ficha={ficha} proveedor={item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj'} tarifa={tarifaRetador} />
+                  ) : destinosReales.length === 0 ? (
                     <p className="text-[12px] text-muted-foreground">Todavía no se ha cotizado el envío de este artículo.</p>
                   ) : (
                     <>
@@ -608,6 +633,62 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
         )}
         {publicando === 'RETADOR' && item && <PublicarEnRetador itemId={item.id} titulo={ficha?.titulo ?? item.title} onClose={() => setPublicando(null)} />}
       </aside>
+    </div>
+  );
+}
+
+/** Explicación del envío a Cuba (solo se ve cuando el usuario elige Cuba como destino). */
+function EnvioACubaPanel({ ficha, proveedor, tarifa }: { ficha: any; proveedor: 'cj' | 'aliexpress'; tarifa: { hubUsdPorLibra: number; diasHubCuba: [number, number] } | null }) {
+  const r = useMemo(() => envioACuba(ficha, proveedor, tarifa), [ficha, proveedor, tarifa]);
+  const rango = (min: number, max: number) => (min === max ? usd(min) : `${usd(min)} – ${usd(max)}`);
+  if (!r.ok) {
+    return (
+      <Alert variant="info" title="Envío a Cuba">
+        Para calcularlo falta {r.falta}.{' '}
+        {!tarifa && (
+          <Link href="/stores" className="underline">
+            Ir a Tiendas
+          </Link>
+        )}
+      </Alert>
+    );
+  }
+  const e = r.envio;
+  return (
+    <div className="space-y-2 text-[12px]">
+      <p className="text-muted-foreground">El envío a Cuba tiene dos tramos y los paga el comprador al comprar, aparte del precio del producto:</p>
+      <ul className="space-y-1.5">
+        <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg bg-black/25 px-3 py-2">
+          <span>
+            <span className="font-medium">1) Hasta el centro logístico de EE. UU.</span>
+            <span className="text-muted-foreground"> · desde el almacén de {pais(e.tramoHub.origen)}</span>
+          </span>
+          <span className="tabular-nums">
+            <b>{usd(e.tramoHub.precio)}</b>
+            {e.tramoHub.dias && <span className="text-muted-foreground"> · {dias(e.tramoHub.dias[0], e.tramoHub.dias[1])}</span>}
+          </span>
+        </li>
+        <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg bg-black/25 px-3 py-2">
+          <span>
+            <span className="font-medium">2) Del centro logístico a Cuba</span>
+            <span className="text-muted-foreground"> · según el peso ({tarifa!.hubUsdPorLibra.toFixed(2)} US$ por libra)</span>
+          </span>
+          <span className="tabular-nums">
+            <b>{rango(e.tramoCuba.min, e.tramoCuba.max)}</b>
+            <span className="text-muted-foreground"> · {dias(e.dias.soloRetador[0], e.dias.soloRetador[1])}</span>
+          </span>
+        </li>
+        <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-3 py-2">
+          <span className="font-semibold">Total hasta Cuba</span>
+          <span className="tabular-nums">
+            <b className="text-emerald-300">{rango(e.total.min, e.total.max)}</b>
+            {e.dias.min !== null && e.dias.max !== null && <span className="text-muted-foreground"> · {dias(e.dias.min, e.dias.max)}</span>}
+          </span>
+        </li>
+      </ul>
+      <p className="text-[11px] text-muted-foreground">
+        Estimación con la cotización real del proveedor y la tarifa de Retador, solo con las variantes que tienen stock{e.variantesSinPeso > 0 ? ` y peso conocido (${e.variantesSinPeso} sin peso quedan fuera)` : ''}. El importe final lo cotiza Retador al comprar.
+      </p>
     </div>
   );
 }

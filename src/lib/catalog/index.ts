@@ -110,6 +110,8 @@ export interface CatalogRow {
   reglaPorDefecto?: boolean;
   /** true si el beneficio ya descuenta el envío cotizado al destino */
   beneficioConEnvio?: boolean;
+  /** El destino elegido es Cuba: su envío son dos tramos y se explica en la ficha (no hay una cotización única del proveedor). */
+  envioEnFicha?: boolean;
   /** Precio de venta y beneficio con la regla del usuario (si se pasó) */
   sellingPrice?: number;
   compareAtPrice?: number | null;

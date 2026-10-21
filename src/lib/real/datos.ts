@@ -474,7 +474,8 @@ function conPreciosEnEuros(
       costPriceEur: costeEur,
       fx: { currency: moneda, rate: Math.round(t.rate * 10000) / 10000, converted: moneda !== 'EUR', date: t.fecha },
       envio,
-      envioSinCotizar: Boolean(destino) && !resumen,
+      envioSinCotizar: Boolean(destino) && destino !== 'CU' && !resumen,
+      envioEnFicha: destino === 'CU',
       shippingMinDays: envio?.diasMin ?? null,
       shippingMaxDays: envio?.diasMax ?? null,
     };

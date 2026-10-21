@@ -3,5 +3,5 @@
  * (un solo número entero, igual que en Retador). Se muestra en la portada, en el menú lateral y en el pie del panel.
  * package.json se queda fijo y NO refleja la versión real.
  */
-export const APP_VERSION = 39;
+export const APP_VERSION = 40;
 export const VERSION_ETIQUETA = `v${APP_VERSION}`;

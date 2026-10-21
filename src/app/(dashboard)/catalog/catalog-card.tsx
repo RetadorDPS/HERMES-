@@ -102,6 +102,10 @@ export function CatalogCard({
               {' · '}
               {item.envio.precioEur === null ? 'precio sin dato' : item.envio.precioEur === 0 ? 'envío gratis' : formatCurrency(item.envio.precioEur)}
             </span>
+          ) : item.envioEnFicha ? (
+            <span className="inline-flex items-center gap-1" title="El envío a Cuba tiene dos tramos; el desglose está en la ficha del producto">
+              <Truck className="size-3" /> envío a Cuba: ver ficha
+            </span>
           ) : item.envioSinCotizar ? (
             <span className="inline-flex items-center gap-1 text-amber-300/80" title="Todavía no se ha pedido la cotización de envío a este país para este producto">
               <Truck className="size-3" /> envío sin cotizar
