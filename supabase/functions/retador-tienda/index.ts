@@ -31,6 +31,7 @@ import {
 } from "./retador.ts";
 import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
 import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
+import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-pedidos.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -521,6 +522,130 @@ async function accionEstado(uid: string, cuerpo: any) {
   return { productos: remoto.productos ?? [], diferencias };
 }
 
+/* ───────────────────────────── Pedidos (docs/contrato-pedidos.md) ───────────────────────────── */
+
+/** Trae los pedidos PAGADOS de Retador y los guarda en `Order` / `OrderItem`. Nunca compra nada: solo anota. */
+async function accionPedidosSincronizar(uid: string, cuerpo: any) {
+  const tienda = await tiendaPropia(uid, cuerpo.storeId);
+  const desde = typeof tienda.settings?.pedidosDesde === "string" ? tienda.settings.pedidosDesde : undefined;
+  let resp: any;
+  try {
+    resp = await conRetador(tienda, "pedidos", { ...(desde ? { desde } : {}), limite: 50 });
+  } catch (e) {
+    // Retador todavía no ha activado los pedidos: no es un fallo de nadie
+    if (e instanceof ErrorRetador && (e.codigo === "http_404" || e.codigo === "accion_desconocida")) {
+      return { disponible: false, nuevos: 0, actualizados: 0, revision: 0, problemas: [], mensaje: "Retador todavía no ofrece los pedidos a DropshipPilot. Cuando lo active, aparecerán aquí solos." };
+    }
+    throw e;
+  }
+  const lista: any[] = Array.isArray(resp.pedidos) ? resp.pedidos : [];
+  let nuevos = 0, actualizados = 0, revision = 0;
+  const problemas: string[] = [];
+
+  for (const crudo of lista) {
+    const n = normalizarPedido(crudo);
+    if (!n.ok) {
+      revision += 1;
+      problemas.push(n.motivo);
+      continue;
+    }
+    const p = n.pedido;
+    const { data: existente } = await servicio.from("Order").select("id,status").eq("storeId", tienda.id).eq("storeOrderId", p.pedidoId).maybeSingle();
+    if (existente) {
+      if (p.estadoCompra === "cancelado") {
+        const efecto = efectoDeCancelacion(String(existente.status));
+        if (efecto.estado) {
+          await servicio.from("Order").update({ status: efecto.estado, updatedAt: ahora() }).eq("id", existente.id);
+          actualizados += 1;
+        } else if (efecto.aviso) {
+          await servicio.from("Order").update({ errorMessage: efecto.aviso, updatedAt: ahora() }).eq("id", existente.id);
+          actualizados += 1;
+        }
+      }
+      continue;
+    }
+    if (p.estadoCompra === "cancelado") continue; // un pedido que nunca vimos y ya está cancelado no hace falta guardarlo
+
+    // Cruzar cada línea con el producto y la variante publicados desde DropshipPilot (por ref + sku)
+    const productosIds = [...new Set(p.lineas.map((l) => parsearRef(l.ref)).filter((r) => r && r.tiendaId === tienda.id).map((r) => r!.productoId))];
+    const { data: productos } = productosIds.length ? await servicio.from("Product").select("id,supplierId,title").eq("userId", uid).eq("storeId", tienda.id).in("id", productosIds) : { data: [] as any[] };
+    const { data: variantes } = productosIds.length ? await servicio.from("ProductVariant").select("id,productId,sku,supplierVariantId,costPrice,title,imageUrl").in("productId", productosIds) : { data: [] as any[] };
+    const productoPorId = new Map<string, any>((productos ?? []).map((x: any) => [x.id, x]));
+    const sinReconocer: string[] = [];
+    const items = p.lineas.map((l) => {
+      const ref = parsearRef(l.ref);
+      const producto = ref && ref.tiendaId === tienda.id ? productoPorId.get(ref.productoId) : undefined;
+      const variante = producto ? (variantes ?? []).find((v: any) => v.productId === producto.id && v.sku === l.sku) : undefined;
+      if (!producto || !variante) sinReconocer.push(l.sku);
+      return { linea: l, producto, variante };
+    });
+    const subtotal = redondear(p.lineas.reduce((s, l) => s + l.precioVentaUsd * l.cantidad, 0));
+    const costeConocido = items.every((i) => i.variante && Number.isFinite(Number(i.variante.costPrice)));
+    const costeProveedor = costeConocido ? redondear(items.reduce((s, i) => s + Number(i.variante!.costPrice) * i.linea.cantidad, 0)) : 0;
+    const orderId = crypto.randomUUID();
+    const { error: eOrden } = await servicio.from("Order").insert({
+      id: orderId, userId: uid, storeId: tienda.id, supplierId: items.find((i) => i.producto)?.producto.supplierId ?? null,
+      storeOrderId: p.pedidoId, storeOrderNumber: p.numero, status: "PAID", fulfillmentStatus: "UNFULFILLED",
+      customerName: p.entrega.nombre, customerPhone: p.entrega.telefono, shippingName: p.entrega.nombre,
+      shippingAddress1: p.entrega.direccion1, shippingAddress2: p.entrega.direccion2, shippingCity: p.entrega.ciudad,
+      shippingProvince: p.entrega.provincia, shippingCountry: p.entrega.pais, shippingZip: p.entrega.codigoPostal,
+      currency: p.moneda, subtotal, shippingTotal: 0, taxTotal: 0, total: subtotal, supplierCost: costeProveedor, profitAmount: 0,
+      notes: `Entrega: ${p.entrega.tipo === "centro_logistico" ? "centro logístico" : "directa al comprador"}${p.entrega.referencia ? ` · referencia ${p.entrega.referencia}` : ""}`,
+      errorMessage: sinReconocer.length ? `Necesita revisión: ${sinReconocer.join(", ")} no corresponde a ningún producto publicado desde DropshipPilot. No se comprará hasta revisarlo.` : null,
+      orderedAt: p.pagadoEn, updatedAt: ahora(),
+    });
+    if (eOrden) {
+      if (eOrden.code === "23505") continue; // otra sincronización la guardó a la vez
+      throw new ErrorApp("error_interno", "No se pudo guardar un pedido");
+    }
+    await servicio.from("OrderItem").insert(items.map((i) => ({
+      orderId, productId: i.producto?.id ?? null, variantId: i.variante?.id ?? null, supplierVariantId: i.variante?.supplierVariantId ?? null,
+      title: i.variante?.title ?? i.producto?.title ?? i.linea.sku, sku: i.linea.sku, quantity: i.linea.cantidad,
+      unitPrice: i.linea.precioVentaUsd, unitCost: i.variante ? Number(i.variante.costPrice) || 0 : 0, totalPrice: redondear(i.linea.precioVentaUsd * i.linea.cantidad), imageUrl: i.variante?.imageUrl ?? null,
+    })));
+    nuevos += 1;
+    if (sinReconocer.length) revision += 1;
+  }
+
+  if (typeof resp.siguiente_desde === "string" && resp.siguiente_desde) {
+    await servicio.from("Store").update({ settings: { ...(tienda.settings ?? {}), pedidosDesde: resp.siguiente_desde }, updatedAt: ahora() }).eq("id", tienda.id);
+  }
+  return { disponible: true, nuevos, actualizados, revision, problemas };
+}
+
+/** Informa a Retador de la compra / envío de un pedido (idempotente). */
+async function informarRetador(tienda: any, orden: any, estado: "comprado" | "enviado" | "entregado" | "error", extra: Record<string, unknown> = {}) {
+  return await conRetador(tienda, "pedido_estado", { pedido_id: orden.storeOrderId, estado, ...extra });
+}
+
+async function accionPedidoInformar(uid: string, cuerpo: any) {
+  const { data: orden } = await servicio.from("Order").select("*").eq("id", String(cuerpo.orderId ?? "")).eq("userId", uid).maybeSingle();
+  if (!orden) throw new ErrorApp("pedido_no_encontrado", "No se encontró ese pedido");
+  const tienda = await tiendaPropia(uid, orden.storeId);
+  const estado = cuerpo.estado;
+  if (!["comprado", "enviado", "entregado", "error"].includes(estado)) throw new ErrorApp("datos_invalidos", "Estado no válido", { campo: "estado" });
+  const extra: Record<string, unknown> = {};
+  if (typeof cuerpo.proveedor === "string") extra.proveedor = cuerpo.proveedor;
+  if (typeof orden.supplierOrderId === "string" && orden.supplierOrderId) extra.proveedor_pedido_id = orden.supplierOrderId;
+  if (orden.trackingNumber) extra.seguimiento = { numero: orden.trackingNumber, empresa: orden.trackingCompany ?? null, url: orden.trackingUrl ?? null };
+  if (typeof cuerpo.mensaje === "string") extra.mensaje = cuerpo.mensaje.slice(0, 300);
+  await informarRetador(tienda, orden, estado, extra);
+  return { orderId: orden.id, estado };
+}
+
+/** SOLO PRUEBAS con Retador simulado y administrador: crea un pedido pagado de mentira con un producto ya publicado. */
+async function accionSimularPedido(uid: string, cuerpo: any) {
+  const tienda = await tiendaPropia(uid, cuerpo.storeId);
+  if (!tienda.settings?.simulada) throw new ErrorApp("solo_simulador", "Los pedidos de prueba solo existen con el Retador simulado.");
+  const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
+  if (yo?.role !== "ADMIN") throw new ErrorApp("solo_admin", "Solo el administrador puede crear pedidos de prueba.");
+  const { data: producto } = await servicio.from("Product").select("id").eq("userId", uid).eq("storeId", tienda.id).not("storeProductId", "is", null).order("createdAt", { ascending: false }).limit(1).maybeSingle();
+  if (!producto) throw new ErrorApp("sin_productos", "Publica primero un producto en el Retador simulado para poder probar un pedido.");
+  const { data: variante } = await servicio.from("ProductVariant").select("sku").eq("productId", producto.id).order("position").limit(1).maybeSingle();
+  await conRetador(tienda, "simular_pedido", { ref: `dsp:${tienda.id}:${producto.id}`, sku: variante?.sku, cantidad: Number.isInteger(cuerpo.cantidad) ? cuerpo.cantidad : 1 });
+  return { creado: true };
+}
+
 /* ───────────────────────────── Entrada ───────────────────────────── */
 
 Deno.serve(async (req) => {
@@ -548,6 +673,7 @@ Deno.serve(async (req) => {
     const acciones: Record<string, (uid: string, c: any) => Promise<unknown>> = {
       conectar: accionConectar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
       publicar: accionPublicar, actualizar: accionActualizar, retirar: accionRetirar, estado: accionEstado,
+      pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
     };
     const f = acciones[accion];
     if (!f) return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });

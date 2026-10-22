@@ -53,11 +53,11 @@ export async function descifrar(valor: string): Promise<string> {
 
 /* ─────────────── Llamadas a Retador ─────────────── */
 
-export type Accion = "config" | "publicar" | "actualizar" | "retirar" | "estado";
+export type Accion = "config" | "publicar" | "actualizar" | "retirar" | "estado" | "pedidos" | "pedido_estado" | "simular_pedido";
 
 export async function llamarRetador(token: string, accion: Accion, cuerpo: Record<string, unknown> = {}): Promise<any> {
   const simulado = esSimulado(token);
-  const url = simulado ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/retador-simulado` : `${URL_RETADOR}/dropship-${accion}`;
+  const url = simulado ? `${Deno.env.get("SUPABASE_URL")}/functions/v1/retador-simulado` : `${URL_RETADOR}/dropship-${accion.replaceAll("_", "-")}`;
   const cabeceras: Record<string, string> = { "Content-Type": "application/json", "x-dropship-token": token };
   if (simulado) {
     cabeceras["Authorization"] = `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`;

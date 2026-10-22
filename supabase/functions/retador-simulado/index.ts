@@ -147,5 +147,52 @@ Deno.serve(async (req) => {
     return ok({ productos });
   }
 
+  // ───────── Pedidos (contrato docs/contrato-pedidos.md) ─────────
+  // Acción solo del simulador: crea un pedido PAGADO de prueba con una línea de un producto ya publicado en el simulador.
+  if (accion === "simular_pedido") {
+    const p = await leer(String(c.ref ?? ""));
+    if (!p) return fallo(404, "producto_no_encontrado", "No existe ningún producto con esa referencia");
+    const v = p.variantes.find((x: any) => x.sku === c.sku) ?? p.variantes[0];
+    const cantidad = Number.isInteger(c.cantidad) && c.cantidad > 0 ? c.cantidad : 1;
+    const pedido_id = crypto.randomUUID();
+    const ahora = new Date().toISOString();
+    const n = (await servicio.from("RetadorSimulado").select("ref", { count: "exact", head: true }).like("ref", "pedido:%")).count ?? 0;
+    await guardar(`pedido:${pedido_id}`, {
+      pedido_id, numero: `S-${String(n + 1).padStart(6, "0")}`, pagado_en: ahora, actualizado_en: ahora, moneda: "USD",
+      lineas: [{ ref: c.ref, sku: v.sku, cantidad, precio_venta_usd: v.precio_venta_usd }],
+      entrega: { tipo: "centro_logistico", pais: "US", nombre: "Centro logístico de prueba", telefono: "+1 555 0100", direccion1: "123 Calle de Prueba", direccion2: "", ciudad: "Phoenix", provincia: "AZ", codigo_postal: "85001", referencia: `S-${String(n + 1).padStart(6, "0")}` },
+      estado_compra: "pendiente", proveedor_pedido_id: null, seguimiento: null,
+    });
+    return ok({ pedido_id });
+  }
+
+  if (accion === "pedidos") {
+    const limite = Number.isInteger(c.limite) && c.limite > 0 ? Math.min(c.limite, 100) : 50;
+    const { data } = await servicio.from("RetadorSimulado").select("data").like("ref", "pedido:%");
+    let lista = (data ?? []).map((f: any) => f.data).filter((p: any) => p?.actualizado_en);
+    if (typeof c.desde === "string") lista = lista.filter((p: any) => p.actualizado_en > c.desde);
+    lista.sort((a: any, b: any) => (a.actualizado_en < b.actualizado_en ? -1 : 1));
+    const pagina = lista.slice(0, limite);
+    return ok({ pedidos: pagina, siguiente_desde: pagina.length ? pagina[pagina.length - 1].actualizado_en : (c.desde ?? null) });
+  }
+
+  if (accion === "pedido_estado") {
+    const p = await leer(`pedido:${String(c.pedido_id ?? "")}`);
+    if (!p) return fallo(404, "pedido_no_encontrado", "No existe ese pedido");
+    if (p.estado_compra === "cancelado") return fallo(409, "pedido_cancelado", "El pedido está cancelado");
+    const orden = ["pendiente", "comprado", "enviado", "entregado"];
+    if (!["comprado", "enviado", "entregado", "error"].includes(c.estado)) return fallo(400, "datos_invalidos", "Estado no válido", { campo: "estado" });
+    const desde = orden.indexOf(p.estado_compra);
+    const hasta = orden.indexOf(c.estado);
+    const permitido = c.estado === "error" || p.estado_compra === c.estado || (p.estado_compra === "error" && c.estado === "comprado") || (desde >= 0 && hasta > desde && hasta - desde === 1);
+    if (!permitido) return fallo(409, "transicion_no_valida", `No se puede pasar de «${p.estado_compra}» a «${c.estado}»`);
+    p.estado_compra = c.estado;
+    if (typeof c.proveedor_pedido_id === "string") p.proveedor_pedido_id = c.proveedor_pedido_id;
+    if (c.seguimiento && typeof c.seguimiento === "object") p.seguimiento = c.seguimiento;
+    p.actualizado_en = new Date().toISOString();
+    await guardar(`pedido:${p.pedido_id}`, p);
+    return ok({ pedido_id: p.pedido_id, estado: p.estado_compra });
+  }
+
   return fallo(400, "accion_desconocida", `Acción desconocida: ${accion}`);
 });

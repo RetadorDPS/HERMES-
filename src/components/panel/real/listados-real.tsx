@@ -2,9 +2,8 @@
 
 import Link from 'next/link';
 import { Suspense, useMemo } from 'react';
-import { OrdersTable } from '@/app/(dashboard)/orders/orders-table';
 import { StoreManager } from '@/app/(dashboard)/stores/store-manager';
-import { obtenerPedidos, obtenerProveedores, obtenerTiendas } from '@/lib/real/datos';
+import { obtenerProveedores, obtenerTiendas } from '@/lib/real/datos';
 import { Alert } from '@/components/ui/alert';
 import { obtenerTiendaRetador } from '@/lib/real/retador';
 import { ProductosRetador } from './productos-retador';
@@ -45,22 +44,6 @@ export function ProductosReal() {
           </p>
         </>
       )}
-    </PantallaReal>
-  );
-}
-
-export function PedidosReal() {
-  const { datos, error, cargando, recargar } = useCarga(obtenerPedidos);
-  return (
-    <PantallaReal
-      titulo="Pedidos y monitor de envíos"
-      subtitulo="Fulfillment automático: compra al proveedor, tracking y aviso al cliente"
-      cargando={cargando}
-      error={error}
-      alRecargar={recargar}
-      tour="screen:orders"
-    >
-      {datos && <OrdersTable orders={datos.pedidos as any} summary={datos.resumen} />}
     </PantallaReal>
   );
 }
