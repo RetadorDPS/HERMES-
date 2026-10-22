@@ -211,7 +211,11 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return responder({ ok: false, codigo: "metodo", error: "Usa POST" }, 405);
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const uid = (await servicio.auth.getUser(jwt)).data?.user?.id;
+  // Llamada interna del barrido programado (`pedidos-barrido`): con la clave de servicio, que solo vive en el servidor,
+  // se actúa en nombre del usuario indicado en `x-usuario`, y SOLO se puede pedir `comprar` (nunca cambiar la configuración).
+  const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const uid = interna ? (req.headers.get("x-usuario") ?? undefined) : (await servicio.auth.getUser(jwt)).data?.user?.id;
+  if (interna && (await req.clone().json().catch(() => ({})))?.accion !== "comprar") return responder({ ok: false, codigo: "no_permitido", error: "Por la vía interna solo se puede comprar" }, 403);
   if (!uid) return responder({ ok: false, codigo: "sesion", error: "Sesión no válida" }, 401);
   const cuerpo = await req.json().catch(() => null);
   if (!cuerpo) return responder({ ok: false, codigo: "datos_invalidos", error: "El cuerpo no es JSON" });
