@@ -1,0 +1,1 @@
+../_compartido/compras.ts

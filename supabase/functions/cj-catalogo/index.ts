@@ -193,14 +193,14 @@ Deno.serve(async (req) => {
   let accion: string = cuerpo?.accion ?? "probar";
   const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (interna) {
-    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar" && accion !== "crear_pedido") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
   } else {
     const { data: auth } = await servicio.auth.getUser(jwt);
     const uid = auth?.user?.id;
     if (!uid) return responder({ ok: false, error: "Sesión no válida" }, 401);
     const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
     if (yo?.role !== "ADMIN") return responder({ ok: false, error: "Solo el administrador puede usar el catálogo de proveedores" }, 403);
-    if (accion === "importar" || accion === "refrescar") return responder({ ok: false, error: "Esta acción solo se pide desde las funciones internas (importar-enlace y monitor-proveedor)" }, 403);
+    if (accion === "importar" || accion === "refrescar" || accion === "crear_pedido") return responder({ ok: false, error: "Esta acción solo se pide desde las funciones internas (importar-enlace, monitor-proveedor y compras-proveedor)" }, 403);
   }
 
   const claveCruda = Deno.env.get("CJ_API_KEY") ?? "";
@@ -399,6 +399,41 @@ Deno.serve(async (req) => {
       mensaje: `${recibidos} recibidos de CJ · ${guardados} guardados`,
       recibidos, guardados, totalEnCj: totalRegistros, avisos, forma: { claves: primeraForma },
     });
+  }
+
+  /* ───────────────────────────── crear_pedido (compra de un pedido de Retador; solo vía interna) ───────────────────────────── */
+  // Crea el pedido en CJ SIN PAGARLO (payType 3): no se mueve dinero. El pago se hace después, aparte. Una sola llamada a CJ.
+  if (accion === "crear_pedido") {
+    const e = cuerpo?.entrega ?? {};
+    const items: { vid: string; cantidad: number }[] = Array.isArray(cuerpo?.items) ? cuerpo.items : [];
+    const texto = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+    const faltan = ["nombre", "direccion1", "ciudad", "pais"].filter((k) => !texto(e[k]));
+    if (!texto(cuerpo?.numero) || !texto(cuerpo?.origen) || !texto(cuerpo?.logistica) || !items.length || faltan.length) {
+      return responder({ ok: false, error: `Faltan datos para crear el pedido en CJ${faltan.length ? ` (${faltan.join(", ")})` : ""}`, ...diagnostico });
+    }
+    if (items.some((i) => !texto(i?.vid) || !Number.isInteger(i?.cantidad) || i.cantidad < 1)) return responder({ ok: false, error: "Alguna línea del pedido no es válida", ...diagnostico });
+    const cuerpoCj = {
+      orderNumber: texto(cuerpo.numero),
+      shippingCountryCode: texto(e.pais).toUpperCase(),
+      shippingProvince: texto(e.provincia),
+      shippingCity: texto(e.ciudad),
+      shippingAddress: texto(e.direccion1),
+      shippingAddress2: texto(e.direccion2),
+      shippingCustomerName: texto(e.nombre),
+      shippingPhone: texto(e.telefono),
+      shippingZip: texto(e.codigoPostal),
+      remark: texto(cuerpo?.nota).slice(0, 200),
+      fromCountryCode: texto(cuerpo.origen).toUpperCase(),
+      logisticName: texto(cuerpo.logistica),
+      payType: 3,
+      products: items.map((i) => ({ vid: texto(i.vid), quantity: i.cantidad })),
+    };
+    const r = await cj("/shopping/order/createOrderV2", { metodo: "POST", cuerpo: cuerpoCj });
+    if (!r.ok) return responder({ ok: false, error: `CJ no creó el pedido: ${r.mensaje}`, codigoCj: r.codigo, ...diagnostico });
+    const d = r.datos ?? {};
+    const idCj = d.orderId ?? d.cjOrderId ?? d.id ?? null;
+    if (!idCj) return responder({ ok: false, error: "CJ respondió sin identificador de pedido: se deja sin confirmar para revisarlo a mano", respuestaCj: d, ...diagnostico });
+    return await cerrarOk({ mensaje: "Pedido creado en CJ sin pagar", pedidoCjId: String(idCj), estadoCj: d.orderStatus ?? null });
   }
 
   /* ───────────────────────────── refrescar (monitor: precio y existencias actuales; solo vía interna) ───────────────────────────── */

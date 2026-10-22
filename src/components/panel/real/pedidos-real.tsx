@@ -2,7 +2,7 @@
 
 /**
  * Pedidos reales: los pedidos PAGADOS que Retador pasa a DropshipPilot para comprarlos al proveedor.
- * Hoy se anotan y se muestran; la compra al proveedor se activa aparte, con límites y con tu aprobación.
+ * La compra al proveedor se controla desde la tarjeta «Compras al proveedor»: empieza en Simulación y no compra nada hasta que tú lo decidas.
  */
 import { useState } from 'react';
 import Link from 'next/link';
@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn, formatRelative } from '@/lib/utils';
 import { llamarTienda, obtenerTiendaRetador } from '@/lib/real/retador';
+import { llamarCompras, type ModoCompras, type ResultadoCompra } from '@/lib/real/compras';
+import { ComprasConfig } from './compras-config';
 import { obtenerPedidosReales } from '@/lib/real/pedidos';
 import { etiquetaEstadoPedido } from '../../../../supabase/functions/_compartido/retador-pedidos';
 import { nombrePais } from '@/lib/paises';
@@ -28,6 +30,36 @@ export function PedidosReal() {
   });
   const [trabajando, setTrabajando] = useState<string | null>(null);
   const [resultado, setResultado] = useState<{ tipo: 'ok' | 'aviso' | 'error'; texto: string } | null>(null);
+  const [modo, setModo] = useState<ModoCompras | null>(null);
+  const [pedidoActivo, setPedidoActivo] = useState<string | null>(null);
+  const [mensajes, setMensajes] = useState<Record<string, { tipo: 'ok' | 'aviso' | 'error'; texto: string }>>({});
+
+  async function accionPedido(orderId: string, accion: 'comprar' | 'marcar_pagada', aprobar = false) {
+    setPedidoActivo(orderId);
+    try {
+      if (accion === 'marcar_pagada') {
+        const r = await llamarCompras<{ avisoRetador: string | null }>({ accion, orderId });
+        setMensajes((m) => ({ ...m, [orderId]: r.avisoRetador ? { tipo: 'aviso', texto: `Compra confirmada, pero Retador no recibió el aviso: ${r.avisoRetador}` } : { tipo: 'ok', texto: 'Compra confirmada y Retador avisado.' } }));
+      } else {
+        const r = await llamarCompras<ResultadoCompra>({ accion, orderId, aprobar });
+        if (r.motivo) setMensajes((m) => ({ ...m, [orderId]: { tipo: 'aviso', texto: r.motivo! } }));
+        else {
+          const x = r.resultados?.[0];
+          const texto = x?.simulada
+            ? `Simulado: se compraría en CJ por ${usd(x.costeUsd ?? 0)} desde ${x.origen} con «${x.logistica}». No se llamó al proveedor.`
+            : x?.hecho
+              ? `Pedido creado en CJ (${x.pedidoProveedorId}) SIN pagar. Págalo en CJ y luego pulsa «Ya lo pagué en CJ».`
+              : (x?.motivo ?? 'No se compró.');
+          setMensajes((m) => ({ ...m, [orderId]: { tipo: x?.hecho || x?.simulada ? 'ok' : 'aviso', texto } }));
+        }
+      }
+      await recargar();
+    } catch (e) {
+      setMensajes((m) => ({ ...m, [orderId]: { tipo: 'error', texto: (e as Error).message } }));
+    } finally {
+      setPedidoActivo(null);
+    }
+  }
 
   const tienda = datos?.tienda ?? null;
   const conectada = Boolean(tienda && tienda.status === 'CONNECTED');
@@ -75,9 +107,7 @@ export function PedidosReal() {
             ))}
           </div>
 
-          <Alert variant="info" title="Compras al proveedor: todavía apagadas">
-            Hoy los pedidos pagados se anotan aquí, pero <strong>no se compra nada automáticamente</strong>. La compra a CJ y AliExpress se activará aparte, primero en modo de simulación, con tope por pedido y por día y con tu aprobación en cada pedido.
-          </Alert>
+          <ComprasConfig alCambiar={setModo} />
 
           {!conectada ? (
             <Alert variant="warning" title="Conecta tu tienda de Retador">
@@ -91,7 +121,7 @@ export function PedidosReal() {
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-[13px]">Pedidos de Retador</CardTitle>
-                <CardDescription>Se buscan solos cada pocos minutos; aquí puedes buscarlos ahora.</CardDescription>
+                <CardDescription>Pulsa el botón para buscar los pedidos pagados que Retador tenga para ti.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -167,6 +197,23 @@ export function PedidosReal() {
                           <Truck className="size-3.5 text-indigo-300" /> Seguimiento {p.seguimiento.numero}
                           {p.seguimiento.empresa ? ` (${p.seguimiento.empresa})` : ''}
                         </p>
+                      )}
+                      {modo && modo !== 'APAGADO' && p.estado === 'PAID' && !p.aviso?.startsWith('Necesita revisión') && !p.compras.some((c) => ['EN_CURSO', 'CREADA', 'COMPRADA'].includes(c.estado)) && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button size="sm" variant={modo === 'MANUAL' ? 'default' : 'outline'} onClick={() => accionPedido(p.id, 'comprar', modo === 'MANUAL')} disabled={pedidoActivo !== null}>
+                            {pedidoActivo === p.id && <Loader2 className="size-4 animate-spin" />}
+                            {modo === 'SIMULACION' ? 'Simular compra' : 'Aprobar y comprar'}
+                          </Button>
+                        </div>
+                      )}
+                      {p.compras.some((c) => c.estado === 'CREADA') && (
+                        <Button size="sm" variant="outline" onClick={() => accionPedido(p.id, 'marcar_pagada')} disabled={pedidoActivo !== null}>
+                          {pedidoActivo === p.id && <Loader2 className="size-4 animate-spin" />}
+                          Ya lo pagué en CJ
+                        </Button>
+                      )}
+                      {mensajes[p.id] && (
+                        <p className={cn('rounded-lg border px-3 py-2 text-[12px]', mensajes[p.id].tipo === 'ok' ? 'border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-200' : mensajes[p.id].tipo === 'error' ? 'border-red-500/30 bg-red-500/[0.07] text-red-200' : 'border-amber-500/30 bg-amber-500/[0.07] text-amber-200')}>{mensajes[p.id].texto}</p>
                       )}
                       {p.aviso && <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] text-amber-200">{p.aviso}</p>}
                     </CardContent>

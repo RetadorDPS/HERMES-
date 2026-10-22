@@ -21,14 +21,14 @@ create table if not exists public."CompraProveedor" (
   "userId"        text not null references public."User"(id) on update cascade on delete cascade,
   proveedor       text not null check (proveedor in ('CJ_DROPSHIPPING', 'ALIEXPRESS')),
   modo            text not null check (modo in ('SIMULACION', 'MANUAL', 'AUTOMATICO')),
-  estado          text not null check (estado in ('SIMULADA', 'EN_CURSO', 'COMPRADA', 'ERROR', 'CANCELADA')),
+  estado          text not null check (estado in ('SIMULADA', 'EN_CURSO', 'CREADA', 'COMPRADA', 'ERROR', 'CANCELADA')),
   "costeUsd"      numeric(12,2),
   "proveedorPedidoId" text,
   mensaje         text,
   "creadoEn"      timestamp without time zone not null default now()
 );
 -- Una compra real (en curso o hecha) por pedido y proveedor: impide comprar dos veces aunque se pulse dos veces o fallen los reintentos.
-create unique index if not exists "CompraProveedor_una_real" on public."CompraProveedor" ("orderId", proveedor) where estado in ('EN_CURSO', 'COMPRADA');
+create unique index if not exists "CompraProveedor_una_real" on public."CompraProveedor" ("orderId", proveedor) where estado in ('EN_CURSO', 'CREADA', 'COMPRADA');
 create index if not exists "CompraProveedor_user_fecha" on public."CompraProveedor" ("userId", "creadoEn");
 alter table public."CompraProveedor" enable row level security;
 drop policy if exists "CompraProveedor_ver_propia" on public."CompraProveedor";
