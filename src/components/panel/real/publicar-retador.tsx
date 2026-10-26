@@ -93,9 +93,9 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         setTituloEdit(p.contenido.titulo);
         setDescripcion(p.contenido.descripcion);
         setFotos(p.contenido.imagenes);
-        const primera = p.categorias[0];
-        setCat(primera?.cat ?? '');
-        setSubcat(primera?.subcategorias[0] ?? '');
+        // Sin categoría por defecto: la elige la persona (antes salía la primera de la lista y se podía publicar una depiladora como «Muebles»)
+        setCat('');
+        setSubcat('');
         setProvincia(p.provincias.includes('La Habana') ? 'La Habana' : p.provincias[0] ?? '');
       } catch (e) {
         if (vivo) setError((e as Error).message);
@@ -342,9 +342,10 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                     value={cat}
                     onChange={(e) => {
                       setCat(e.target.value);
-                      setSubcat(prep.categorias.find((c) => c.cat === e.target.value)?.subcategorias[0] ?? '');
+                      setSubcat('');
                     }}
                   >
+                    <option value="">Elige una categoría…</option>
                     {prep.categorias.map((c) => (
                       <option key={c.cat} value={c.cat}>
                         {c.nombre}
@@ -354,7 +355,8 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                 </label>
                 <label className="space-y-1 text-[12px]">
                   <span className="text-muted-foreground">Subcategoría</span>
-                  <select className="h-9 w-full rounded-lg border border-white/10 bg-white/[0.03] px-2 text-sm" value={subcat} onChange={(e) => setSubcat(e.target.value)}>
+                  <select className="h-9 w-full rounded-lg border border-white/10 bg-white/[0.03] px-2 text-sm" value={subcat} onChange={(e) => setSubcat(e.target.value)} disabled={!categoria}>
+                    <option value="">Elige una subcategoría…</option>
                     {(categoria?.subcategorias ?? []).map((s) => (
                       <option key={s} value={s}>
                         {s}
