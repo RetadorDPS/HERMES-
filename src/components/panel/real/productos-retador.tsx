@@ -6,7 +6,7 @@
  * rechaza cualquier precio con el que se pierda dinero.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Loader2, Pause, Pencil, Play, TriangleAlert } from 'lucide-react';
+import { ExternalLink, Loader2, Pause, Pencil, Play, Trash2, TriangleAlert } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -52,8 +52,25 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
   }, [tienda.id]);
 
   useEffect(() => {
-    void cargar();
-  }, [cargar, tienda.publicados]);
+    // Primero se pregunta a Retador qué sigue existiendo (si lo eliminaste allí, aquí se limpia solo) y luego se lee la lista
+    void (async () => {
+      try {
+        await llamarTienda({ accion: 'estado', storeId: tienda.id });
+      } catch {
+        /* sin respuesta de Retador: se enseña lo último que se sabe */
+      }
+      await cargar();
+    })();
+  }, [cargar, tienda.id, tienda.publicados]);
+
+  async function eliminar(p: ProductoRetador) {
+    const archivado = p.status === 'ARCHIVED';
+    const pregunta = archivado
+      ? 'Este producto ya no existe en Retador. ¿Quitarlo de esta lista?'
+      : `¿Eliminar «${p.title}» de Retador? Desaparece del mercado y de tu perfil, y podrás volver a importarlo cuando quieras. Si tiene pedidos pendientes, Retador no lo permitirá.`;
+    if (!window.confirm(pregunta)) return;
+    await accion(p.id, 'eliminar', { accion: 'eliminar' }, archivado ? 'Quitado de la lista.' : 'Producto eliminado de Retador. Ya puedes importarlo otra vez.');
+  }
 
   async function accion(id: string, etiqueta: string, cuerpo: Record<string, unknown>, ok: string) {
     setOcupado(`${id}:${etiqueta}`);
@@ -148,6 +165,9 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
                       {ocupado === `${p.id}:retirar` ? <Loader2 className="animate-spin" /> : <Pause />} Pausar
                     </Button>
                   )}
+                  <Button size="sm" variant="ghost" className="text-rose-300 hover:text-rose-200" disabled={!!ocupado} onClick={() => eliminar(p)}>
+                    {ocupado === `${p.id}:eliminar` ? <Loader2 className="animate-spin" /> : <Trash2 />} {p.status === 'ARCHIVED' ? 'Quitar de la lista' : 'Eliminar'}
+                  </Button>
                   {p.url && (
                     <Button size="sm" variant="ghost" asChild>
                       <a href={p.url} target="_blank" rel="noopener noreferrer">
@@ -157,6 +177,7 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
                   )}
                 </div>
               )}
+              {editando !== p.id && p.status !== 'ARCHIVED' && <p className="text-[11px] text-muted-foreground">Pausar solo lo oculta del mercado (sigue en tu perfil de Retador). Eliminar lo quita de los dos sitios.</p>}
             </div>
           );
         })}

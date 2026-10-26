@@ -81,7 +81,7 @@ async function cargarPedido(uid: string, orderId: unknown) {
   if (!orden) throw new ErrorApp("pedido_no_encontrado", "No se encontró ese pedido");
   const { data: lineas } = await servicio.from("OrderItem").select("*").eq("orderId", orderId);
   const productosIds = [...new Set((lineas ?? []).map((l: any) => l.productId).filter(Boolean))];
-  const { data: productos } = productosIds.length ? await servicio.from("Product").select("id,supplierId,supplierProductId").in("id", productosIds) : { data: [] as any[] };
+  const { data: productos } = productosIds.length ? await servicio.from("Product").select("id,supplierId,supplierProductId,rawPayload").in("id", productosIds) : { data: [] as any[] };
   const { data: previas, error } = await servicio.from("CompraProveedor").select("proveedor,estado").eq("orderId", orderId).in("estado", ["EN_CURSO", "CREADA", "COMPRADA"]);
   if (tablaFalta(error)) throw TABLAS_PENDIENTES;
 
@@ -93,7 +93,7 @@ async function cargarPedido(uid: string, orderId: unknown) {
     const proveedor = producto ? PROVEEDOR_DE_SUPPLIER[producto.supplierId] ?? null : null;
     let ficha: any = null;
     if (producto && proveedor) {
-      const { data: item } = await servicio.from("CatalogItem").select("id").eq("provider", proveedor).eq("externalId", producto.supplierProductId).maybeSingle();
+      const { data: item } = await servicio.from("CatalogItem").select("id").eq("provider", proveedor).eq("externalId", producto.supplierProductId ?? producto.rawPayload?.archivado?.supplierProductId ?? "").maybeSingle();
       if (item) ficha = (await servicio.from("CatalogItemDetail").select("ficha").eq("itemId", item.id).maybeSingle()).data?.ficha ?? null;
     }
     const variante = ficha?.variantes?.find((v: any) => String(v.vid) === String(l.supplierVariantId) || v.sku === l.sku);

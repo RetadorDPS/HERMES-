@@ -95,13 +95,18 @@ Deno.serve(async (req) => {
     return ok({ ref: c.ref, producto_id, url: `https://retadormarketplace.es/simulado/${producto_id}`, estado: "activo", moderacion: "approved", variantes: vistaVariantes(p), imagenes: p.imagenes.length, cat: p.cat, subcat: p.subcat });
   }
 
-  if (accion === "actualizar" || accion === "retirar" || accion === "simular_edicion_vendedor") {
+  if (accion === "actualizar" || accion === "retirar" || accion === "eliminar" || accion === "simular_edicion_vendedor") {
     const p = await leer(String(c.ref ?? ""));
     if (!p) return fallo(404, "producto_no_encontrado", "No existe ningún producto con esa referencia");
     if (accion === "simular_edicion_vendedor") {
       p.origen_ultimo_cambio = "vendedor"; p.actualizado_en = new Date().toISOString();
       await guardar(c.ref, p);
       return ok({ ref: c.ref });
+    }
+    if (accion === "eliminar") {
+      p.estado = "eliminado"; p.origen_ultimo_cambio = "dropship"; p.actualizado_en = new Date().toISOString();
+      await guardar(c.ref, p);
+      return ok({ ref: c.ref, producto_id: p.producto_id, estado: "eliminado" });
     }
     if (accion === "retirar") {
       p.estado = "pausado"; p.origen_ultimo_cambio = "dropship"; p.actualizado_en = new Date().toISOString();

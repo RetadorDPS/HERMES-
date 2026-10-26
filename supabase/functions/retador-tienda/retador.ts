@@ -53,7 +53,7 @@ export async function descifrar(valor: string): Promise<string> {
 
 /* ─────────────── Llamadas a Retador ─────────────── */
 
-export type Accion = "config" | "publicar" | "actualizar" | "retirar" | "estado" | "pedidos" | "pedido_estado" | "simular_pedido";
+export type Accion = "config" | "publicar" | "actualizar" | "retirar" | "eliminar" | "estado" | "pedidos" | "pedido_estado" | "simular_pedido";
 
 export async function llamarRetador(token: string, accion: Accion, cuerpo: Record<string, unknown> = {}): Promise<any> {
   const simulado = esSimulado(token);

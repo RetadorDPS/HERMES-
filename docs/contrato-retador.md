@@ -90,6 +90,12 @@ Cuerpo (todo opcional salvo `ref`):
 ## `dropship-retirar`
 `{ "ref": "…" }` → pone el producto en `paused` (no lo borra). Idempotente. Respuesta `{ ok, ref, producto_id, estado: "pausado" }`.
 
+## `dropship-eliminar` (propuesto, v1.4)
+`{ "ref": "…" }` → ELIMINA el producto del mercado y del perfil del vendedor (hoy `retirar` solo lo pausa y el vendedor lo sigue viendo en su perfil). Idempotente: si ya no existe responde `404 ref_no_encontrada` o `409 producto_eliminado` y DropshipPilot lo da por eliminado.
+- Si el producto tiene pedidos pagados pendientes de cumplir, NO se elimina: `409 pedidos_pendientes` (con el número de pedidos). Con pedidos ya cerrados sí se puede (el historial del pedido se conserva).
+- Después de eliminar, `dropship-estado` devuelve `{ "existe": false }` para esa ref y la ref no se reutiliza: volver a importar el mismo producto crea una ref nueva.
+- DropshipPilot, por su lado, ya llama a esta acción desde el botón «Eliminar» de Productos. Mientras Retador no la ofrezca, el botón explica que hay que pausar y eliminar en Retador, y el producto se limpia solo aquí al detectar que ya no existe.
+
 ## `dropship-estado`
 `{ "refs": ["…", "…"] }` (hasta 100). Respuesta `{ ok, version_contrato, productos: [ … ] }` con un elemento por ref (`{ "ref": "…", "existe": false }` si no existe):
 ```json

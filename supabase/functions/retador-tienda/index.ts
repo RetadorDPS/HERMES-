@@ -83,11 +83,53 @@ async function conRetador(tienda: any, accion: Parameters<typeof llamarRetador>[
   }
 }
 
-/** Si Retador dice que el producto ya no existe o fue eliminado, aquí queda archivado y con el motivo, en vez de seguir «activo». */
-async function marcarProductoSiDesaparecio(productId: string, e: unknown) {
-  if (e instanceof ErrorRetador && (e.codigo === "ref_no_encontrada" || e.codigo === "producto_eliminado")) {
-    await servicio.from("Product").update({ status: "ARCHIVED", lastSyncStatus: "FAILED", lastSyncError: e.message, updatedAt: ahora() }).eq("id", productId);
+/**
+ * Deja un producto «fuera de Retador» sin bloquear que se vuelva a importar: si nunca tuvo pedidos se borra la fila
+ * (sus variantes e imágenes se van con ella); si tuvo pedidos se conserva archivada para no perder el historial, pero se le
+ * libera el identificador del proveedor y el enlace (que son únicos), sale de la lista de productos de Retador y se guarda el original en `rawPayload.archivado`.
+ */
+async function liberarProducto(productId: string, motivo: string) {
+  const { data: p } = await servicio.from("Product").select("id,supplierProductId,storeProductId,sourceUrl,rawPayload").eq("id", productId).maybeSingle();
+  if (!p) return;
+  const { count } = await servicio.from("OrderItem").select("id", { count: "exact", head: true }).eq("productId", productId);
+  if (!count) {
+    await servicio.from("Product").delete().eq("id", productId);
+    return;
   }
+  await servicio.from("Product").update({
+    status: "ARCHIVED", supplierProductId: null, storeProductId: null, sourceUrl: `${String(p.sourceUrl ?? "").split("#archivado-")[0]}#archivado-${productId.slice(0, 8)}`,
+    rawPayload: { ...(p.rawPayload ?? {}), archivado: { supplierProductId: p.supplierProductId ?? p.rawPayload?.archivado?.supplierProductId ?? null, storeProductId: p.storeProductId ?? p.rawPayload?.archivado?.storeProductId ?? null, en: ahora(), motivo } },
+    lastSyncStatus: "FAILED", lastSyncError: motivo, updatedAt: ahora(),
+  }).eq("id", productId);
+}
+
+async function marcarProductoSiDesaparecio(productId: string, e: unknown) {
+  if (e instanceof ErrorRetador && (e.codigo === "ref_no_encontrada" || e.codigo === "producto_eliminado")) await liberarProducto(productId, e.message);
+}
+
+/**
+ * ¿Sigue el producto publicado en Retador? Si Retador dice que ya no existe (el vendedor lo eliminó allí), se libera aquí
+ * y se devuelve null para que se pueda volver a importar. Ante cualquier duda (fallo de red) se supone que sigue publicado.
+ */
+async function publicadoVigente(tienda: any, supplierProductId: string) {
+  const { data: y } = await servicio.from("Product").select("id,storeProductId,status").eq("storeId", tienda.id).eq("supplierProductId", supplierProductId).maybeSingle();
+  if (!y) return null;
+  if (y.status === "ARCHIVED") {
+    await liberarProducto(y.id, "Producto archivado");
+    return null;
+  }
+  if (!y.storeProductId) return y;
+  try {
+    const r = await conRetador(tienda, "estado", { refs: [`dsp:${tienda.id}:${y.id}`] });
+    const f = (r.productos ?? [])[0];
+    if (f && (f.existe === false || f.estado === "eliminado")) {
+      await liberarProducto(y.id, "Ya no existe en Retador");
+      return null;
+    }
+  } catch {
+    /* sin respuesta de Retador: se mantiene como publicado */
+  }
+  return y;
 }
 
 async function marcarTiendaConError(id: string, mensaje: string) {
@@ -268,7 +310,7 @@ async function accionPreparar(uid: string, cuerpo: any) {
   const tarifas = tarifasDeConfig(cfg);
   const { item, ficha, proveedor } = await leerCatalogo(cuerpo.itemId);
   const { variantes, hub } = prepararVariantes(ficha, proveedor, tarifas);
-  const { data: yaPublicado } = await servicio.from("Product").select("id,storeProductId,status").eq("storeId", tienda.id).eq("supplierProductId", item.externalId).maybeSingle();
+  const yaPublicado = await publicadoVigente(tienda, item.externalId);
   return {
     tarifas,
     categorias: cfg.categorias ?? [],
@@ -325,8 +367,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
   });
 
   const contenido = contenidoFinal(cuerpo.contenido, contenidoPorDefecto(item, ficha));
-  const { data: yaExiste } = await servicio.from("Product").select("id").eq("storeId", tienda.id).eq("supplierProductId", item.externalId).maybeSingle();
-  if (yaExiste) throw new ErrorApp("ya_publicado", "Este producto ya está publicado en tu tienda de Retador. Edítalo desde «Productos».", { productId: yaExiste.id });
+  const yaExiste = await publicadoVigente(tienda, item.externalId);
+  if (yaExiste) throw new ErrorApp("ya_publicado", yaExiste.status === "PAUSED" ? "Este producto ya está en tu tienda de Retador, pausado. Reactívalo desde «Productos», o elimínalo allí para volver a importarlo." : "Este producto ya está publicado en tu tienda de Retador. Edítalo desde «Productos».", { productId: yaExiste.id });
 
   // Registro local en borrador (la restricción única evita publicar dos veces a la vez).
   // Product tiene un índice único (usuario, sourceUrl): el fragmento «#tienda-…» (no cambia el enlace) permite el mismo producto en tiendas distintas.
@@ -502,6 +544,33 @@ async function accionRetirar(uid: string, cuerpo: any) {
   return { productId: p.id, estado: remoto.estado ?? "pausado" };
 }
 
+/** Elimina el producto de Retador (mercado y perfil del vendedor) y lo quita de aquí para poder importarlo otra vez cuando se quiera. */
+async function accionEliminar(uid: string, cuerpo: any) {
+  if (typeof cuerpo.productId !== "string" || !cuerpo.productId) throw new ErrorApp("datos_invalidos", "Indica el producto");
+  const { data: p } = await servicio.from("Product").select("id,storeId,storeProductId,status").eq("id", cuerpo.productId).eq("userId", uid).maybeSingle();
+  if (!p) throw new ErrorApp("producto_no_encontrado", "No se encontró ese producto");
+  // Ya archivado o nunca llegó a publicarse: solo se limpia aquí
+  if (p.status === "ARCHIVED" || !p.storeProductId || !p.storeId) {
+    await liberarProducto(p.id, "Quitado de la lista");
+    return { productId: p.id, eliminado: true };
+  }
+  const tienda = await tiendaPropia(uid, p.storeId);
+  try {
+    await conRetador(tienda, "eliminar", { ref: `dsp:${tienda.id}:${p.id}` });
+  } catch (e) {
+    if (e instanceof ErrorRetador && (e.codigo === "ref_no_encontrada" || e.codigo === "producto_eliminado")) {
+      // Ya no estaba en Retador: basta con limpiarlo aquí
+    } else if (e instanceof ErrorRetador && (e.codigo === "http_404" || e.codigo === "accion_desconocida")) {
+      throw new ErrorApp("eliminar_no_disponible", "Retador todavía no permite eliminar desde DropshipPilot. Por ahora pausa el producto y elimínalo en tu perfil de Retador: aquí se quitará solo.");
+    } else {
+      throw e;
+    }
+  }
+  await liberarProducto(p.id, "Eliminado");
+  await registrar(uid, tienda.id, null, "DELETE", "SUCCESS", "Producto eliminado de Retador");
+  return { productId: p.id, eliminado: true };
+}
+
 async function accionEstado(uid: string, cuerpo: any) {
   const tienda = await tiendaPropia(uid, cuerpo.storeId);
   const { data: productos } = await servicio.from("Product").select("id,title,status,storeProductId,sellingPrice,updatedAt").eq("storeId", tienda.id).not("storeProductId", "is", null).limit(100);
@@ -511,7 +580,8 @@ async function accionEstado(uid: string, cuerpo: any) {
   for (const r of remoto.productos ?? []) {
     const id = String(r.ref ?? "").split(":")[2];
     if (!id) continue;
-    if (!r.existe) {
+    if (!r.existe || r.estado === "eliminado") {
+      await liberarProducto(id, "Ya no existe en Retador (lo eliminaste allí)");
       diferencias.push({ productId: id, tipo: "no_existe", mensaje: "Este producto ya no existe en Retador" });
       continue;
     }
@@ -673,7 +743,7 @@ Deno.serve(async (req) => {
     const acciones: Record<string, (uid: string, c: any) => Promise<unknown>> = {
       conectar: accionConectar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
       publicar: accionPublicar, actualizar: accionActualizar, retirar: accionRetirar, estado: accionEstado,
-      pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
+      eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
     };
     const f = acciones[accion];
     if (!f) return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });
