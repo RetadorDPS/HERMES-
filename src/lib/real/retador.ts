@@ -55,6 +55,8 @@ export interface TiendaRetador {
   provincias: string[];
   token: { prefijo: string; caducaEn: Date | null } | null;
   publicados: number;
+  /** Retador admite recibir las opiniones reales del proveedor (con su origen). */
+  resenasProveedor: boolean;
 }
 
 /** Convierte las tarifas que guarda la tienda (formato del contrato) al formato de las cuentas. */
@@ -106,6 +108,7 @@ export async function obtenerTiendaRetador(): Promise<TiendaRetador | null> {
     provincias: Array.isArray(aj.provincias) ? aj.provincias : [],
     token: aj.token ? { prefijo: String(aj.token.prefijo ?? ''), caducaEn: aj.token.caduca_en ? new Date(aj.token.caduca_en) : null } : null,
     publicados: publicados.count ?? 0,
+    resenasProveedor: aj.capacidades?.resenas_proveedor === true,
   };
 }
 

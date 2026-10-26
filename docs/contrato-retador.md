@@ -96,6 +96,18 @@ Cuerpo (todo opcional salvo `ref`):
 - Después de eliminar, `dropship-estado` devuelve `{ "existe": false }` para esa ref y la ref no se reutiliza: volver a importar el mismo producto crea una ref nueva.
 - DropshipPilot, por su lado, ya llama a esta acción desde el botón «Eliminar» de Productos. Mientras Retador no la ofrezca, el botón explica que hay que pausar y eliminar en Retador, y el producto se limpia solo aquí al detectar que ya no existe.
 
+## Opiniones del proveedor (propuesto, v1.4)
+Para que un producto de DropshipPilot llegue a Retador con confianza, DropshipPilot puede mandar las opiniones REALES que el proveedor (CJ o AliExpress) informa de ese producto. Retador las anuncia en `dropship-config` con `"capacidades": { "resenas_proveedor": true }`; mientras no lo diga, DropshipPilot no manda nada.
+- Va en `dropship-publicar` y en `dropship-actualizar` como `resenas_proveedor`:
+```json
+{ "fuente": "cj", "media": 3.9, "total": 229,
+  "muestra": [ { "puntuacion": 4, "texto": "Bon article", "pais": "FR", "fecha": "2021-10-18T05:52:45.000Z", "autor": "F***r" } ] }
+```
+- `media` y `total` son los reales del proveedor (o `null`). `muestra`: hasta 20 opiniones con texto, las más recientes primero, SIN escoger solo las buenas y sin tocar el texto (idioma original). Sin fotos. AliExpress solo informa media y total: `muestra` va vacía.
+- Retador las guarda APARTE de las reseñas de compradores de Retador (no caben en `reviews`, que exige un usuario real) y las enseña siempre con su origen: «Opiniones del producto en CJ Dropshipping (no son compradores de Retador)». Nunca se cuentan en la valoración del vendedor ni se mezclan con las verificadas.
+- Para el conector MCP: `retador_mi_producto` devuelve `resenas_proveedor` (marcadas como `campos_externos`, datos de terceros) y las herramientas de diseño de tienda solo pueden citar lo que haya ahí, con su origen y su fecha; nunca inventar opiniones ni atribuirlas a compradores de Retador.
+- Opiniones por traducir: Retador puede ofrecer una traducción automática al español junto al original, siempre indicando que es traducida.
+
 ## `dropship-estado`
 `{ "refs": ["…", "…"] }` (hasta 100). Respuesta `{ ok, version_contrato, productos: [ … ] }` con un elemento por ref (`{ "ref": "…", "existe": false }` si no existe):
 ```json
