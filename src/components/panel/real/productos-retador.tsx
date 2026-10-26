@@ -55,6 +55,8 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
     // Primero se pregunta a Retador qué sigue existiendo (si lo eliminaste allí, aquí se limpia solo) y luego se lee la lista
     void (async () => {
       try {
+        // La configuración de Retador se relee para saber qué admite (por ejemplo las opiniones del proveedor)
+        if (!tienda.resenasProveedor) await llamarTienda({ accion: 'config', storeId: tienda.id }).catch(() => undefined);
         await llamarTienda({ accion: 'estado', storeId: tienda.id });
       } catch {
         /* sin respuesta de Retador: se enseña lo último que se sabe */
