@@ -10,7 +10,7 @@
  * Seguridad: por defecto SIMULACION (no llama a ningún proveedor). Con MANUAL hace falta `aprobar: true` en cada pedido.
  * El pedido se crea en CJ SIN PAGAR (no se mueve dinero); el pago lo confirma el usuario. Nunca se compra dos veces
  * (índice único en CompraProveedor), ni un pedido sin pagar, cancelado, con datos dudosos o por encima de los topes.
- * Las llamadas al proveedor van de una en una por la vía interna de `cj-catalogo`. AliExpress todavía no está construido.
+ * Las llamadas al proveedor van de una en una, por la función propia de CJ `cj-pedido` (vía interna). AliExpress todavía no está construido.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -115,7 +115,7 @@ async function cargarPedido(uid: string, orderId: unknown) {
 }
 
 async function llamarCj(cuerpo: Record<string, unknown>) {
-  const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/cj-catalogo`, {
+  const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/cj-pedido`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
     body: JSON.stringify(cuerpo),
@@ -165,7 +165,7 @@ async function accionComprar(uid: string, cuerpo: any) {
     }
     const lineasGrupo = indices.map((i) => lineas[i]);
     const r = await llamarCj({
-      accion: "crear_pedido", numero: `${orden.storeOrderNumber ?? orden.id}-${String(reserva!.id).slice(0, 6)}`,
+      numero: `${orden.storeOrderNumber ?? orden.id}-${String(reserva!.id).slice(0, 6)}`,
       entrega: { nombre: orden.shippingName, telefono: orden.customerPhone, direccion1: orden.shippingAddress1, direccion2: orden.shippingAddress2, ciudad: orden.shippingCity, provincia: orden.shippingProvince, pais: orden.shippingCountry, codigoPostal: orden.shippingZip },
       origen: envio.origen, logistica: envio.logistica, nota: orden.notes ?? "",
       items: lineasGrupo.map((l: any) => ({ vid: l.supplierVariantId, cantidad: Number(l.quantity) })),
