@@ -32,6 +32,7 @@ import {
 import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
 import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
 import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-pedidos.ts";
+import { resenasParaRetador } from "./resenas.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -155,6 +156,7 @@ async function guardarConfig(tienda: any, cfg: any) {
     stockSinDato: cfg.stock_sin_dato ?? null,
     cupoProveedorDiario: cfg.cupo_proveedor_diario ?? null,
     token: cfg.token ?? null,
+    capacidades: cfg.capacidades ?? null,
     configActualizada: ahora(),
   };
   await servicio.from("Store").update({ settings: ajustes, status: "CONNECTED", lastError: null, lastPingAt: ahora(), updatedAt: ahora() }).eq("id", tienda.id);
@@ -404,6 +406,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
       ref, proveedor, pid: item.externalId,
       variantes: lineas.map(({ v, precio }) => ({ sku: v.sku, precio_venta_usd: precio, stock: v.stock })),
       cat, subcat, provincia, contenido,
+      // Opiniones reales del proveedor (con su origen), solo si Retador dice que las acepta
+      ...(cfg.capacidades?.resenas_proveedor === true && resenasParaRetador(ficha, proveedor) ? { resenas_proveedor: resenasParaRetador(ficha, proveedor) } : {}),
     });
   } catch (e) {
     await deshacer();
@@ -488,6 +492,18 @@ async function accionActualizar(uid: string, cuerpo: any) {
       envio.contenido = parcial;
       cambios.push("contenido");
     }
+  }
+  if (cuerpo.resenas === true) {
+    const cfgR = await conRetador(tienda, "config");
+    if (cfgR.capacidades?.resenas_proveedor !== true) throw new ErrorApp("resenas_no_disponible", "Retador todavía no admite las opiniones del proveedor. Cuando lo active podrás enviarlas desde aquí.");
+    const { data: pr } = await servicio.from("Product").select("supplierId,supplierProductId").eq("id", p.id).maybeSingle();
+    const prov = pr?.supplierId === "proveedor-cj" ? "CJ_DROPSHIPPING" : pr?.supplierId === "proveedor-aliexpress" ? "ALIEXPRESS" : null;
+    const { data: it } = prov && pr?.supplierProductId ? await servicio.from("CatalogItem").select("id").eq("provider", prov).eq("externalId", pr.supplierProductId).maybeSingle() : { data: null };
+    const ficha = it ? (await servicio.from("CatalogItemDetail").select("ficha").eq("itemId", it.id).maybeSingle()).data?.ficha : null;
+    const opiniones = prov ? resenasParaRetador(ficha, PROVEEDOR_RETADOR[prov]) : null;
+    if (!opiniones) throw new ErrorApp("sin_resenas", "El proveedor no informa opiniones de este producto.");
+    envio.resenas_proveedor = opiniones;
+    cambios.push("opiniones del proveedor");
   }
   if (cambios.length === 0) throw new ErrorApp("datos_invalidos", "No hay nada que actualizar");
 

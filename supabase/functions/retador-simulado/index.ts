@@ -56,6 +56,7 @@ Deno.serve(async (req) => {
       vendedor: { plan: "pro", productos_usados: 0, tope_productos: 55, suspendido: false, deuda_comisiones: false },
       tarifas: { hub_usd_por_libra: 1.99, dias_hub_cuba: [8, 15], comision_pct_ganancia: 8, pasarela_pct: 4.4, pasarela_fija_usd: 0.3, ganancia_minima_retador_usd: 1, pasarela_a_cargo: "vendedor", pasarela_base: "total_cobrado", envio: "aparte", comision_base: "precio_venta_menos_costo_producto_menos_pasarela" },
       categorias: CATEGORIAS, provincias: PROVINCIAS,
+      capacidades: { resenas_proveedor: true },
       limites: { publicar_por_hora: 10, actualizar_por_hora: 60, retirar_por_hora: 60, estado_por_hora: 300 },
       token: { prefijo: token.slice(0, 12), caduca_en: new Date(Date.now() + 90 * 864e5).toISOString() },
     });
@@ -112,6 +113,11 @@ Deno.serve(async (req) => {
       p.estado = "pausado"; p.origen_ultimo_cambio = "dropship"; p.actualizado_en = new Date().toISOString();
       await guardar(c.ref, p);
       return ok({ ref: c.ref, producto_id: p.producto_id, estado: "pausado" });
+    }
+    if (c.resenas_proveedor !== undefined) {
+      const o = c.resenas_proveedor;
+      if (!o || (o.fuente !== "cj" && o.fuente !== "aliexpress") || !Array.isArray(o.muestra) || o.muestra.length > 20) return fallo(400, "datos_invalidos", "Opiniones no válidas", { campo: "resenas_proveedor" });
+      p.resenas_proveedor = o;
     }
     if (c.estado !== undefined) {
       if (c.estado !== "activo" && c.estado !== "pausado") return fallo(400, "datos_invalidos", "Estado no válido", { campo: "estado" });

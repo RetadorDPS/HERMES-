@@ -6,7 +6,7 @@
  * rechaza cualquier precio con el que se pierda dinero.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Loader2, Pause, Pencil, Play, Trash2, TriangleAlert } from 'lucide-react';
+import { ExternalLink, Loader2, MessageSquareQuote, Pause, Pencil, Play, Trash2, TriangleAlert } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -163,6 +163,11 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
                   ) : (
                     <Button size="sm" variant="outline" disabled={!!ocupado} onClick={() => accion(p.id, 'retirar', { accion: 'retirar' }, 'Producto retirado de la venta (pausado) en Retador.')}>
                       {ocupado === `${p.id}:retirar` ? <Loader2 className="animate-spin" /> : <Pause />} Pausar
+                    </Button>
+                  )}
+                  {tienda.resenasProveedor && p.status !== 'ARCHIVED' && (
+                    <Button size="sm" variant="outline" disabled={!!ocupado} onClick={() => accion(p.id, 'opiniones', { accion: 'actualizar', resenas: true }, 'Opiniones del proveedor enviadas a Retador (se muestran como opiniones de CJ o AliExpress, no de compradores de Retador).')}>
+                      {ocupado === `${p.id}:opiniones` ? <Loader2 className="animate-spin" /> : <MessageSquareQuote />} Enviar opiniones
                     </Button>
                   )}
                   <Button size="sm" variant="ghost" className="text-rose-300 hover:text-rose-200" disabled={!!ocupado} onClick={() => eliminar(p)}>
