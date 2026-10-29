@@ -16,7 +16,7 @@ import { llamarTienda, obtenerProductosRetador, type ProductoRetador, type Tiend
 import { liquidacion } from '@/lib/retador/precios';
 import { cn } from '@/lib/utils';
 
-const usd = (n: number) => `${n.toFixed(2)} US$`;
+const usd = (n: number) => `${n.toFixed(2)} USD`;
 
 const ESTADOS: Record<string, { texto: string; variante: 'success' | 'warning' | 'danger' | 'outline' }> = {
   ACTIVE: { texto: 'Activo', variante: 'success' },
@@ -232,7 +232,7 @@ function EditorProducto({
               <label className="flex items-center gap-1.5">
                 Precio
                 <Input inputMode="decimal" className="h-8 w-24" value={precios[v.sku]} onChange={(e) => setPrecios((x) => ({ ...x, [v.sku]: e.target.value.replace(',', '.') }))} aria-label={`Precio de ${v.title}`} />
-                US$
+                USD
               </label>
               <label className="flex items-center gap-1.5">
                 Stock

@@ -24,7 +24,7 @@ import { obtenerTiendaRetador } from '@/lib/real/retador';
 
 /* ───────────── utilidades de presentación ───────────── */
 
-const usd = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} US$`);
+const usd = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`);
 
 const pais = nombrePais;
 
@@ -158,7 +158,18 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
       setAviso(texto);
       return;
     }
-    setAviso(data.mensaje ?? 'Hecho');
+    // Si el proveedor rechazó algo, se enseña el motivo real (antes solo salía «0 de 1 fichas completadas»)
+    const fallos: string[] = (Array.isArray(data.informe) ? data.informe : []).filter((i: any) => i && i.ok === false && i.error).map((i: any) => String(i.error));
+    const avisosProveedor: string[] = (Array.isArray(data.informe) ? data.informe : []).flatMap((i: any) => (Array.isArray(i?.avisos) ? i.avisos.map(String) : []));
+    let extraTexto = '';
+    if (fallos.length) {
+      extraTexto = ` Motivo: ${fallos[0]}.`;
+      if (/api.?key|clave|token|unauthori|expired|invalid/i.test(fallos[0])) extraTexto += ' Parece un problema de la clave: mira «Proveedores y APIs» y pulsa «Probar».';
+      else if (/too many|limit|frequen/i.test(fallos[0])) extraTexto += ' El proveedor limita las llamadas: espera un minuto y vuelve a intentarlo.';
+    } else if (avisosProveedor.length) {
+      extraTexto = ` Avisos del proveedor: ${avisosProveedor.slice(0, 2).join(' · ')}.`;
+    }
+    setAviso(`${data.mensaje ?? 'Hecho'}.${extraTexto}`.replace('..', '.'));
     await cargar(itemId);
   };
 
@@ -277,7 +288,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                   {ruta && <p className="text-[11px] text-muted-foreground">{ruta}</p>}
 
                   <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Coste del proveedor</p>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Coste del proveedor (en dólares, USD)</p>
                     <p className="text-xl font-semibold tabular-nums">
                       {ficha?.precio?.min !== null && ficha?.precio?.min !== undefined
                         ? ficha.precio.max && ficha.precio.max !== ficha.precio.min
@@ -290,7 +301,11 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                         Precio que cobra {nombreProveedor} por API (para {pais(ficha.precio.pais)}), consultado el {new Date(ficha.precio.consultado ?? ficha.actualizado).toLocaleDateString('es-ES')}. La app de {nombreProveedor} puede enseñar menos por ofertas personales (bienvenida, monedas, cupones): no cuentan para tu margen.
                       </p>
                     )}
-                    {ficha?.precioSugeridoCj && <p className="text-[11px] text-muted-foreground">Precio de venta sugerido por el proveedor: {ficha.precioSugeridoCj} US$</p>}
+                    {ficha?.precioSugeridoCj && (
+                      <p className="mt-1 text-[10.5px] leading-snug text-muted-foreground">
+                        Referencia de CJ (no es tu precio): CJ sugiere vender entre {String(ficha.precioSugeridoCj).split('-').map((x: string) => Number(x.trim()).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })).join(' y ')} USD según la variante. El tope depende de la variante más cara, así que no lo uses para fijar precios: tu precio se calcula con tu regla y el mínimo de Retador.
+                      </p>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
@@ -387,7 +402,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                                 {f.barata && <Badge variant="success">más barato</Badge>}
                                 {f.rapida && <Badge variant="info">más rápido</Badge>}
                                 <span className="font-semibold">{f.precio === 0 ? 'Gratis' : usd(f.precio)}</span>
-                                {f.gratisDesde && f.precio !== 0 && <span className="text-[10.5px] text-muted-foreground">gratis desde {String(f.gratisDesde).replace('US $', '')} US$</span>}
+                                {f.gratisDesde && f.precio !== 0 && <span className="text-[10.5px] text-muted-foreground">gratis desde {String(f.gratisDesde).replace('US $', '')} USD</span>}
                                 <span className="text-muted-foreground">{dias(f.diasMin, f.diasMax)}</span>
                               </span>
                             </li>
@@ -408,6 +423,17 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     </>
                   )}
 
+                  {esAdmin && destinoActivo === 'CU' && (
+                    <div className="space-y-1.5 rounded-lg border border-indigo-400/25 bg-indigo-500/[0.06] p-2.5">
+                      <p className="text-[12px]">
+                        <b>Para calcular el envío a Cuba</b> hace falta saber cuánto cobra {nombreProveedor} hasta el centro logístico de EE. UU. (el segundo tramo lo pone Retador por peso).
+                      </p>
+                      <Button size="sm" variant="gradient" disabled={trabajando !== null} onClick={() => ejecutarCj('envio', { paises: ['US'] })}>
+                        {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
+                        Cotizar el envío a Cuba (consulta EE. UU.)
+                      </Button>
+                    </div>
+                  )}
                   {esAdmin && (
                     <div className="space-y-2 border-t border-white/[0.06] pt-2">
                       <p className="text-[11px] text-muted-foreground">
@@ -427,6 +453,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                           aria-label="Otro país de destino"
                         >
                           <option value="">Elegir otro país…</option>
+                          <option value="CU">Cuba (se cotiza consultando EE. UU.)</option>
                           {PAISES_FRECUENTES.filter((c) => !destinos.includes(c))
                             .sort((a, b) => pais(a).localeCompare(pais(b), 'es'))
                             .map((c) => (
@@ -435,7 +462,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                               </option>
                             ))}
                         </select>
-                        <Button size="sm" variant="outline" disabled={trabajando !== null || !otroPais} onClick={() => ejecutarCj('envio', { paises: [otroPais] })}>
+                        <Button size="sm" variant="outline" disabled={trabajando !== null || !otroPais} onClick={() => ejecutarCj('envio', { paises: [otroPais === 'CU' ? 'US' : otroPais] })}>
                           Cotizar ese país
                         </Button>
                       </div>
@@ -671,7 +698,7 @@ function EnvioACubaPanel({ ficha, proveedor, tarifa }: { ficha: any; proveedor: 
         <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg bg-black/25 px-3 py-2">
           <span>
             <span className="font-medium">2) Del centro logístico a Cuba</span>
-            <span className="text-muted-foreground"> · según el peso ({tarifa!.hubUsdPorLibra.toFixed(2)} US$ por libra)</span>
+            <span className="text-muted-foreground"> · según el peso ({tarifa!.hubUsdPorLibra.toFixed(2)} USD por libra)</span>
           </span>
           <span className="tabular-nums">
             <b>{rango(e.tramoCuba.min, e.tramoCuba.max)}</b>

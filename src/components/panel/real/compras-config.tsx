@@ -115,8 +115,8 @@ export function ComprasConfig({ alCambiar }: { alCambiar?: (modo: ModoCompras) =
               ))}
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              {numero('limitePedidoUsd', 'Tope por pedido', 'US$')}
-              {numero('limiteDiaUsd', 'Tope por día', 'US$')}
+              {numero('limitePedidoUsd', 'Tope por pedido', 'USD')}
+              {numero('limiteDiaUsd', 'Tope por día', 'USD')}
               {numero('subidaMaxPct', 'Subida máxima del costo', '%')}
             </div>
             <p className="text-[11px] text-muted-foreground">Compras reales hechas con tu aprobación: {hechas}. Si el costo del proveedor sube más del porcentaje indicado, no se compra.</p>

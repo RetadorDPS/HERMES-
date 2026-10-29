@@ -17,7 +17,7 @@ import type { Atencion } from '@/lib/monitor/atencion';
 import { obtenerMonitor, revisarAhora, type ResultadoRevision } from '@/lib/real/monitor';
 import { PantallaReal, useCarga } from './comun';
 
-const usd = (n: number | undefined) => (n === undefined ? '—' : `${n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} US$`);
+const usd = (n: number | undefined) => (n === undefined ? '—' : `${n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`);
 const PUNTO: Record<string, string> = { INFO: 'text-sky-400', WARN: 'text-amber-400', ERROR: 'text-rose-400', DEBUG: 'text-slate-500' };
 const HORAS_SIN_REPASO = 8;
 

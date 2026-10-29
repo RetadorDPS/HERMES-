@@ -17,6 +17,8 @@ export function roundPsychological(n: number, roundTo = 0.99) {
 }
 
 export function formatCurrency(value: number | string, currency = 'EUR', locale = 'es-ES') {
+  // Los dólares se escriben «USD» (en español «US$» confunde): 3,91 USD
+  if (currency === 'USD') return `${new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value))} USD`;
   return new Intl.NumberFormat(locale, { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(value));
 }
 

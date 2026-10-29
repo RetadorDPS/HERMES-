@@ -20,7 +20,7 @@ import { etiquetaEstadoPedido } from '../../../../supabase/functions/_compartido
 import { nombrePais } from '@/lib/paises';
 import { PantallaReal, useCarga } from './comun';
 
-const usd = (n: number) => `${n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} US$`;
+const usd = (n: number) => `${n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
 const VARIANTE: Record<string, 'success' | 'warning' | 'danger' | 'outline'> = { ok: 'success', aviso: 'warning', error: 'danger', neutro: 'outline' };
 
 export function PedidosReal() {

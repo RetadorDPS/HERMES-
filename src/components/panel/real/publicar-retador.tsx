@@ -44,7 +44,7 @@ interface Preparacion {
   costeReferencia?: { pais: string | null; proveedor: 'cj' | 'aliexpress' };
 }
 
-const usd = (n: number) => `${n.toFixed(2)} US$`;
+const usd = (n: number) => `${n.toFixed(2)} USD`;
 const MAX_VARIANTES = 12;
 
 export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string; titulo: string; onClose: () => void }) {
@@ -293,7 +293,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                                 onChange={(e) => setPrecios((x) => ({ ...x, [v.sku]: e.target.value.replace(',', '.') }))}
                                 aria-label={`Precio de ${v.nombre}`}
                               />
-                              US$
+                              USD
                             </label>
                             {c ? (
                               <span className={cn('font-medium', c.neto < 0 || c.precio < c.minimo ? 'text-rose-300' : 'text-emerald-300')}>
