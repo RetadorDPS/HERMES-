@@ -118,8 +118,9 @@ export function elegirEnvioCompra(fichas: any[], origenesConStock: Set<string>[]
       const opciones = f?.envio?.porOrigen?.[origen]?.[destino]?.opciones;
       if (!Array.isArray(opciones)) { porNombre.clear(); break; }
       for (const o of opciones) {
-        if (typeof o?.nombre !== 'string' || typeof o?.precio !== 'number' || !Number.isFinite(o.precio)) continue;
-        porNombre.set(o.nombre, [...(porNombre.get(o.nombre) ?? []), o.precio]);
+        const precio = typeof o?.precio === 'number' && Number.isFinite(o.precio) ? o.precio : o?.gratis === true ? 0 : null;
+        if (typeof o?.nombre !== 'string' || precio === null) continue;
+        porNombre.set(o.nombre, [...(porNombre.get(o.nombre) ?? []), precio]);
       }
     }
     for (const [nombre, precios] of porNombre) {

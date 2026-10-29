@@ -2,6 +2,12 @@
  * Existencias y envío de una ficha del catálogo, para publicar en Retador. Archivo SIN dependencias (se prueba en Node y corre en Deno).
  * Regla: no se publica una variante sin existencias reales (en almacén o en fábrica) ni sin envío cotizado desde el almacén que las tiene.
  */
+/** Precio de una opción de envío cotizada: el número que informa el proveedor o 0 si la propia cotización dice que es gratis (nunca se supone gratis sin que lo diga). */
+export function precioDeOpcion(o: any): number | null {
+  if (typeof o?.precio === "number" && Number.isFinite(o.precio)) return o.precio;
+  return o?.gratis === true ? 0 : null;
+}
+
 /** Envío real al hub de EE. UU.: la cotización más barata del producto hacia US. Con `origenes` solo cuentan los almacenes indicados (los que tienen el stock). */
 export function envioAlHub(ficha: any, origenes: Set<string> | null = null): { precio: number; origen: string; dias: [number, number] | null } | null {
   let mejor: { precio: number; origen: string; dias: [number, number] | null } | null = null;
@@ -11,8 +17,9 @@ export function envioAlHub(ficha: any, origenes: Set<string> | null = null): { p
     const opciones = destinos?.US?.opciones;
     if (!Array.isArray(opciones)) continue;
     for (const o of opciones) {
-      if (typeof o?.precio !== "number" || !Number.isFinite(o.precio)) continue;
-      if (!mejor || o.precio < mejor.precio) mejor = { precio: o.precio, origen, dias: typeof o.diasMin === "number" && typeof o.diasMax === "number" ? [o.diasMin, o.diasMax] : null };
+      const precio = precioDeOpcion(o);
+      if (precio === null) continue;
+      if (!mejor || precio < mejor.precio) mejor = { precio, origen, dias: typeof o.diasMin === "number" && typeof o.diasMax === "number" ? [o.diasMin, o.diasMax] : null };
     }
   }
   return mejor;

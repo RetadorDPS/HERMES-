@@ -28,3 +28,12 @@ assert.equal(envioAlHub(ficha, new Set(['DE'])), null); // sin cotización a EE.
 assert.equal(envioAlHub(ficha, new Set(['XX'])), null);
 assert.equal(envioAlHub({}), null);
 console.log('✔ existencias y envío de Retador correctos');
+
+// Envío gratis a EE. UU.: la cotización dice «gratis» sin precio → cuesta 0 (antes se descartaba y el envío a Cuba decía que faltaba la cotización)
+import { envioAlHub as envioAlHub2 } from '../../supabase/functions/_compartido/retador-stock';
+const fichaGratis = { envio: { porOrigen: { CN: { US: { opciones: [{ gratis: true, precio: null, nombre: 'Envío estándar AliExpress', diasMin: 8, diasMax: 15 }] } } } } };
+const hubGratis = envioAlHub2(fichaGratis);
+assert.equal(hubGratis?.precio, 0);
+assert.deepEqual(hubGratis?.dias, [8, 15]);
+assert.equal(envioAlHub2({ envio: { porOrigen: { CN: { US: { opciones: [{ gratis: false, precio: null }] } } } } }), null); // sin precio y sin decir gratis: no se supone
+console.log('✔ envío gratis al centro de EE. UU. correcto');

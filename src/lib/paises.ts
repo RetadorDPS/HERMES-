@@ -31,6 +31,9 @@ export function textoPopularidad(proveedor: string, n: number, formato: (v: numb
 }
 
 /** Países a los que suele interesar vender, para elegir de una lista en lugar de escribir el código. */
+/** Los países que cotiza el botón «Cotizar los principales» (los mismos que cotizan las funciones de CJ y AliExpress por defecto). */
+export const PAISES_PRINCIPALES = ['ES', 'US', 'MX', 'GB', 'DE', 'FR', 'IT', 'CA', 'AU', 'BR', 'CO', 'CL'] as const;
+
 export const PAISES_FRECUENTES = [
   'ES', 'US', 'MX', 'GB', 'DE', 'FR', 'IT', 'CA', 'AU', 'BR', 'CO', 'CL',
   'PT', 'NL', 'BE', 'AT', 'CH', 'IE', 'PL', 'SE', 'DK', 'NO', 'FI', 'CZ', 'GR', 'RO', 'HU',

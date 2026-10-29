@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { formatNumber, cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase/cliente';
 import { obtenerPerfil } from '@/lib/real/datos';
-import { nombrePais, PAISES_FRECUENTES, textoPopularidad } from '@/lib/paises';
+import { nombrePais, PAISES_FRECUENTES, PAISES_PRINCIPALES, textoPopularidad } from '@/lib/paises';
 import { ProviderBadge } from '@/app/(dashboard)/catalog/catalog-card';
 import { ElegirDestino, type DestinoPublicacion } from './destino-publicacion';
 import { PublicarEnRetador } from './publicar-retador';
@@ -172,6 +172,9 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     setAviso(`${data.mensaje ?? 'Hecho'}.${extraTexto}`.replace('..', '.'));
     await cargar(itemId);
   };
+
+  /** Cotiza un país. Para Cuba se consulta el tramo del proveedor hasta EE. UU. (el cálculo de Cuba lo usa), sin que haga falta explicarlo. */
+  const cotizarPais = (c: string) => ejecutarCj('envio', { paises: [c === 'CU' ? 'US' : c] });
 
   /* ── datos derivados ── */
   const imagenes: string[] = useMemo(() => {
@@ -384,7 +387,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                   </div>
 
                   {destinoActivo === 'CU' ? (
-                    <EnvioACubaPanel ficha={ficha} proveedor={item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj'} tarifa={tarifaRetador} />
+                    <EnvioACubaPanel ficha={ficha} proveedor={item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj'} tarifa={tarifaRetador} esAdmin={esAdmin} trabajando={trabajando === 'envio'} onCotizar={() => cotizarPais('CU')} />
                   ) : destinosReales.length === 0 ? (
                     <p className="text-[12px] text-muted-foreground">Todavía no se ha cotizado el envío de este artículo.</p>
                   ) : (
@@ -423,48 +426,37 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     </>
                   )}
 
-                  {esAdmin && destinoActivo === 'CU' && (
-                    <div className="space-y-1.5 rounded-lg border border-indigo-400/25 bg-indigo-500/[0.06] p-2.5">
-                      <p className="text-[12px]">
-                        <b>Para calcular el envío a Cuba</b> hace falta saber cuánto cobra {nombreProveedor} hasta el centro logístico de EE. UU. (el segundo tramo lo pone Retador por peso).
-                      </p>
-                      <Button size="sm" variant="gradient" disabled={trabajando !== null} onClick={() => ejecutarCj('envio', { paises: ['US'] })}>
-                        {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
-                        Cotizar el envío a Cuba (consulta EE. UU.)
-                      </Button>
-                    </div>
-                  )}
                   {esAdmin && (
                     <div className="space-y-2 border-t border-white/[0.06] pt-2">
                       <p className="text-[11px] text-muted-foreground">
-                        Solo para el administrador. Pide a {nombreProveedor} los precios y plazos de envío de este artículo y los guarda. Cada país cuesta {item?.provider === 'ALIEXPRESS' ? 'una llamada a AliExpress' : 'unas llamadas a CJ (una por almacén)'}.
+                        Solo para el administrador. Cada país cotizado cuesta {item?.provider === 'ALIEXPRESS' ? 'una llamada a AliExpress' : 'unas llamadas a CJ (una por almacén)'}.
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
-                        <Button size="sm" variant="outline" disabled={trabajando !== null} onClick={() => ejecutarCj('envio')}>
-                          {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
-                          Cotizar los 12 países principales
-                        </Button>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
                         <select
-                          value={otroPais}
+                          value={otroPais || destinoActivo}
                           onChange={(e) => setOtroPais(e.target.value)}
                           className="h-8 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 text-[12px]"
-                          aria-label="Otro país de destino"
+                          aria-label="País que quieres cotizar"
                         >
-                          <option value="">Elegir otro país…</option>
-                          <option value="CU">Cuba (se cotiza consultando EE. UU.)</option>
-                          {PAISES_FRECUENTES.filter((c) => !destinos.includes(c))
-                            .sort((a, b) => pais(a).localeCompare(pais(b), 'es'))
+                          {[...new Set(['CU', ...PAISES_PRINCIPALES, ...PAISES_FRECUENTES])]
+                            .sort((a, b) => (a === 'CU' ? -1 : b === 'CU' ? 1 : pais(a).localeCompare(pais(b), 'es')))
                             .map((c) => (
                               <option key={c} value={c}>
                                 {pais(c)}
+                                {c !== 'CU' && destinosReales.includes(c) ? ' ✓' : ''}
                               </option>
                             ))}
                         </select>
-                        <Button size="sm" variant="outline" disabled={trabajando !== null || !otroPais} onClick={() => ejecutarCj('envio', { paises: [otroPais === 'CU' ? 'US' : otroPais] })}>
-                          Cotizar ese país
+                        <Button size="sm" variant="outline" disabled={trabajando !== null} onClick={() => cotizarPais(otroPais || destinoActivo)}>
+                          {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
+                          Cotizar envío
                         </Button>
+                      </div>
+                      <div className="space-y-1">
+                        <Button size="sm" variant="ghost" disabled={trabajando !== null} onClick={() => ejecutarCj('envio')}>
+                          Cotizar los {PAISES_PRINCIPALES.length} principales
+                        </Button>
+                        <p className="text-[10.5px] leading-snug text-muted-foreground">Principales: {PAISES_PRINCIPALES.map((c) => pais(c)).join(', ')}. Los que llevan ✓ ya están cotizados.</p>
                       </div>
                     </div>
                   )}
@@ -665,57 +657,62 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
 }
 
 /** Explicación del envío a Cuba (solo se ve cuando el usuario elige Cuba como destino). */
-function EnvioACubaPanel({ ficha, proveedor, tarifa }: { ficha: any; proveedor: 'cj' | 'aliexpress'; tarifa: { hubUsdPorLibra: number; diasHubCuba: [number, number] } | null }) {
+function EnvioACubaPanel({ ficha, proveedor, tarifa, esAdmin, trabajando, onCotizar }: { ficha: any; proveedor: 'cj' | 'aliexpress'; tarifa: { hubUsdPorLibra: number; diasHubCuba: [number, number] } | null; esAdmin: boolean; trabajando: boolean; onCotizar: () => void }) {
   const r = useMemo(() => envioACuba(ficha, proveedor, tarifa), [ficha, proveedor, tarifa]);
   const rango = (min: number, max: number) => (min === max ? usd(min) : `${usd(min)} – ${usd(max)}`);
   if (!r.ok) {
-    return (
-      <Alert variant="info" title="Envío a Cuba">
-        Para calcularlo falta {r.falta}.{' '}
-        {!tarifa && (
+    // Sin la tarifa de Retador no se puede calcular; en cualquier otro caso basta con cotizar
+    if (!tarifa) {
+      return (
+        <p className="text-[12px] text-muted-foreground">
+          Para calcular el envío a Cuba conecta tu tienda de Retador en{' '}
           <Link href="/stores" className="underline">
-            Ir a Tiendas
+            Tiendas
           </Link>
+          .
+        </p>
+      );
+    }
+    return (
+      <div className="space-y-2 text-[12px]">
+        <p className="text-muted-foreground">El envío a Cuba todavía no está cotizado para este producto.</p>
+        {esAdmin && (
+          <Button size="sm" variant="gradient" disabled={trabajando} onClick={onCotizar}>
+            {trabajando && <Loader2 className="size-4 animate-spin" />}
+            Cotizar envío a Cuba
+          </Button>
         )}
-      </Alert>
+      </div>
     );
   }
   const e = r.envio;
   return (
     <div className="space-y-2 text-[12px]">
-      <p className="text-muted-foreground">El envío a Cuba tiene dos tramos y los paga el comprador al comprar, aparte del precio del producto:</p>
-      <ul className="space-y-1.5">
-        <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg bg-black/25 px-3 py-2">
-          <span>
-            <span className="font-medium">1) Hasta el centro logístico de EE. UU.</span>
-            <span className="text-muted-foreground"> · desde el almacén de {pais(e.tramoHub.origen)}</span>
-          </span>
-          <span className="tabular-nums">
-            <b>{usd(e.tramoHub.precio)}</b>
-            {e.tramoHub.dias && <span className="text-muted-foreground"> · {dias(e.tramoHub.dias[0], e.tramoHub.dias[1])}</span>}
-          </span>
-        </li>
-        <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg bg-black/25 px-3 py-2">
-          <span>
-            <span className="font-medium">2) Del centro logístico a Cuba</span>
-            <span className="text-muted-foreground"> · según el peso ({tarifa!.hubUsdPorLibra.toFixed(2)} USD por libra)</span>
-          </span>
-          <span className="tabular-nums">
-            <b>{rango(e.tramoCuba.min, e.tramoCuba.max)}</b>
-            <span className="text-muted-foreground"> · {dias(e.dias.soloRetador[0], e.dias.soloRetador[1])}</span>
-          </span>
-        </li>
+      <ul>
         <li className="flex flex-wrap items-center justify-between gap-x-3 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-3 py-2">
-          <span className="font-semibold">Total hasta Cuba</span>
+          <span className="font-semibold">Envío a Cuba</span>
           <span className="tabular-nums">
-            <b className="text-emerald-300">{rango(e.total.min, e.total.max)}</b>
+            <b className="text-emerald-300">{e.total.max === 0 ? 'Gratis' : rango(e.total.min, e.total.max)}</b>
             {e.dias.min !== null && e.dias.max !== null && <span className="text-muted-foreground"> · {dias(e.dias.min, e.dias.max)}</span>}
           </span>
         </li>
       </ul>
-      <p className="text-[11px] text-muted-foreground">
-        Estimación con la cotización real del proveedor y la tarifa de Retador, solo con las variantes que tienen stock{e.variantesSinPeso > 0 ? ` y peso conocido (${e.variantesSinPeso} sin peso quedan fuera)` : ''}. El importe final lo cotiza Retador al comprar.
-      </p>
+      <details className="text-[11px] text-muted-foreground">
+        <summary className="cursor-pointer select-none">Ver cómo se calcula</summary>
+        <ul className="mt-1.5 space-y-1">
+          <li>
+            Del proveedor hasta EE. UU. (almacén de {pais(e.tramoHub.origen)}): <b className="text-foreground">{e.tramoHub.precio === 0 ? 'Gratis' : usd(e.tramoHub.precio)}</b>
+            {e.tramoHub.dias && <span> · {dias(e.tramoHub.dias[0], e.tramoHub.dias[1])}</span>}
+          </li>
+          <li>
+            De EE. UU. a Cuba, por peso ({tarifa!.hubUsdPorLibra.toFixed(2)} USD por libra): <b className="text-foreground">{rango(e.tramoCuba.min, e.tramoCuba.max)}</b>
+            <span> · {dias(e.dias.soloRetador[0], e.dias.soloRetador[1])}</span>
+          </li>
+          <li>
+            Estimación con la cotización real del proveedor y la tarifa de Retador, solo con las variantes con stock{e.variantesSinPeso > 0 ? ` y peso conocido (${e.variantesSinPeso} sin peso quedan fuera)` : ''}. El importe final lo cotiza Retador al comprar.
+          </li>
+        </ul>
+      </details>
     </div>
   );
 }
