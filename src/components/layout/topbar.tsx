@@ -5,6 +5,7 @@ import { Activity, ChevronRight, CircleDollarSign, Menu, Server, Sparkles } from
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useSesion } from '@/components/auth/sesion';
 import { UserMenu } from './user-menu';
 import { EVENTO_ABRIR_MENU } from './sidebar';
 
@@ -17,6 +18,9 @@ interface HealthCheck {
 export function Topbar({ title, subtitle, mode, authEnabled = false }: { title: string; subtitle?: string; mode: 'demo' | 'postgres'; authEnabled?: boolean }) {
   const [health, setHealth] = useState<Record<string, HealthCheck> | null>(null);
   const [open, setOpen] = useState(false);
+  // Con una cuenta real no se enseñan etiquetas internas (estado de servicios, «Producción», un plan escrito a mano): solo lo propio del usuario
+  const { activo, modo: modoSesion, sesion } = useSesion();
+  const real = activo && modoSesion === 'real' && Boolean(sesion);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +65,7 @@ export function Topbar({ title, subtitle, mode, authEnabled = false }: { title: 
       </div>
 
       <div className="flex items-center gap-2">
+        {!real && (
         <button
           onClick={() => setOpen((v) => !v)}
           className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-xs text-muted-foreground transition hover:bg-white/[0.06] sm:flex"
@@ -71,26 +76,31 @@ export function Topbar({ title, subtitle, mode, authEnabled = false }: { title: 
           </span>
           {health ? (allOk ? 'Sistema operativo' : (mode === 'postgres' ? `${unhealthy} servicio(s) por conectar` : `${unhealthy} servicio(s) en modo demo`)) : 'Comprobando…'}
         </button>
+        )}
 
-        <Badge variant={mode === 'postgres' ? 'success' : 'warning'} className="capitalize">
-          <Server className="size-3" />
-          {mode === 'postgres' ? 'Producción' : 'Demo'}
-        </Badge>
+        {!real && (
+          <>
+            <Badge variant={mode === 'postgres' ? 'success' : 'warning'} className="capitalize">
+              <Server className="size-3" />
+              {mode === 'postgres' ? 'Producción' : 'Demo'}
+            </Badge>
 
-        <Badge variant="info" className="hidden md:inline-flex">
-          <Sparkles className="size-3" />
-          Plan PRO
-        </Badge>
+            <Badge variant="info" className="hidden md:inline-flex">
+              <Sparkles className="size-3" />
+              Plan PRO
+            </Badge>
 
-        <Button variant="outline" size="sm" className="hidden lg:inline-flex">
-          <CircleDollarSign className="size-3.5" />
-          Facturación
-        </Button>
+            <Button variant="outline" size="sm" className="hidden lg:inline-flex">
+              <CircleDollarSign className="size-3.5" />
+              Facturación
+            </Button>
+          </>
+        )}
 
         <UserMenu authEnabled={authEnabled} />
       </div>
 
-      {open && health && (
+      {!real && open && health && (
         <div className="w-full animate-in-up rounded-xl border border-white/[0.07] bg-popover/95 p-3 text-xs shadow-2xl">
           <div className="mb-2 flex items-center gap-2 font-medium">
             <Activity className="size-3.5 text-indigo-300" />

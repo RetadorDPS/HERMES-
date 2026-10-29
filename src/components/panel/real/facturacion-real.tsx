@@ -1,8 +1,13 @@
 'use client';
 
-import { BillingView, type PlanView } from '@/app/(dashboard)/billing/billing-view';
+/**
+ * Facturación con cuenta real. Los planes de pago todavía no están activados: se dice con claridad y no se enseñan precios ni
+ * características que no existen. (La vista completa de planes sigue en `billing-view.tsx` para cuando se activen los cobros.)
+ */
+import { CreditCard } from 'lucide-react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { obtenerPerfil, obtenerResumen } from '@/lib/real/datos';
-import { PLANS, planFor } from '@/lib/plans';
+import { planFor } from '@/lib/plans';
 import { PantallaReal, useCarga } from './comun';
 
 export function FacturacionReal() {
@@ -10,47 +15,20 @@ export function FacturacionReal() {
     const [resumen, cuenta] = await Promise.all([obtenerResumen(), obtenerPerfil()]);
     return { resumen, ...cuenta };
   });
-
-  const planes: PlanView[] = Object.values(PLANS).map((p) => ({
-    tier: p.tier,
-    name: p.name,
-    priceMonthly: p.priceMonthly,
-    priceYearly: p.priceYearly,
-    maxProducts: p.maxProducts,
-    maxStores: p.maxStores,
-    maxSupplierAccounts: p.maxSupplierAccounts,
-    creditsPerMonth: p.creditsPerMonth,
-    syncIntervalMinutes: p.syncIntervalMinutes,
-    proxiesIncluded: p.proxiesIncluded,
-    support: p.support,
-    highlights: p.highlights,
-  }));
   const plan = planFor((datos?.suscripcion?.plan ?? datos?.perfil?.plan ?? 'TRIAL') as any);
 
   return (
-    <PantallaReal titulo="Facturación" subtitulo="Plan, consumo de créditos, método de pago y facturas" cargando={cargando} error={error} alRecargar={recargar} tour="screen:billing">
+    <PantallaReal titulo="Facturación" subtitulo="Tu plan" cargando={cargando} error={error} alRecargar={recargar} tour="screen:billing">
       {datos && (
-        <BillingView
-          plans={planes}
-          lemonReady={false}
-          currentProvider={datos.suscripcion?.stripeSubscriptionId ? 'stripe' : datos.suscripcion?.lemonSubscriptionId ? 'lemon' : null}
-          current={{
-            tier: plan.tier,
-            name: plan.name,
-            priceMonthly: plan.priceMonthly,
-            status: datos.suscripcion?.status ?? 'TRIALING',
-            renewsAt: datos.suscripcion?.currentPeriodEnd?.toISOString() ?? null,
-            cancelAtPeriodEnd: datos.suscripcion?.cancelAtPeriodEnd ?? false,
-          }}
-          usage={{
-            products: datos.resumen.productos,
-            stores: datos.resumen.tiendas,
-            supplierAccounts: datos.resumen.cuentasProveedor,
-            creditsUsed: datos.suscripcion?.creditsUsed ?? 0,
-            creditsLimit: datos.suscripcion?.creditsLimit ?? plan.creditsPerMonth,
-          }}
-          stripeConfigured={false}
-        />
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <CreditCard className="size-4 text-indigo-300" /> Tu plan: {plan.name}
+            </CardTitle>
+            <CardDescription>Los planes de pago se activarán pronto. Hasta entonces no se te cobra nada, y te avisaremos antes de cualquier cambio.</CardDescription>
+          </CardHeader>
+          <CardContent className="text-[12px] text-muted-foreground">Cuando estén disponibles podrás ver aquí tu plan, tus facturas y cambiar de plan.</CardContent>
+        </Card>
       )}
     </PantallaReal>
   );

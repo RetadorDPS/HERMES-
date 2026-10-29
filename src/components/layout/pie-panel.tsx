@@ -10,7 +10,7 @@ export function PiePanel({ mode }: { mode: 'demo' | 'postgres' }) {
   return (
     <footer className="border-t border-white/[0.06] px-6 py-4 text-[11px] text-muted-foreground">
       DropshipPilot {VERSION_ETIQUETA} ·{' '}
-      {real ? 'datos reales de tu cuenta, guardados en Supabase (Irlanda)' : 'demostración con datos de ejemplo: nada se guarda'}
+      {real ? 'datos reales de tu cuenta' : 'demostración con datos de ejemplo: nada se guarda'}
     </footer>
   );
 }

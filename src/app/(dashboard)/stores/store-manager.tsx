@@ -249,7 +249,7 @@ export function StoreManager({
             <Plus className="size-4 text-indigo-300" />
             Conectar tienda
           </CardTitle>
-          <CardDescription>Las credenciales se guardan cifradas (AES-256-GCM) en PostgreSQL</CardDescription>
+          <CardDescription>Tus credenciales se guardan cifradas y no se vuelven a mostrar</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1">

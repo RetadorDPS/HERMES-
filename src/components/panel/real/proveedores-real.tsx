@@ -31,7 +31,7 @@ export function ProveedoresReal() {
       {datos && (
         <>
           <Alert variant="info" title="Tus claves están a salvo">
-            Las claves de los proveedores viven solo en el servidor. Desde esta pantalla no se pueden ver ni cambiar, y no salen nunca al navegador.
+            Las claves de tus proveedores están protegidas: desde esta pantalla no se pueden ver ni cambiar.
             {datos.esAdmin && (
               <>
                 {' '}

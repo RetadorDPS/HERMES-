@@ -328,7 +328,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
       <CardHeader>
         <CardTitle>Catálogo de proveedores · {esCj ? 'CJ Dropshipping' : 'AliExpress'}</CardTitle>
         <CardDescription>
-          Usa {esCj ? 'la clave guardada' : 'las claves guardadas'} en los secretos de Supabase. Las llamadas van una a una, con pausa entre ellas.
+          Usa {esCj ? 'la clave guardada' : 'las claves guardadas'} de la plataforma. Las llamadas van una a una, con pausa entre ellas.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

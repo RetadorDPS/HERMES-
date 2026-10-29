@@ -186,7 +186,7 @@ export function RetadorConexion() {
                   }
                 />
                 <Dato
-                  titulo="Token"
+                  titulo="Clave"
                   valor={
                     tienda.token?.prefijo ? `${tienda.token.prefijo}…` : "—"
                   }
@@ -207,10 +207,10 @@ export function RetadorConexion() {
                 <Alert
                   variant="warning"
                   title={
-                    dias < 0 ? "El token ha caducado" : "El token caduca pronto"
+                    dias < 0 ? "La clave ha caducado" : "La clave caduca pronto"
                   }
                 >
-                  Crea un token nuevo en Retador y pégalo abajo antes de que
+                  Crea una clave nueva en Retador y pégala abajo antes de que
                   caduque para que no se detenga la sincronización.
                 </Alert>
               )}
@@ -305,7 +305,7 @@ export function RetadorConexion() {
                 <ol className="list-decimal space-y-1 pl-5 text-[13px] text-muted-foreground">
                   <li>
                     En Retador, abre la sección de conexiones de tu cuenta y
-                    crea un token para DropshipPilot (solo se muestra una vez).
+                    crea una clave para DropshipPilot (solo se muestra una vez).
                   </li>
                   <li>
                     Pégalo aquí y pulsa «Conectar». Se guarda cifrado y solo
@@ -324,7 +324,7 @@ export function RetadorConexion() {
                     onChange={(e) => setToken(e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
-                    aria-label="Token de Retador"
+                    aria-label="Clave de Retador"
                   />
                 </div>
                 <Button
@@ -337,7 +337,7 @@ export function RetadorConexion() {
                   ) : (
                     <PlugZap />
                   )}{" "}
-                  {conectada ? "Cambiar token" : "Conectar"}
+                  {conectada ? "Cambiar clave" : "Conectar"}
                 </Button>
               </div>
               {esAdmin && !conectada && (

@@ -565,21 +565,23 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       )}
 
       {/* Pie con información honesta del origen de los datos */}
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[11px] text-muted-foreground">
-        <Info className="size-3.5 text-indigo-300" />
-        <span>
-          Índice propio de la plataforma: {formatNumber(stats.total)} artículos ({formatNumber(stats.real)} reales · {formatNumber(stats.sample)} de muestra) ·
-          envío gratis {formatNumber(stats.freeShipping)} · top ventas {formatNumber(stats.trending)}
-        </span>
-        {stats.lastSyncedAt && (
-          <span className="inline-flex items-center gap-1">
-            <RefreshCw className="size-3" /> última descarga del proveedor {formatRelative(stats.lastSyncedAt as any)}
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-[11px] text-muted-foreground">
+          <Info className="size-3.5 text-indigo-300" />
+          <span>
+            Índice propio de la plataforma: {formatNumber(stats.total)} artículos ({formatNumber(stats.real)} reales · {formatNumber(stats.sample)} de muestra) ·
+            envío gratis {formatNumber(stats.freeShipping)} · top ventas {formatNumber(stats.trending)}
           </span>
-        )}
-        <Link href="/import" className="ml-auto underline">
-          ¿Tienes la URL de otro producto? Importar por URL
-        </Link>
-      </div>
+          {stats.lastSyncedAt && (
+            <span className="inline-flex items-center gap-1">
+              <RefreshCw className="size-3" /> última descarga del proveedor {formatRelative(stats.lastSyncedAt as any)}
+            </span>
+          )}
+          <Link href="/import" className="ml-auto underline">
+            ¿Tienes la URL de otro producto? Importar por URL
+          </Link>
+        </div>
+      )}
 
       {real ? (
         <FichaProveedor itemId={openId} onClose={() => setOpenId(null)} />

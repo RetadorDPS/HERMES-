@@ -146,7 +146,7 @@ export function MonitorReal() {
           <Card>
             <CardHeader>
               <CardTitle>Registro de avisos</CardTitle>
-              <CardDescription>Lo que el servidor ha ido detectando en tus productos (los más recientes primero)</CardDescription>
+              <CardDescription>Lo que hemos ido detectando en tus productos (los más recientes primero)</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="max-h-[420px] space-y-1 overflow-y-auto pr-1">
@@ -173,7 +173,7 @@ export function MonitorReal() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-[13px]">Para el administrador</CardTitle>
-                <CardDescription>El servidor revisa solo, cada 30 minutos, hasta 3 productos que toquen. Si quieres adelantarlo, pulsa aquí: gasta pocas llamadas, una detrás de otra.</CardDescription>
+                <CardDescription>Revisamos solos, cada 30 minutos, hasta 3 productos que toquen. Si quieres adelantarlo, pulsa aquí: gasta pocas llamadas, una detrás de otra.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <Button onClick={lanzar} disabled={revisando} variant="outline" size="sm">

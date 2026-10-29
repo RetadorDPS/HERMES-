@@ -30,6 +30,7 @@ export function ComprasConfig({ alCambiar }: { alCambiar?: (modo: ModoCompras) =
     llamarCompras<{ config: ConfigComprasVista; comprasRealesHechas: number }>({ accion: 'config_obtener' })
       .then((r) => {
         if (!vivo) return;
+        if (!r?.config) throw new Error('No se pudo leer la configuración de compras.');
         setConfig(r.config);
         setHechas(r.comprasRealesHechas);
         setEstado('listo');

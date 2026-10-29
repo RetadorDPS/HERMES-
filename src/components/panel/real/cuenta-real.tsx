@@ -212,7 +212,7 @@ export function PuestaEnMarchaReal() {
   const r = datos?.r;
   const filas = r
     ? [
-        { ok: true, titulo: 'Base de datos', texto: 'Conectada a Supabase (Irlanda), con seguridad por cliente.' },
+        { ok: true, titulo: 'Base de datos', texto: 'Tus datos están guardados y solo los ves tú.' },
         { ok: Boolean(datos?.cuenta.perfil), titulo: 'Tu cuenta', texto: datos?.cuenta.perfil?.email ?? '' },
         { ok: r.reglas > 0, titulo: 'Regla de margen', texto: r.reglas > 0 ? `${r.reglas} regla(s) definida(s).`  : 'Crea una en Precios y márgenes.', href: '/pricing' },
         { ok: r.cuentasProveedor > 0 || r.catalogo > 0, titulo: 'Proveedores', texto: 'Se conectarán CJ y AliExpress con sus APIs oficiales (siguiente fase).', href: '/suppliers' },

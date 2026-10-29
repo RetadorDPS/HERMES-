@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { Suspense, useMemo } from 'react';
-import { StoreManager } from '@/app/(dashboard)/stores/store-manager';
-import { obtenerProveedores, obtenerTiendas } from '@/lib/real/datos';
+import { useMemo } from 'react';
 import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { obtenerTiendaRetador } from '@/lib/real/retador';
 import { ProductosRetador } from './productos-retador';
 import { RetadorConexion } from './retador-conexion';
@@ -49,28 +49,28 @@ export function ProductosReal() {
 }
 
 export function TiendasReal() {
-  const { datos, error, cargando, recargar } = useCarga(async () => {
-    const [tiendas, proveedores] = await Promise.all([obtenerTiendas(), obtenerProveedores()]);
-    return { tiendas, proveedores };
-  });
+  // Pantalla real: solo Retador se puede conectar hoy. Shopify y WooCommerce se enseñan como «próximamente», sin formularios que no funcionan.
+  const { error, cargando, recargar } = useCarga(async () => ({ listo: true }));
   return (
     <PantallaReal
       titulo="Tiendas conectadas"
-      subtitulo="Retador, Shopify y WooCommerce"
+      subtitulo="Dónde publicas tus productos"
       cargando={cargando}
       error={error}
       alRecargar={recargar}
       tour="screen:stores"
     >
-      {datos && (
-        <>
-          <RetadorConexion />
-          <Suspense fallback={null}>
-            <StoreManager stores={datos.tiendas as any} suppliers={datos.proveedores} shopifyOAuth={false} />
-          </Suspense>
-        </>
-      )}
+      <RetadorConexion />
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Otras tiendas</CardTitle>
+          <CardDescription>Estamos preparando la publicación en más plataformas. Te avisaremos cuando estén disponibles.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Badge variant="outline">Shopify · Próximamente</Badge>
+          <Badge variant="outline">WooCommerce · Próximamente</Badge>
+        </CardContent>
+      </Card>
     </PantallaReal>
   );
 }
-

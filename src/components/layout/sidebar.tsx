@@ -14,7 +14,6 @@ import {
   CreditCard,
   Factory,
   Settings,
-  Shield,
   Truck,
   Zap,
   Rocket,
@@ -28,17 +27,16 @@ import { useSesion } from '@/components/auth/sesion';
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: Gauge, hint: 'KPIs y estado general' },
   { href: '/catalog', label: 'Catálogo', icon: Compass, hint: 'Escaparate listo para importar', badge: 'NUEVO' },
-  { href: '/import', label: 'Importar por URL', icon: Download, hint: 'AliExpress · Amazon · CJ', highlight: true },
-  { href: '/products', label: 'Productos', icon: Package, hint: 'Gestión y sincronización' },
-  { href: '/orders', label: 'Pedidos', icon: Truck, hint: 'Fulfillment y tracking' },
-  { href: '/monitor', label: 'Monitor de sync', icon: RefreshCw, hint: 'Cola 24/7 y logs' },
-  { href: '/proxies', label: 'Proxies y anti-bot', icon: Shield, hint: 'Extracción sin bloqueos' },
-  { href: '/suppliers', label: 'Proveedores y APIs', icon: Factory, hint: 'AliExpress · CJ · Amazon' },
+  { href: '/import', label: 'Importar por URL', icon: Download, hint: 'AliExpress · CJ', highlight: true },
+  { href: '/products', label: 'Productos', icon: Package, hint: 'Tus productos publicados' },
+  { href: '/orders', label: 'Pedidos', icon: Truck, hint: 'Compras y seguimiento' },
+  { href: '/monitor', label: 'Monitor de sync', icon: RefreshCw, hint: 'Vigilancia de precios y stock' },
+  { href: '/suppliers', label: 'Proveedores y APIs', icon: Factory, hint: 'AliExpress · CJ' },
   { href: '/billing', label: 'Facturación', icon: CreditCard, hint: 'Plan y créditos' },
-  { href: '/stores', label: 'Tiendas', icon: Link2, hint: 'Shopify y WooCommerce' },
+  { href: '/stores', label: 'Tiendas', icon: Link2, hint: 'Dónde publicas' },
   { href: '/pricing', label: 'Precios y márgenes', icon: Boxes, hint: 'Reglas de beneficio' },
   { href: '/setup', label: 'Puesta en marcha', icon: Rocket },
-  { href: '/settings', label: 'Configuración', icon: Settings, hint: 'Proveedores, workers, API' },
+  { href: '/settings', label: 'Configuración', icon: Settings, hint: 'Tu cuenta y preferencias' },
   { href: '/admin', label: 'Administración', icon: ShieldCheck, hint: 'Sólo operadores', adminOnly: true },
 ];
 
@@ -93,22 +91,22 @@ function ListaNavegacion({ items, pathname, onNavigate }: { items: typeof NAV; p
   );
 }
 
-function CajaDatos({ mode, supabase = false }: { mode: 'demo' | 'postgres'; supabase?: boolean }) {
+function CajaDatos({ mode }: { mode: 'demo' | 'postgres'; supabase?: boolean }) {
+  // Con una cuenta real solo se enseña la versión (nada de nombres internos de servicios)
+  if (mode === 'postgres') {
+    return (
+      <div className="mt-4 px-2">
+        <p className="text-[10.5px] text-muted-foreground/70">Versión {VERSION_ETIQUETA}</p>
+      </div>
+    );
+  }
   return (
     <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
       <div className="flex items-center justify-between text-[11px]">
-        <span className="text-muted-foreground">Fuente de datos</span>
-        <span className={cn('rounded px-1.5 py-0.5 font-semibold', mode === 'postgres' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400')}>
-          {mode === 'postgres' ? (supabase ? 'SUPABASE' : 'PostgreSQL') : 'MODO DEMO'}
-        </span>
+        <span className="text-muted-foreground">Modo</span>
+        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-semibold text-amber-400">DEMOSTRACIÓN</span>
       </div>
-      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-        {mode === 'postgres'
-          ? supabase
-            ? 'Datos reales de tu cuenta, protegidos por cliente.'
-            : 'Datos reales desde Prisma. Workers BullMQ activos.'
-          : 'Datos de ejemplo. Entra con tu cuenta para ver los reales.'}
-      </p>
+      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">Datos de ejemplo. Entra con tu cuenta para ver los reales.</p>
       <p className="mt-2 text-[10.5px] text-muted-foreground/70">Versión {VERSION_ETIQUETA}</p>
     </div>
   );
