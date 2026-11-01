@@ -3,9 +3,10 @@
  *
  * Qué ve cada usuario: sus productos publicados, cuáles necesitan atención (el coste del proveedor ya no es el de cuando publicó,
  * o se agotó) y el registro de avisos que va dejando el barrido programado del servidor (`monitor-proveedor`).
- * El monitor SOLO avisa: nunca cambia un precio ni el estado de un producto.
+ * El monitor SOLO avisa: nunca cambia un precio. Lo único que hace por su cuenta es pausar en Retador un producto cuyo coste subió tanto que el precio ya no vale.
  */
 import { supabase } from '../supabase/cliente';
+import type { PrecioEnRiesgo } from './retador';
 import { atencionDeProducto, type Atencion, type VarianteActual, type VarianteGuardada } from '../monitor/atencion';
 
 export interface ProductoVigilado {
@@ -18,6 +19,8 @@ export interface ProductoVigilado {
   /** Próxima revisión prevista (6 horas después de la anterior) */
   proximaRevision: Date | null;
   atencion: Atencion[];
+  /** El coste subió y el precio publicado ya no vale (la sincronización con Retador lo dejó anotado); null si no. */
+  precioEnRiesgo: PrecioEnRiesgo | null;
 }
 
 export interface AvisoMonitor {
@@ -52,7 +55,7 @@ export async function obtenerMonitor(): Promise<DatosMonitor> {
   const [prod, prov, logs] = await Promise.all([
     c
       .from('Product')
-      .select('id,title,status,supplierId,supplierProductId,lastSyncedAt,variants:ProductVariant(id,supplierVariantId,sku,title,costPrice,sellingPrice,shippingCost)')
+      .select('id,title,status,supplierId,supplierProductId,lastSyncedAt,rawPayload,variants:ProductVariant(id,supplierVariantId,sku,title,costPrice,sellingPrice,shippingCost)')
       .eq('isMonitored', true)
       .order('updatedAt', { ascending: false })
       .limit(500),
@@ -97,6 +100,7 @@ export async function obtenerMonitor(): Promise<DatosMonitor> {
       ultimaRevision: revisado,
       proximaRevision: fechaUtc(item?.refreshDueAt),
       atencion: atencionDeProducto(guardadas, actuales),
+      precioEnRiesgo: p.rawPayload?.retador?.precioEnRiesgo && Array.isArray(p.rawPayload.retador.precioEnRiesgo.variantes) && p.rawPayload.retador.precioEnRiesgo.variantes.length ? (p.rawPayload.retador.precioEnRiesgo as PrecioEnRiesgo) : null,
     };
   });
 

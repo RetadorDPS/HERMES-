@@ -1,4 +1,4 @@
-# Contrato DropshipPilot ⇄ Retador (versión 1)
+# Contrato DropshipPilot ⇄ Retador (versión 1, con las ampliaciones hasta la 1.5)
 
 Documento común de los dos lados. DropshipPilot (cliente) publica y mantiene productos en la tienda de UN vendedor de Retador
 mediante un token propio de ese vendedor. Retador es el único que habla con CJ y AliExpress para crear el producto
@@ -155,3 +155,35 @@ Campos nuevos de `tarifas`: `ganancia_minima_retador_usd`, `pasarela_a_cargo` (`
 - Si Retador no informa `ganancia_minima_retador_usd`, siguen valiendo las cuentas de la versión 1 de arriba.
 - Ejemplo del contrato (verificado en `tests/retador/precios.test.ts`): costo 15,28 · precio 25 · envío cobrado 10,03 · comisión 8 % → pasarela 1,84, base 7,88, comisión 0,63, neto 7,25.
 - **Publicar** solo exige el coste de la variante: el peso y la cotización al hub de EE. UU. ya no son obligatorios (el envío lo cotiza Retador al comprar). Si faltan, el neto se estima «sin envío» y la pantalla lo avisa.
+
+## Versión 1.5 — envío por país y sincronización automática (mismo `version_contrato: 1`)
+
+Retador la sirve desde `dropship-config` cuando informa `capacidades.envio_resumen = true`. Mientras no lo diga, DropshipPilot NO manda el campo `envio`.
+
+### Campo opcional `envio` en `dropship-publicar` y `dropship-actualizar`
+```json
+"envio": { "cotizado_en": "2026-10-31T08:00:00.000Z",
+  "destinos": [ { "pais": "US", "dias_min": 3, "dias_max": 6, "precio_usd": 1.25, "gratis": false },
+                { "pais": "ES", "dias_min": 7, "dias_max": 12, "precio_usd": 3, "gratis": false } ] }
+```
+- Hasta 100 países. `pais` = 2 letras MAYÚSCULAS. Días enteros: `dias_min` ≤ 120, `dias_max` ≤ 150 y `dias_max` ≥ `dias_min`. `precio_usd` en USD (≥ 0, o `null` si no se conoce). `gratis: true` solo si la propia cotización del proveedor lo dice (cuenta como 0).
+- Solo cotizaciones REALES ya guardadas en la ficha, del almacén que tiene el stock de lo publicado (en CJ; en AliExpress el almacén lo decide cada cotización). Por cada país se manda la opción más barata y, a igualdad, la más rápida. Un país sin cotización utilizable (sin servicio, sin precio o con días imposibles) no se manda: nunca se inventa nada.
+- **NO se manda Cuba (`CU`)**: Retador la calcula con su regla (EE. UU. + tramo del hub). **Sí se manda EE. UU. (`US`)** siempre que exista, porque Retador lo necesita para Cuba (y EE. UU. no se recorta si hay más de 100 países).
+- `cotizado_en` = la más reciente de las cotizaciones que se mandan.
+- La respuesta (ficha del producto) trae `envio_actualizado_en` y `envio_paises`, que DropshipPilot usa para confirmar que Retador guardó el envío (si `envio_paises` no es mayor que 0, se vuelve a intentar en la siguiente revisión).
+- En `actualizar` se manda con `envio: true` desde la app o junto a un cambio de precio o de stock, y siempre desde la sincronización automática cuando cambió algo (se compara con lo último que se mandó).
+
+### Opiniones
+Retador ya NO enseña el origen de las opiniones del proveedor: aparecen como **«Opiniones del producto»**, no cuentan en la valoración del vendedor y no se mezclan con las de compradores de Retador. DropshipPilot sigue mandando `fuente` en los datos (para el conector y la auditoría), pero nunca las presenta como opiniones de compradores de Retador ni inventa ninguna.
+
+### Provincia
+Los productos importados se envían desde fuera: `provincia` ya no se manda en `publicar` (el contrato la dejó opcional).
+
+### Sincronización automática desde el monitor (`monitor-proveedor` → `retador-tienda`, acción `sincronizar`)
+Tras revisar cada producto publicado en el proveedor (cada 6 h, en serie), DropshipPilot compara y empuja a Retador con `dropship-actualizar` solo lo que cambió de verdad:
+- **Stock por variante** (CJ: almacén + fábrica; AliExpress: el de la variante). Se manda lo que cambió en el proveedor desde la última vez; las ventas que Retador ya descontó no se pisan al alza (se lee `dropship-estado` antes). Stock 0 = Retador lo deja AGOTADO solo. Stock desconocido viaja como `null`. Variante que el proveedor retira = stock 0. Variante nueva = solo aviso (el contrato no permite añadir variantes por actualizar).
+- **Producto que el proveedor ya no devuelve**: `dropship-retirar` (pausado) y aviso.
+- **Envío por país** y **opiniones** (si cambian media o total): solo si cambiaron desde la última vez.
+- **PRECIO: nunca se cambia solo.** Si el coste sube (más de 0,05 USD y 1 %) y el precio publicado queda por debajo del mínimo de Retador o el vendedor perdería dinero, el producto se PAUSA en Retador (`estado: "pausado"`), se anota el aviso y la pantalla Monitor muestra «Ajustar precio» (abre la edición del precio con el mínimo de hoy como punto de partida). Si el coste baja, solo aviso.
+- Cada envío queda en el registro del vendedor (`SyncLog`): qué se mandó y qué respondió Retador. El coste del proveedor no viaja nunca a Retador.
+

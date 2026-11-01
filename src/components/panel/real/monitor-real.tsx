@@ -3,9 +3,11 @@
 /**
  * Monitor de precio y existencias (datos reales).
  * El servidor revisa cada pocas horas el precio y las existencias que el proveedor tiene de tus productos publicados y deja avisos aquí.
- * Nunca cambia un precio ni pausa un producto por su cuenta: te dice qué ha pasado y decides tú.
+ * Nunca cambia un precio por su cuenta: te dice qué ha pasado y decides tú. Lo único que hace solo es pausar en Retador un producto cuyo coste
+ * subió tanto que tu precio ya no vale (para que no se venda con pérdida); tú lo ajustas y lo reactivas.
  */
 import { useState } from 'react';
+import Link from 'next/link';
 import { AlertTriangle, CheckCircle2, CircleDot, Clock, Eye, Loader2, PackageX, RefreshCw, TrendingUp } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -62,7 +64,7 @@ export function MonitorReal() {
   const [errorRevision, setErrorRevision] = useState<string | null>(null);
 
   const m = datos?.monitor;
-  const conAtencion = (m?.vigilados ?? []).filter((p) => p.atencion.length > 0);
+  const conAtencion = (m?.vigilados ?? []).filter((p) => p.atencion.length > 0 || p.precioEnRiesgo);
   const horasSinRepaso = m?.ultimoRepaso ? (Date.now() - m.ultimoRepaso.getTime()) / 3_600_000 : null;
   const repasoParado = Boolean(m && m.vigilados.length > 0 && (horasSinRepaso === null || horasSinRepaso > HORAS_SIN_REPASO));
 
@@ -133,10 +135,30 @@ export function MonitorReal() {
                       <Badge variant="outline">{p.proveedor}</Badge>
                     </div>
                     <ul className="mt-2 space-y-1.5">
+                      {p.precioEnRiesgo?.variantes.map((v) => (
+                        <li key={`riesgo-${v.sku}`} className="flex items-start gap-2 text-[13px]">
+                          <TrendingUp className="mt-0.5 size-3.5 shrink-0 text-rose-300" />
+                          <span>
+                            Tu precio de <strong>«{v.titulo}»</strong> ({usd(v.precioActual)}) ya no vale: el coste pasó de {usd(v.costeAntes)} a {usd(v.costeAhora)} y el mínimo ahora es <strong>{usd(v.minimoUsd)}</strong>.
+                            {v.pierde && <Badge variant="danger" className="ml-2 align-middle">Con tu precio pierdes dinero</Badge>}
+                          </span>
+                        </li>
+                      ))}
                       {p.atencion.map((a, i) => (
                         <LineaAtencion key={`${a.motivo}-${a.variante}-${i}`} a={a} />
                       ))}
                     </ul>
+                    {p.precioEnRiesgo && (
+                      <div className="mt-2 space-y-2">
+                        <p className="text-[12px] text-muted-foreground">
+                          {p.precioEnRiesgo.pausadoSolo && p.estado === 'PAUSED' ? 'Hemos pausado el producto en Retador para que no se venda así. ' : ''}
+                          Nunca cambiamos tu precio por ti: ajústalo tú y, si quieres, reactiva el producto.
+                        </p>
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={`/products?ajustar=${p.id}`}>Ajustar precio</Link>
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </CardContent>

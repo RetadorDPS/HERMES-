@@ -121,6 +121,14 @@ export interface VarianteRetador {
   stock: number;
   stockVerificado: boolean | null;
 }
+/** El coste del proveedor subió y el precio publicado ya no vale (mínimo de Retador o pérdida). Lo deja anotado la sincronización automática. */
+export interface PrecioEnRiesgo {
+  desde: string;
+  /** true = el producto se pausó solo en Retador para que no se venda así */
+  pausadoSolo: boolean;
+  variantes: { sku: string; titulo: string; precioActual: number; minimoUsd: number; costeAntes: number; costeAhora: number; costeProductoAhora: number; pierde: boolean }[];
+}
+
 export interface ProductoRetador {
   id: string;
   title: string;
@@ -134,6 +142,7 @@ export interface ProductoRetador {
   moderacion: string | null;
   vendidos: number | null;
   cambiadoEnRetador: boolean;
+  precioEnRiesgo: PrecioEnRiesgo | null;
   variantes: VarianteRetador[];
 }
 
@@ -164,6 +173,7 @@ export async function obtenerProductosRetador(storeId: string): Promise<Producto
       moderacion: ret.moderacion ?? null,
       vendidos: typeof ret.vendidos === 'number' ? ret.vendidos : null,
       cambiadoEnRetador: ret.origenUltimoCambio === 'vendedor',
+      precioEnRiesgo: ret.precioEnRiesgo && Array.isArray(ret.precioEnRiesgo.variantes) && ret.precioEnRiesgo.variantes.length ? (ret.precioEnRiesgo as PrecioEnRiesgo) : null,
       variantes: [...(p.variants ?? [])]
         .sort((a: any, b: any) => a.position - b.position)
         .map((v: any) => ({

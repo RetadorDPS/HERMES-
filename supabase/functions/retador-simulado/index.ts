@@ -7,6 +7,8 @@
  *   · dsp_sim_caducado…  → 401 token_caducado        · dsp_sim_revocado… → 401 token_invalido
  *   · precio < 1 USD     → 409 precio_bajo_minimo    · stock null        → 5 y stock_estimado = true
  *   · acción extra `simular_edicion_vendedor` {ref}  → marca el producto como cambiado a mano en Retador
+ *   · contrato v1.5: `envio` {cotizado_en, destinos[]} en publicar y actualizar (se valida igual que Retador); la ficha responde con
+ *     `envio_actualizado_en` y `envio_paises`
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -37,6 +39,24 @@ async function guardar(ref: string, data: any) {
   await servicio.from("RetadorSimulado").upsert({ ref, data, updatedAt: new Date().toISOString() }, { onConflict: "ref" });
 }
 const vistaVariantes = (p: any) => p.variantes.map((v: any) => ({ sku: v.sku, precio_venta_usd: v.precio_venta_usd, stock: v.stock, stock_estimado: v.stock_estimado }));
+const vistaEnvio = (p: any) => ({ envio_actualizado_en: p.envio_actualizado_en ?? null, envio_paises: Array.isArray(p.envio?.destinos) ? p.envio.destinos.length : 0 });
+
+/** Valida el campo `envio` del contrato v1.5. Devuelve el motivo si no vale, o null si está bien. */
+function validarEnvio(e: any): string | null {
+  if (!e || typeof e !== "object") return "envio debe ser un objeto";
+  if (typeof e.cotizado_en !== "string" || Number.isNaN(Date.parse(e.cotizado_en))) return "cotizado_en debe ser una fecha ISO";
+  if (!Array.isArray(e.destinos) || e.destinos.length < 1 || e.destinos.length > 100) return "destinos debe tener entre 1 y 100 países";
+  const vistos = new Set<string>();
+  for (const d of e.destinos) {
+    if (typeof d?.pais !== "string" || !/^[A-Z]{2}$/.test(d.pais)) return "pais debe ser un código de 2 letras en mayúsculas";
+    if (vistos.has(d.pais)) return `el país ${d.pais} está repetido`;
+    vistos.add(d.pais);
+    if (!Number.isInteger(d.dias_min) || !Number.isInteger(d.dias_max) || d.dias_min < 0 || d.dias_min > 120 || d.dias_max > 150 || d.dias_max < d.dias_min) return `los días de ${d.pais} no son válidos`;
+    if (d.precio_usd !== null && (typeof d.precio_usd !== "number" || !Number.isFinite(d.precio_usd) || d.precio_usd < 0)) return `el precio de ${d.pais} no es válido`;
+    if (typeof d.gratis !== "boolean") return `gratis de ${d.pais} debe ser verdadero o falso`;
+  }
+  return null;
+}
 const estadoDe = (p: any) => (p.estado === "pausado" ? "pausado" : p.variantes.every((v: any) => v.stock === 0) ? "agotado" : "activo");
 
 Deno.serve(async (req) => {
@@ -56,7 +76,7 @@ Deno.serve(async (req) => {
       vendedor: { plan: "pro", productos_usados: 0, tope_productos: 55, suspendido: false, deuda_comisiones: false },
       tarifas: { hub_usd_por_libra: 1.99, dias_hub_cuba: [8, 15], comision_pct_ganancia: 8, pasarela_pct: 4.4, pasarela_fija_usd: 0.3, ganancia_minima_retador_usd: 1, pasarela_a_cargo: "vendedor", pasarela_base: "total_cobrado", envio: "aparte", comision_base: "precio_venta_menos_costo_producto_menos_pasarela" },
       categorias: CATEGORIAS, provincias: PROVINCIAS,
-      capacidades: { resenas_proveedor: true },
+      capacidades: { resenas_proveedor: true, envio_resumen: true },
       limites: { publicar_por_hora: 10, actualizar_por_hora: 60, retirar_por_hora: 60, estado_por_hora: 300 },
       token: { prefijo: token.slice(0, 12), caduca_en: new Date(Date.now() + 90 * 864e5).toISOString() },
     });
@@ -70,7 +90,11 @@ Deno.serve(async (req) => {
     const categoria = CATEGORIAS.find((x) => x.cat === c.cat);
     if (!categoria) return fallo(400, "datos_invalidos", "Categoría no válida", { campo: "cat" });
     if (!categoria.subcategorias.includes(c.subcat)) return fallo(400, "datos_invalidos", "Subcategoría no válida", { campo: "subcat" });
-    if (!PROVINCIAS.includes(c.provincia)) return fallo(400, "datos_invalidos", "Provincia no válida", { campo: "provincia" });
+    if (c.provincia !== undefined && !PROVINCIAS.includes(c.provincia)) return fallo(400, "datos_invalidos", "Provincia no válida", { campo: "provincia" });
+    if (c.envio !== undefined) {
+      const motivo = validarEnvio(c.envio);
+      if (motivo) return fallo(400, "datos_invalidos", `Envío no válido: ${motivo}`, { campo: "envio" });
+    }
     const ct = c.contenido ?? {};
     if (ct.titulo !== undefined && (typeof ct.titulo !== "string" || ct.titulo.length > 150 || !ct.titulo.trim())) return fallo(400, "datos_invalidos", "Título no válido", { campo: "titulo" });
     if (ct.descripcion !== undefined && (typeof ct.descripcion !== "string" || ct.descripcion.length > 5000)) return fallo(400, "datos_invalidos", "Descripción no válida", { campo: "descripcion" });
@@ -87,13 +111,14 @@ Deno.serve(async (req) => {
     if (existente) return fallo(409, "ya_publicado", "Esta referencia ya está publicada", { producto_id: existente.producto_id });
     const producto_id = crypto.randomUUID();
     const p = {
-      producto_id, estado: "activo", moderacion: "approved", proveedor: c.proveedor, pid: c.pid, cat: c.cat, subcat: c.subcat, provincia: c.provincia,
+      producto_id, estado: "activo", moderacion: "approved", proveedor: c.proveedor, pid: c.pid, cat: c.cat, subcat: c.subcat, provincia: c.provincia ?? null,
+      envio: c.envio ?? null, envio_actualizado_en: c.envio ? new Date().toISOString() : null,
       titulo: ct.titulo ?? `Producto ${c.pid}`, descripcion: ct.descripcion ?? "", imagenes: ct.imagenes ?? [], origen_ultimo_cambio: "dropship",
       actualizado_en: new Date().toISOString(), vendidos: 0, pedidos_pendientes: 0,
       variantes: c.variantes.map((v: any) => ({ sku: v.sku, precio_venta_usd: r2(v.precio_venta_usd), stock: v.stock ?? 5, stock_estimado: v.stock === null || v.stock === undefined })),
     };
     await guardar(c.ref, p);
-    return ok({ ref: c.ref, producto_id, url: `https://retadormarketplace.es/simulado/${producto_id}`, estado: "activo", moderacion: "approved", variantes: vistaVariantes(p), imagenes: p.imagenes.length, cat: p.cat, subcat: p.subcat });
+    return ok({ ref: c.ref, producto_id, url: `https://retadormarketplace.es/simulado/${producto_id}`, estado: "activo", moderacion: "approved", variantes: vistaVariantes(p), imagenes: p.imagenes.length, cat: p.cat, subcat: p.subcat, ...vistaEnvio(p) });
   }
 
   if (accion === "actualizar" || accion === "retirar" || accion === "eliminar" || accion === "simular_edicion_vendedor") {
@@ -119,6 +144,12 @@ Deno.serve(async (req) => {
       if (!o || (o.fuente !== "cj" && o.fuente !== "aliexpress") || !Array.isArray(o.muestra) || o.muestra.length > 20) return fallo(400, "datos_invalidos", "Opiniones no válidas", { campo: "resenas_proveedor" });
       p.resenas_proveedor = o;
     }
+    if (c.envio !== undefined) {
+      const motivo = validarEnvio(c.envio);
+      if (motivo) return fallo(400, "datos_invalidos", `Envío no válido: ${motivo}`, { campo: "envio" });
+      p.envio = c.envio;
+      p.envio_actualizado_en = new Date().toISOString();
+    }
     if (c.estado !== undefined) {
       if (c.estado !== "activo" && c.estado !== "pausado") return fallo(400, "datos_invalidos", "Estado no válido", { campo: "estado" });
       p.estado = c.estado;
@@ -143,7 +174,7 @@ Deno.serve(async (req) => {
     }
     p.origen_ultimo_cambio = "dropship"; p.actualizado_en = new Date().toISOString();
     await guardar(c.ref, p);
-    return ok({ ref: c.ref, producto_id: p.producto_id, estado: estadoDe(p), moderacion: p.moderacion, variantes: vistaVariantes(p) });
+    return ok({ ref: c.ref, producto_id: p.producto_id, estado: estadoDe(p), moderacion: p.moderacion, variantes: vistaVariantes(p), ...vistaEnvio(p) });
   }
 
   if (accion === "estado") {
@@ -152,7 +183,7 @@ Deno.serve(async (req) => {
     for (const ref of c.refs) {
       const p = await leer(String(ref));
       productos.push(p
-        ? { ref, existe: true, producto_id: p.producto_id, estado: estadoDe(p), moderacion: p.moderacion, variantes: vistaVariantes(p), vendidos: p.vendidos, pedidos_pendientes: p.pedidos_pendientes, actualizado_en: p.actualizado_en, origen_ultimo_cambio: p.origen_ultimo_cambio }
+        ? { ref, existe: true, producto_id: p.producto_id, estado: estadoDe(p), moderacion: p.moderacion, variantes: vistaVariantes(p), ...vistaEnvio(p), vendidos: p.vendidos, pedidos_pendientes: p.pedidos_pendientes, actualizado_en: p.actualizado_en, origen_ultimo_cambio: p.origen_ultimo_cambio }
         : { ref, existe: false });
     }
     return ok({ productos });

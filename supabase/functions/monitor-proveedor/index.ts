@@ -3,7 +3,12 @@
  *
  * Esta función NO habla con CJ ni con AliExpress: elige qué productos toca revisar y le pide a `cj-catalogo` / `ali-catalogo`
  * (cada una con su propia lógica) la acción interna `refrescar`. Después anota en el registro de cada usuario (SyncLog) los cambios que importan.
- * NUNCA cambia el precio ni el estado de un producto publicado: solo avisa. Decidir qué hacer con el aviso es del vendedor.
+ * NUNCA cambia el precio de un producto publicado: solo avisa. Decidir qué hacer con el aviso es del vendedor.
+ *
+ * Después de revisar a cada proveedor, le pide a `retador-tienda` (acción interna `sincronizar`, en serie) que empuje a Retador lo que cambió
+ * de verdad: existencias por variante (0 = agotado solo), variantes retiradas, producto que el proveedor ya no devuelve (se pausa), envío por
+ * país y opiniones. Si el coste sube tanto que el precio publicado ya no vale (mínimo de Retador o pérdida), el producto se PAUSA en Retador y
+ * se avisa al vendedor; el precio no se toca. Esta función no sabe nada de Retador: solo reparte el trabajo.
  *
  * Quién puede llamarla:
  *   · el barrido programado (cada 30 min), con la clave `monitor_secreto` guardada en el almacén de secretos de Supabase,
@@ -20,6 +25,9 @@ const FUNCION: Record<string, string> = { CJ_DROPSHIPPING: "cj-catalogo", ALIEXP
 const REVISAR_CADA_MS = 6 * 3_600_000;
 const REINTENTAR_FALLO_MS = 3_600_000;
 const AVISO_RETIRADA_CADA_MS = 24 * 3_600_000;
+/** Tiempo máximo (ms) desde que arranca la revisión para empezar nuevas sincronizaciones; lo que falte se hace en la próxima vuelta. */
+const PRESUPUESTO_SINCRONIZAR_MS = 130_000;
+const PAUSA_ENTRE_SINCRONIZACIONES_MS = 400;
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-monitor-secreto",
@@ -54,6 +62,7 @@ Deno.serve(async (req) => {
     origen = "administrador";
   }
 
+  const inicio = Date.now();
   const cuerpo = await req.json().catch(() => ({}));
   const maximo = Math.max(1, Math.min(Number(cuerpo?.maximo ?? 3) || 3, 5));
 
@@ -67,7 +76,7 @@ Deno.serve(async (req) => {
     const tipoDe = new Map<string, string>((proveedores ?? []).map((p: any) => [String(p.id), String(p.type)]));
     const { data: productos } = await servicio
       .from("Product")
-      .select("id,userId,storeId,supplierId,supplierProductId,status")
+      .select("id,userId,storeId,supplierId,supplierProductId,storeProductId,status")
       .eq("isMonitored", true)
       .in("status", ["ACTIVE", "OUT_OF_STOCK", "PAUSED"])
       .not("supplierProductId", "is", null)
@@ -98,7 +107,13 @@ Deno.serve(async (req) => {
     const sinCatalogo = [...grupos.entries()].filter(([k]) => !itemDe.has(k)).length;
 
     // ── Revisión: un proveedor detrás de otro, en lotes de hasta 3 productos ──
-    const resumen = { revisados: 0, conCambios: 0, cambios: 0, fallos: 0, llamadas: 0, avisosEnviados: 0 };
+    const resumen = { revisados: 0, conCambios: 0, cambios: 0, fallos: 0, llamadas: 0, avisosEnviados: 0, sincronizados: 0, sincPausados: 0, sincSinCambios: 0, sincFallos: 0 };
+    const sumarSync = (r: ResultadoSync) => {
+      resumen.sincronizados += r.enviados;
+      resumen.sincPausados += r.pausados;
+      resumen.sincSinCambios += r.sinCambios;
+      resumen.sincFallos += r.fallos;
+    };
     const detalle: any[] = [];
     for (const provider of Object.keys(FUNCION)) {
       const delProveedor = pendientes.filter((g) => g.provider === provider);
@@ -126,7 +141,11 @@ Deno.serve(async (req) => {
           detalle.push({ provider, externalId: g.externalId, ok: false, error: inf?.error ?? json?.error ?? "Sin respuesta" });
           await servicio.from("CatalogItem").update({ refreshDueAt: iso(inf?.posibleRetirada ? 12 * 3_600_000 : REINTENTAR_FALLO_MS) }).eq("id", g.item.id);
           // Si el proveedor ya no devuelve el producto, se avisa a quienes lo tienen publicado (una vez al día como mucho)
-          if (inf?.posibleRetirada) resumen.avisosEnviados += await avisarRetirada(servicio, g.productos, String(inf.error));
+          if (inf?.posibleRetirada) {
+            resumen.avisosEnviados += await avisarRetirada(servicio, g.productos, String(inf.error));
+            // Y en Retador el producto se pausa: no se puede vender lo que el proveedor ya no tiene
+            sumarSync(await sincronizarConRetador(urlSupabase, claveServicio, g.productos, { retirado: true }, inicio));
+          }
           continue;
         }
         resumen.revisados += 1;
@@ -137,13 +156,17 @@ Deno.serve(async (req) => {
         resumen.avisosEnviados += await anotarCambios(servicio, g.productos, cambios);
         await servicio.from("CatalogItem").update({ refreshDueAt: iso(REVISAR_CADA_MS) }).eq("id", g.item.id);
         await servicio.from("Product").update({ lastSyncedAt: iso(), lastSyncStatus: "SUCCESS", lastSyncError: null }).in("id", g.productos.map((p: any) => p.id));
+        // Con la ficha ya al día, se empuja a Retador lo que haya cambiado (la propia función compara y solo manda lo nuevo)
+        sumarSync(await sincronizarConRetador(urlSupabase, claveServicio, g.productos, {}, inicio));
         detalle.push({ provider, externalId: g.externalId, ok: true, cambios: cambios.map((c) => `${c.tipo}:${c.nombre}`) });
       }
     }
 
     return responder({
       ok: true, origen, vigilados: grupos.size, pendientesAntes: pendientes.length, sinCatalogo, ...resumen, detalle,
-      mensaje: pendientes.length ? `${resumen.revisados} revisados · ${resumen.cambios} cambios · ${resumen.fallos} fallos` : "Todo está al día: ningún producto toca revisarse todavía.",
+      mensaje: pendientes.length
+        ? `${resumen.revisados} revisados · ${resumen.cambios} cambios · ${resumen.fallos} fallos` + (resumen.sincronizados || resumen.sincFallos ? ` · ${resumen.sincronizados} actualizados en Retador` + (resumen.sincPausados ? ` (${resumen.sincPausados} pausados por coste)` : "") + (resumen.sincFallos ? ` · ${resumen.sincFallos} sin poder sincronizar` : "") : "")
+        : "Todo está al día: ningún producto toca revisarse todavía.",
     });
   } catch (e) {
     return responder({ ok: false, error: `Error inesperado: ${(e as Error).message}` }, 500);
@@ -187,4 +210,41 @@ async function avisarRetirada(servicio: any, productos: any[], motivo: string): 
     if (!error) creados += 1;
   }
   return creados;
+}
+
+interface ResultadoSync {
+  enviados: number;
+  pausados: number;
+  sinCambios: number;
+  fallos: number;
+}
+
+/**
+ * Pide a `retador-tienda` que sincronice con Retador cada producto publicado (uno detrás de otro, con una pausa corta).
+ * Nunca lanza: un fallo de Retador no debe parar la revisión de los proveedores; queda anotado en el registro del usuario por `retador-tienda`.
+ * Si se acaba el tiempo de la revisión, lo que falte se hará en la próxima vuelta (la sincronización compara y solo manda lo nuevo).
+ */
+async function sincronizarConRetador(urlSupabase: string, claveServicio: string, productos: any[], opciones: { retirado?: boolean }, inicio: number): Promise<ResultadoSync> {
+  const r: ResultadoSync = { enviados: 0, pausados: 0, sinCambios: 0, fallos: 0 };
+  for (const p of productos) {
+    if (!p.storeProductId) continue; // no está publicado en ninguna tienda
+    if (Date.now() - inicio > PRESUPUESTO_SINCRONIZAR_MS) break;
+    try {
+      const res = await fetch(`${urlSupabase}/functions/v1/retador-tienda`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${claveServicio}`, "x-usuario": String(p.userId), "Content-Type": "application/json" },
+        body: JSON.stringify({ accion: "sincronizar", productId: p.id, ...(opciones.retirado ? { retirado: true } : {}) }),
+        signal: AbortSignal.timeout(45_000),
+      });
+      const json: any = await res.json().catch(() => ({}));
+      if (!res.ok || json?.ok !== true) r.fallos += 1;
+      else if (json.pausado) { r.pausados += 1; r.enviados += 1; }
+      else if (json.enviado) r.enviados += 1;
+      else r.sinCambios += 1;
+    } catch {
+      r.fallos += 1;
+    }
+    await new Promise((fin) => setTimeout(fin, PAUSA_ENTRE_SINCRONIZACIONES_MS));
+  }
+  return r;
 }

@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { llamarTienda, obtenerProductosRetador, type ProductoRetador, type TiendaRetador } from '@/lib/real/retador';
+import { llamarTienda, obtenerProductosRetador, type PrecioEnRiesgo, type ProductoRetador, type TiendaRetador } from '@/lib/real/retador';
 import { liquidacion } from '@/lib/retador/precios';
 import { cn } from '@/lib/utils';
 
@@ -65,6 +65,22 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
     })();
   }, [cargar, tienda.id, tienda.publicados]);
 
+  // Desde el Monitor, «Ajustar precio» llega con ?ajustar=<producto>: se abre el editor de ese producto y se baja hasta él
+  const [yaAbierto, setYaAbierto] = useState(false);
+  useEffect(() => {
+    if (!productos || yaAbierto) return;
+    let id: string | null = null;
+    try {
+      id = new URLSearchParams(window.location.search).get('ajustar');
+    } catch {
+      /* sin acceso a la dirección: no se abre nada */
+    }
+    setYaAbierto(true);
+    if (!id || !productos.some((p) => p.id === id)) return;
+    setEditando(id);
+    window.setTimeout(() => document.getElementById(`producto-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+  }, [productos, yaAbierto]);
+
   async function eliminar(p: ProductoRetador) {
     const archivado = p.status === 'ARCHIVED';
     const pregunta = archivado
@@ -112,7 +128,7 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
           const maximo = precios.length ? Math.max(...precios) : 0;
           const hayEstimado = p.variantes.some((v) => v.stockVerificado === false);
           return (
-            <div key={p.id} className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+            <div key={p.id} id={`producto-${p.id}`} className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-3">
               <div className="flex gap-3">
                 {p.foto ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -145,13 +161,29 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
                 </p>
               )}
 
+              {p.precioEnRiesgo && editando !== p.id && (
+                <Alert variant="warning" title="Tu precio ya no vale con el coste de hoy">
+                  <AvisoPrecio riesgo={p.precioEnRiesgo} pausado={p.status === 'PAUSED'} />
+                  <Button size="sm" variant="outline" className="mt-2" disabled={!!ocupado} onClick={() => setEditando(p.id)}>
+                    <Pencil /> Ajustar precio
+                  </Button>
+                </Alert>
+              )}
+
               {editando === p.id ? (
                 <EditorProducto
                   producto={p}
                   tienda={tienda}
                   guardando={ocupado === `${p.id}:guardar`}
                   alCancelar={() => setEditando(null)}
-                  alGuardar={(variantes) => accion(p.id, 'guardar', { accion: 'actualizar', variantes }, 'Cambios guardados en Retador.')}
+                  alGuardar={(variantes) =>
+                    accion(
+                      p.id,
+                      'guardar',
+                      { accion: 'actualizar', variantes },
+                      p.precioEnRiesgo && p.status === 'PAUSED' ? 'Precio guardado en Retador. El producto sigue pausado: pulsa «Reactivar» cuando quieras volver a venderlo.' : 'Cambios guardados en Retador.',
+                    )
+                  }
                 />
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -193,6 +225,26 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
   );
 }
 
+/** Qué ha pasado con el coste y cuánto hay que cobrar como mínimo ahora, variante por variante. */
+function AvisoPrecio({ riesgo, pausado }: { riesgo: PrecioEnRiesgo; pausado: boolean }) {
+  return (
+    <div className="space-y-1 text-[12px]">
+      <ul className="space-y-1">
+        {riesgo.variantes.map((v) => (
+          <li key={v.sku}>
+            <strong>«{v.titulo}»</strong>: el coste pasó de {usd(v.costeAntes)} a {usd(v.costeAhora)}. Tu precio es {usd(v.precioActual)} y ahora el mínimo es <strong>{usd(v.minimoUsd)}</strong>
+            {v.pierde ? ' (con tu precio perderías dinero).' : ' (el mínimo de Retador).'}
+          </li>
+        ))}
+      </ul>
+      <p>
+        {pausado && riesgo.pausadoSolo ? 'Hemos pausado el producto en Retador para que no se venda así. ' : ''}
+        Nunca cambiamos tu precio por ti: súbelo tú y, si quieres, reactiva el producto.
+      </p>
+    </div>
+  );
+}
+
 function EditorProducto({
   producto,
   tienda,
@@ -206,7 +258,11 @@ function EditorProducto({
   alCancelar: () => void;
   alGuardar: (v: { sku: string; precioVentaUsd?: number; stock?: number }[]) => void;
 }) {
-  const [precios, setPrecios] = useState<Record<string, string>>(() => Object.fromEntries(producto.variantes.map((v) => [v.sku, v.sellingPrice.toFixed(2)])));
+  // Con el coste de hoy ya no vale tu precio: se propone el mínimo (tú decides si cobras más) y las cuentas usan el coste actual
+  const riesgoDe = (sku: string) => producto.precioEnRiesgo?.variantes.find((r) => r.sku === sku);
+  const [precios, setPrecios] = useState<Record<string, string>>(() =>
+    Object.fromEntries(producto.variantes.map((v) => [v.sku, (riesgoDe(v.sku) ? riesgoDe(v.sku)!.minimoUsd : v.sellingPrice).toFixed(2)])),
+  );
   const [stocks, setStocks] = useState<Record<string, string>>(() => Object.fromEntries(producto.variantes.map((v) => [v.sku, String(v.stock)])));
 
   const cambios = producto.variantes
@@ -224,7 +280,13 @@ function EditorProducto({
     <div className="space-y-2 rounded-lg border border-indigo-400/30 bg-indigo-500/[0.05] p-2.5">
       {producto.variantes.map((v) => {
         const precio = Number(precios[v.sku]);
-        const liq = tienda.tarifas && Number.isFinite(precio) && precio > 0 ? liquidacion(precio, v.costPrice + v.shippingCost, tienda.tarifas, v.costPrice) : null;
+        const riesgo = riesgoDe(v.sku);
+        const liq =
+          tienda.tarifas && Number.isFinite(precio) && precio > 0
+            ? riesgo
+              ? liquidacion(precio, riesgo.costeAhora, tienda.tarifas, riesgo.costeProductoAhora)
+              : liquidacion(precio, v.costPrice + v.shippingCost, tienda.tarifas, v.costPrice)
+            : null;
         return (
           <div key={v.sku} className="space-y-1 border-b border-white/[0.06] pb-2 text-[12px] last:border-0 last:pb-0">
             <p className="truncate font-medium">{v.title}</p>
@@ -240,6 +302,7 @@ function EditorProducto({
               </label>
               {liq && <span className={cn('font-medium', liq.neto < 0 ? 'text-rose-300' : 'text-emerald-300')}>Neto {usd(liq.neto)}</span>}
             </div>
+            {riesgo && <p className="text-[11px] text-amber-300">Mínimo con el coste de hoy: {usd(riesgo.minimoUsd)}. Te lo hemos puesto como punto de partida; puedes cobrar más.</p>}
             {v.stockVerificado === false && <p className="text-[11px] text-amber-300">El stock es una estimación de Retador, no un dato del proveedor.</p>}
           </div>
         );

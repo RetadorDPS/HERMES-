@@ -7,9 +7,12 @@
  *   config {storeId}                       Pide a Retador sus tarifas, categorías y límites.
  *   preparar {storeId, itemId}             Calcula coste puesto en Cuba y beneficio neto por variante (sin publicar).
  *   publicar {storeId, itemId, variantes, cat, subcat, contenido?}  (provincia ya no: los importados se envían desde fuera)
- *   actualizar {productId, estado?, variantes?, contenido?}
+ *   actualizar {productId, estado?, variantes?, contenido?, resenas?, envio?}
  *   retirar {productId}
  *   estado {storeId}                       Compara lo que hay en Retador con lo guardado aquí.
+ *   sincronizar {productId, retirado?}     Empuja a Retador lo que cambió en el proveedor (stock, variantes retiradas, envío por país,
+ *                                          opiniones). El precio NUNCA se cambia solo: si el coste sube y el precio ya no vale, se pausa y se avisa.
+ *                                          Lo pide `monitor-proveedor` (vía interna) tras revisar al proveedor.
  *
  * Reglas: el coste del proveedor nunca se envía a Retador; ningún número se inventa (stock desconocido = null);
  * si falta un dato real para calcular el beneficio, no se publica. Contrato: docs/contrato-retador.md.
@@ -33,6 +36,8 @@ import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoSinPerd
 import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
 import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-pedidos.ts";
 import { resenasParaRetador } from "./resenas.ts";
+import { envioParaRetador, huellaEnvio, type EnvioParaRetador } from "./retador-envio.ts";
+import { huellaResenas, planificarSincronizacion } from "./retador-sync.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -189,6 +194,8 @@ interface VariantePreparada {
   stock: number | null;
   stockAlmacen: number | null;
   stockFabrica: number | null;
+  /** Almacenes que tienen existencias de esta variante (solo CJ; en AliExpress el almacén lo decide cada cotización). */
+  origenesConStock: string[];
   coste: ReturnType<typeof costeParaPublicar>;
   faltan: string[];
   precioMinimoUsd: number | null;
@@ -221,6 +228,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       stock: existencias.total,
       stockAlmacen: existencias.almacen,
       stockFabrica: existencias.fabrica,
+      origenesConStock: [...origenesConStock],
       coste,
       faltan,
       precioMinimoUsd: coste && tarifas ? precioMinimoSinPerdida(coste.total, tarifas, coste.producto) : null,
@@ -328,8 +336,36 @@ async function accionPreparar(uid: string, cuerpo: any) {
   };
 }
 
-async function registrar(uid: string, storeId: string, productId: string | null, tipo: string, estado: "SUCCESS" | "FAILED", mensaje: string, cambios?: unknown) {
-  await servicio.from("SyncLog").insert({ userId: uid, storeId, productId, type: tipo, status: estado, level: estado === "SUCCESS" ? "INFO" : "ERROR", message: mensaje, changes: cambios ?? null });
+async function registrar(uid: string, storeId: string, productId: string | null, tipo: string, estado: "SUCCESS" | "FAILED", mensaje: string, cambios?: unknown, nivel?: "INFO" | "WARN" | "ERROR") {
+  await servicio.from("SyncLog").insert({ userId: uid, storeId, productId, type: tipo, status: estado, level: nivel ?? (estado === "SUCCESS" ? "INFO" : "ERROR"), message: mensaje, changes: cambios ?? null });
+}
+
+/** Mezcla datos en `rawPayload.retador` sin pisar el resto (un valor `null` borra la clave). */
+async function fusionarRetador(productId: string, parche: Record<string, unknown>) {
+  const { data } = await servicio.from("Product").select("rawPayload").eq("id", productId).maybeSingle();
+  const raw: any = data?.rawPayload ?? {};
+  const retador: Record<string, unknown> = { ...(raw.retador ?? {}), ...parche };
+  for (const k of Object.keys(retador)) if (retador[k] === null) delete retador[k];
+  await servicio.from("Product").update({ rawPayload: { ...raw, retador }, updatedAt: ahora() }).eq("id", productId);
+}
+
+/** Ficha del catálogo común que corresponde a un producto publicado, o null si ya no está o no tiene la ficha completa. */
+async function catalogoDeProducto(p: any) {
+  const provider = p.supplierId === ID_PROVEEDOR.CJ_DROPSHIPPING ? "CJ_DROPSHIPPING" : p.supplierId === ID_PROVEEDOR.ALIEXPRESS ? "ALIEXPRESS" : null;
+  if (!provider || !p.supplierProductId) return null;
+  const { data: item } = await servicio.from("CatalogItem").select("id").eq("provider", provider).eq("externalId", p.supplierProductId).maybeSingle();
+  if (!item) return null;
+  try {
+    return await leerCatalogo(String(item.id));
+  } catch {
+    return null;
+  }
+}
+
+/** Envío por país para Retador (contrato v1.5): solo cotizaciones reales del almacén que tiene el stock; Cuba la calcula Retador. */
+function envioDeVariantes(ficha: any, proveedor: "cj" | "aliexpress", variantes: VariantePreparada[]): EnvioParaRetador | null {
+  if (proveedor === "aliexpress") return envioParaRetador(ficha, null);
+  return envioParaRetador(ficha, new Set(variantes.flatMap((v) => v.origenesConStock)));
 }
 
 async function accionPublicar(uid: string, cuerpo: any) {
@@ -399,6 +435,10 @@ async function accionPublicar(uid: string, cuerpo: any) {
     await servicio.from("Product").delete().eq("id", productId);
   };
 
+  // Envío por país (contrato v1.5): solo si Retador lo admite, y solo con cotizaciones reales del almacén que tiene el stock
+  const envioPublicar = cfg.capacidades?.envio_resumen === true ? envioDeVariantes(ficha, proveedor, lineas.map(({ v }) => v)) : null;
+  const opinionesPublicar = cfg.capacidades?.resenas_proveedor === true ? resenasParaRetador(ficha, proveedor) : null;
+
   let remoto: any;
   try {
     remoto = await conRetador(tienda, "publicar", {
@@ -406,7 +446,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
       variantes: lineas.map(({ v, precio }) => ({ sku: v.sku, precio_venta_usd: precio, stock: v.stock })),
       cat, subcat, contenido,
       // Opiniones reales del proveedor (con su origen), solo si Retador dice que las acepta
-      ...(cfg.capacidades?.resenas_proveedor === true && resenasParaRetador(ficha, proveedor) ? { resenas_proveedor: resenasParaRetador(ficha, proveedor) } : {}),
+      ...(opinionesPublicar ? { resenas_proveedor: opinionesPublicar } : {}),
+      ...(envioPublicar ? { envio: envioPublicar } : {}),
     });
   } catch (e) {
     await deshacer();
@@ -430,10 +471,21 @@ async function accionPublicar(uid: string, cuerpo: any) {
   await servicio.from("Product").update({
     storeProductId: remoto.producto_id, storeHandle: remoto.url ?? null, status: remoto.estado === "pausado" ? "PAUSED" : remoto.estado === "agotado" ? "OUT_OF_STOCK" : "ACTIVE", stockTotal,
     lastSyncedAt: ahora(), lastSyncStatus: "SUCCESS", lastSyncError: null,
-    rawPayload: { retador: { ref, moderacion: remoto.moderacion ?? null, publicadoEn: ahora(), origenUltimoCambio: "dropship" } }, updatedAt: ahora(),
+    rawPayload: {
+      retador: {
+        ref, moderacion: remoto.moderacion ?? null, publicadoEn: ahora(), origenUltimoCambio: "dropship",
+        // Lo que ya se mandó a Retador, para que la sincronización automática solo mande lo que cambie
+        stockProveedor: Object.fromEntries(lineas.map(({ v }) => [v.sku, v.stock])),
+        ...(envioPublicar && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0 ? { envioHash: huellaEnvio(envioPublicar), envioEnviadoEn: ahora() } : {}),
+        ...(opinionesPublicar ? { resenasHash: huellaResenas(opinionesPublicar) } : {}),
+      },
+    }, updatedAt: ahora(),
   }).eq("id", productId);
-  await registrar(uid, tienda.id, productId, "IMPORT", "SUCCESS", `Publicado en Retador: «${contenido.titulo}»`, { variantes: lineas.length, ref });
-  return { productId, productoRetador: remoto.producto_id, url: remoto.url ?? null, estado: remoto.estado, moderacion: remoto.moderacion ?? null, variantes: remoto.variantes ?? [] };
+  await registrar(uid, tienda.id, productId, "IMPORT", "SUCCESS", `Publicado en Retador: «${contenido.titulo}»`, {
+    variantes: lineas.length, ref,
+    envio: envioPublicar ? { paisesEnviados: envioPublicar.destinos.length, paisesConfirmados: remoto.envio_paises ?? null } : null,
+  });
+  return { productId, productoRetador: remoto.producto_id, url: remoto.url ?? null, estado: remoto.estado, moderacion: remoto.moderacion ?? null, variantes: remoto.variantes ?? [], envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
 }
 
 async function productoPropio(uid: string, productId: unknown) {
@@ -448,16 +500,27 @@ async function accionActualizar(uid: string, cuerpo: any) {
   const { p, tienda, ref } = await productoPropio(uid, cuerpo.productId);
   const envio: Record<string, unknown> = { ref };
   const cambios: string[] = [];
+  // La configuración de Retador se lee una sola vez, y solo si hace falta
+  let cfgLeida: any = null;
+  const leerCfg = async () => (cfgLeida ??= await conRetador(tienda, "config"));
+  // Ficha actual del proveedor (si sigue en el catálogo): con ella se comprueba el precio mínimo con el coste de HOY, no con el de cuando se publicó
+  let catLeido: Awaited<ReturnType<typeof catalogoDeProducto>> | undefined;
+  const leerCat = async () => (catLeido === undefined ? (catLeido = await catalogoDeProducto(p)) : catLeido);
+  let huellaEnvioNueva: string | null = null;
+  let huellaResenasNueva: string | null = null;
+
   if (cuerpo.estado !== undefined) {
     if (cuerpo.estado !== "activo" && cuerpo.estado !== "pausado") throw new ErrorApp("datos_invalidos", "El estado debe ser «activo» o «pausado»", { campo: "estado" });
     envio.estado = cuerpo.estado;
     cambios.push(`estado → ${cuerpo.estado}`);
   }
   if (Array.isArray(cuerpo.variantes) && cuerpo.variantes.length) {
-    const cfg = await conRetador(tienda, "config");
+    const cfg = await leerCfg();
     const tarifas = tarifasDeConfig(cfg);
     const { data: locales } = await servicio.from("ProductVariant").select("sku,costPrice,shippingCost,sellingPrice,stock").eq("productId", p.id);
     const porSku = new Map((locales ?? []).map((v: any) => [v.sku, v]));
+    const cat = tarifas ? await leerCat() : null;
+    const vigentes = cat ? new Map(prepararVariantes(cat.ficha, cat.proveedor, tarifas).variantes.map((v) => [v.sku, v])) : new Map<string, VariantePreparada>();
     envio.variantes = cuerpo.variantes.map((e: any) => {
       const local: any = porSku.get(String(e?.sku ?? ""));
       if (!local) throw new ErrorApp("sku_no_pertenece", `La variante «${e?.sku}» no es de este producto`, { sku: e?.sku });
@@ -466,8 +529,11 @@ async function accionActualizar(uid: string, cuerpo: any) {
         const precio = redondear(Number(e.precioVentaUsd));
         if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", "Pon un precio válido", { sku: local.sku });
         if (tarifas) {
-          const coste = Number(local.costPrice) + Number(local.shippingCost);
-          const minimo = precioMinimoSinPerdida(coste, tarifas, Number(local.costPrice));
+          // Con el coste de hoy si la ficha lo permite; si no, con el que se guardó al publicar
+          const hoy = vigentes.get(local.sku)?.coste;
+          const coste = hoy ? hoy.total : Number(local.costPrice) + Number(local.shippingCost);
+          const producto = hoy ? hoy.producto : Number(local.costPrice);
+          const minimo = precioMinimoSinPerdida(coste, tarifas, producto);
           if (precio < minimo) throw new ErrorApp("precio_bajo_minimo", `Con ${precio.toFixed(2)} USD queda por debajo del mínimo en «${local.sku}». Mínimo: ${minimo.toFixed(2)} USD.`, { sku: local.sku, minimoUsd: minimo });
         }
         salida.precio_venta_usd = precio;
@@ -493,16 +559,42 @@ async function accionActualizar(uid: string, cuerpo: any) {
     }
   }
   if (cuerpo.resenas === true) {
-    const cfgR = await conRetador(tienda, "config");
+    const cfgR = await leerCfg();
     if (cfgR.capacidades?.resenas_proveedor !== true) throw new ErrorApp("resenas_no_disponible", "Retador todavía no admite las opiniones del proveedor. Cuando lo active podrás enviarlas desde aquí.");
-    const { data: pr } = await servicio.from("Product").select("supplierId,supplierProductId").eq("id", p.id).maybeSingle();
-    const prov = pr?.supplierId === "proveedor-cj" ? "CJ_DROPSHIPPING" : pr?.supplierId === "proveedor-aliexpress" ? "ALIEXPRESS" : null;
-    const { data: it } = prov && pr?.supplierProductId ? await servicio.from("CatalogItem").select("id").eq("provider", prov).eq("externalId", pr.supplierProductId).maybeSingle() : { data: null };
-    const ficha = it ? (await servicio.from("CatalogItemDetail").select("ficha").eq("itemId", it.id).maybeSingle()).data?.ficha : null;
-    const opiniones = prov ? resenasParaRetador(ficha, PROVEEDOR_RETADOR[prov]) : null;
+    const cat = await leerCat();
+    const opiniones = cat ? resenasParaRetador(cat.ficha, cat.proveedor) : null;
     if (!opiniones) throw new ErrorApp("sin_resenas", "El proveedor no informa opiniones de este producto.");
     envio.resenas_proveedor = opiniones;
+    huellaResenasNueva = huellaResenas(opiniones);
     cambios.push("opiniones del proveedor");
+  }
+  // Envío por país (contrato v1.5): si lo pides (envio: true) o junto a un cambio de precio o de stock, y solo si Retador lo admite y hay algo nuevo
+  const pideEnvio = cuerpo.envio === true;
+  if (pideEnvio || (Array.isArray(cuerpo.variantes) && cuerpo.variantes.length)) {
+    const cfgE = await leerCfg();
+    if (cfgE.capacidades?.envio_resumen !== true) {
+      if (pideEnvio) throw new ErrorApp("envio_no_disponible", "Retador todavía no admite el envío por país. Cuando lo active podrás enviarlo desde aquí.");
+    } else {
+      const cat = await leerCat();
+      if (cat) {
+        const { data: propias } = await servicio.from("ProductVariant").select("sku").eq("productId", p.id);
+        const skus = new Set((propias ?? []).map((v: any) => v.sku));
+        const lista = prepararVariantes(cat.ficha, cat.proveedor, tarifasDeConfig(cfgE)).variantes.filter((v) => skus.has(v.sku));
+        const e = envioDeVariantes(cat.ficha, cat.proveedor, lista);
+        if (e) {
+          const h = huellaEnvio(e);
+          if (pideEnvio || h !== p.rawPayload?.retador?.envioHash) {
+            envio.envio = e;
+            huellaEnvioNueva = h;
+            cambios.push("envío por país");
+          }
+        } else if (pideEnvio) {
+          throw new ErrorApp("sin_envio", "Este producto todavía no tiene envíos cotizados desde el almacén que tiene el stock. Cotiza el envío desde la ficha del catálogo.");
+        }
+      } else if (pideEnvio) {
+        throw new ErrorApp("sin_envio", "Este producto ya no tiene ficha en el catálogo, así que no hay envíos que mandar.");
+      }
+    }
   }
   if (cambios.length === 0) throw new ErrorApp("datos_invalidos", "No hay nada que actualizar");
 
@@ -522,8 +614,16 @@ async function accionActualizar(uid: string, cuerpo: any) {
     await servicio.from("ProductImage").delete().eq("productId", p.id);
     await servicio.from("ProductImage").insert((envio.contenido as any).imagenes.map((url: string, i: number) => ({ productId: p.id, url, position: i, isMain: i === 0 })));
   }
-  await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Actualizado en Retador (${cambios.join("; ")})`, { cambios });
-  return { productId: p.id, estado: remoto.estado, variantes: remoto.variantes ?? [] };
+  // Lo que Retador ya tiene: la próxima sincronización solo mandará lo que cambie. Reactivar a mano borra el aviso de «precio en riesgo» (si sigue valiendo, se vuelve a avisar).
+  const parche: Record<string, unknown> = {};
+  if (huellaEnvioNueva && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0) { parche.envioHash = huellaEnvioNueva; parche.envioEnviadoEn = ahora(); }
+  if (huellaResenasNueva) parche.resenasHash = huellaResenasNueva;
+  if (cuerpo.estado === "activo") parche.precioEnRiesgo = null;
+  if (Object.keys(parche).length) await fusionarRetador(p.id, parche);
+  await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Actualizado en Retador (${cambios.join("; ")})`, {
+    cambios, ...(envio.envio ? { envio: { paisesEnviados: huellaEnvioNueva ? (envio.envio as EnvioParaRetador).destinos.length : null, paisesConfirmados: remoto.envio_paises ?? null } } : {}),
+  });
+  return { productId: p.id, estado: remoto.estado, variantes: remoto.variantes ?? [], envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
 }
 
 /** Copia a las tablas locales lo que Retador confirma tras publicar o actualizar. */
@@ -602,9 +702,143 @@ async function accionEstado(uid: string, cuerpo: any) {
     }
     if (r.origen_ultimo_cambio === "vendedor") diferencias.push({ productId: id, tipo: "cambiado_en_retador", mensaje: "Cambiaste este producto a mano en Retador. Revisa precio y stock antes de volver a sincronizarlo." });
     await aplicarRemotoALocal(id, r);
-    await servicio.from("Product").update({ rawPayload: { retador: { moderacion: r.moderacion ?? null, vendidos: r.vendidos ?? 0, pedidosPendientes: r.pedidos_pendientes ?? 0, origenUltimoCambio: r.origen_ultimo_cambio ?? null, actualizadoEn: r.actualizado_en ?? null } } }).eq("id", id);
+    await fusionarRetador(id, { moderacion: r.moderacion ?? null, vendidos: r.vendidos ?? 0, pedidosPendientes: r.pedidos_pendientes ?? 0, origenUltimoCambio: r.origen_ultimo_cambio ?? null, actualizadoEn: r.actualizado_en ?? null });
   }
   return { productos: remoto.productos ?? [], diferencias };
+}
+
+/* ───────────────────────────── Sincronización automática ───────────────────────────── */
+
+const usdTexto = (n: number) => `${n.toFixed(2)} USD`;
+
+/**
+ * Empuja a Retador lo que cambió en el proveedor de un producto ya publicado. Lo pide `monitor-proveedor` (vía interna) después de refrescar
+ * la ficha; esta función NO habla con CJ ni con AliExpress, solo lee la ficha ya guardada.
+ *  · stock por variante (0 = Retador lo deja agotado solo; desconocido = null; variante retirada = 0) sin pisar las ventas que Retador ya descontó;
+ *  · producto que el proveedor ya no devuelve (`retirado`): se pausa en Retador;
+ *  · envío por país y opiniones, solo si cambiaron desde la última vez;
+ *  · el PRECIO nunca se cambia solo: si el coste sube y el precio ya no vale (mínimo de Retador o pérdida), se pausa y se avisa.
+ * Cada envío a Retador queda anotado en el registro (qué se mandó y qué respondió Retador).
+ */
+async function accionSincronizar(uid: string, cuerpo: any) {
+  const { data: p } = await servicio.from("Product").select("*").eq("id", String(cuerpo.productId ?? "")).eq("userId", uid).maybeSingle();
+  if (!p || !p.storeId || !p.storeProductId || p.status === "ARCHIVED" || p.status === "DRAFT") return { omitido: "no_publicado" };
+  const { data: tienda } = await servicio.from("Store").select("*").eq("id", p.storeId).eq("userId", uid).maybeSingle();
+  if (!tienda || tienda.platform !== "RETADOR" || tienda.status !== "CONNECTED" || !tienda.accessTokenEnc) return { omitido: "tienda_desconectada" };
+  const ref = `dsp:${tienda.id}:${p.id}`;
+  const previo: any = p.rawPayload?.retador ?? {};
+
+  // El proveedor ya no devuelve el producto: se pausa en Retador para que no se venda lo que no se puede comprar
+  if (cuerpo.retirado === true) {
+    if (p.status === "PAUSED") return { omitido: "ya_pausado" };
+    try {
+      await conRetador(tienda, "retirar", { ref });
+    } catch (e) {
+      await marcarProductoSiDesaparecio(p.id, e);
+      await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "FAILED", `El proveedor ya no devuelve «${p.title}» y no se pudo pausar en Retador: ${(e as Error).message}`, { sincronizacion: true, accion: "retirar" });
+      throw e;
+    }
+    await servicio.from("Product").update({ status: "PAUSED", lastSyncedAt: ahora(), lastSyncStatus: "SUCCESS", lastSyncError: null, updatedAt: ahora() }).eq("id", p.id);
+    await fusionarRetador(p.id, { pausadoPorProveedor: ahora() });
+    await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "SUCCESS", `El proveedor ya no devuelve «${p.title}»: lo hemos pausado en Retador para que no se venda. Si compruebas que sigue disponible, puedes reactivarlo desde «Productos».`, { sincronizacion: true, accion: "retirar" }, "WARN");
+    return { productId: p.id, pausado: true };
+  }
+
+  const cat = await catalogoDeProducto(p);
+  if (!cat) return { omitido: "sin_ficha" };
+  const cfg = await conRetador(tienda, "config");
+  const tarifas = tarifasDeConfig(cfg);
+  const admiteEnvio = cfg.capacidades?.envio_resumen === true;
+  const admiteResenas = cfg.capacidades?.resenas_proveedor === true;
+
+  // Lo que Retador tiene AHORA (con sus ventas ya descontadas); si el producto ya no existe allí, se libera aquí
+  const estadoRemoto = await conRetador(tienda, "estado", { refs: [ref] });
+  const fila: any = (estadoRemoto.productos ?? [])[0];
+  if (!fila || fila.existe === false || fila.estado === "eliminado") {
+    await liberarProducto(p.id, "Ya no existe en Retador");
+    return { omitido: "ya_no_existe" };
+  }
+  // Se lee lo local ANTES de copiar lo de Retador, para saber qué existencias del proveedor se mandaron la última vez
+  const { data: locales } = await servicio.from("ProductVariant").select("sku,title,stock,stockVerificado,sellingPrice,costPrice,shippingCost").eq("productId", p.id).eq("isActive", true);
+  const propias: any[] = locales ?? [];
+  await aplicarRemotoALocal(p.id, fila);
+
+  const { variantes: hoy } = prepararVariantes(cat.ficha, cat.proveedor, tarifas);
+  const hoyPorSku = new Map(hoy.map((v) => [v.sku, v]));
+  const skusPropios = new Set(propias.map((v) => v.sku));
+  const envioHoy = admiteEnvio ? envioDeVariantes(cat.ficha, cat.proveedor, hoy.filter((v) => skusPropios.has(v.sku))) : null;
+  const plan = planificarSincronizacion({
+    locales: propias.map((l) => ({
+      sku: l.sku,
+      titulo: String(l.title ?? l.sku),
+      stockProveedorPrevio: previo.stockProveedor && l.sku in previo.stockProveedor ? previo.stockProveedor[l.sku] : l.stockVerificado === true ? Number(l.stock) : null,
+      precioActual: Number(l.sellingPrice),
+      costeAntes: Number(l.costPrice) + Number(l.shippingCost),
+    })),
+    remotas: new Map((fila.variantes ?? []).map((v: any) => [String(v.sku), { stock: typeof v.stock === "number" ? v.stock : null, estimado: v.stock_estimado === true, precio: typeof v.precio_venta_usd === "number" ? v.precio_venta_usd : null }])),
+    actuales: new Map(hoy.map((v) => [v.sku, { stock: v.stock, coste: v.coste ? { total: v.coste.total, producto: v.coste.producto } : null }])),
+    tarifas,
+    estadoRemoto: String(fila.estado ?? "activo"),
+    admiteEnvio, envio: envioHoy, huellaEnvioPrevia: previo.envioHash ?? null,
+    admiteResenas, resenas: admiteResenas ? resenasParaRetador(cat.ficha, cat.proveedor) : null, huellaResenasPrevia: previo.resenasHash ?? null,
+  });
+
+  // «Precio en riesgo»: se avisa una sola vez mientras sea el mismo problema (no cada 6 horas)
+  const riesgoActual = plan.riesgos.length ? { desde: previo.precioEnRiesgo?.desde ?? ahora(), pausadoSolo: plan.pausar || previo.precioEnRiesgo?.pausadoSolo === true, variantes: plan.riesgos } : null;
+  const mismoRiesgo = Boolean(previo.precioEnRiesgo) && JSON.stringify((previo.precioEnRiesgo.variantes ?? []).map((v: any) => v.sku).sort()) === JSON.stringify(plan.riesgos.map((v) => v.sku).sort());
+  const avisarRiesgo = plan.riesgos.length > 0 && (!mismoRiesgo || plan.pausar);
+  if (avisarRiesgo) {
+    const r = plan.riesgos[0];
+    const otras = plan.riesgos.length > 1 ? ` (y ${plan.riesgos.length - 1} variante${plan.riesgos.length > 2 ? "s" : ""} más)` : "";
+    await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS",
+      `El coste de «${r.titulo}»${otras} subió de ${usdTexto(r.costeAntes)} a ${usdTexto(r.costeAhora)} y tu precio (${usdTexto(r.precioActual)}) ya no vale: ${r.pierde ? "perderías dinero" : "queda por debajo del mínimo de Retador"}, que ahora es ${usdTexto(r.minimoUsd)}. ${plan.pausar ? "Hemos pausado el producto en Retador para que no se venda así. " : ""}Sube el precio en «Productos» y reactívalo.`,
+      { sincronizacion: true, tipo: "PRECIO_EN_RIESGO", variantes: plan.riesgos }, "WARN");
+  }
+
+  if (!plan.hayCambios) {
+    await fusionarRetador(p.id, { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual });
+    return { productId: p.id, sinCambios: true, precioEnRiesgo: plan.riesgos.length > 0 };
+  }
+
+  const envio: Record<string, unknown> = { ref };
+  if (plan.variantes.length) envio.variantes = plan.variantes;
+  if (plan.pausar) envio.estado = "pausado";
+  if (plan.envio) envio.envio = plan.envio;
+  if (plan.resenas) envio.resenas_proveedor = plan.resenas;
+
+  let remoto: any;
+  try {
+    remoto = await conRetador(tienda, "actualizar", envio);
+  } catch (e) {
+    await servicio.from("Product").update({ lastSyncStatus: "FAILED", lastSyncError: (e as Error).message, updatedAt: ahora() }).eq("id", p.id);
+    await marcarProductoSiDesaparecio(p.id, e);
+    await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "FAILED", `No se pudo sincronizar «${p.title}» con Retador (${plan.resumen.join("; ")}): ${(e as Error).message}`, { sincronizacion: true, enviado: resumenEnvio(envio) });
+    throw e;
+  }
+  await aplicarRemotoALocal(p.id, remoto);
+  const parche: Record<string, unknown> = { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual };
+  // Solo se da por mandado el envío si Retador confirma cuántos países guardó (si no, se vuelve a intentar en la próxima revisión)
+  if (plan.huellaEnvio && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0) { parche.envioHash = plan.huellaEnvio; parche.envioEnviadoEn = ahora(); }
+  if (plan.huellaResenas) parche.resenasHash = plan.huellaResenas;
+  await fusionarRetador(p.id, parche);
+  await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "SUCCESS", `Sincronizado con Retador: ${plan.resumen.join("; ")}.`, {
+    sincronizacion: true,
+    enviado: resumenEnvio(envio),
+    respuesta: { estado: remoto.estado ?? null, variantes: remoto.variantes ?? [], envio_actualizado_en: remoto.envio_actualizado_en ?? null, envio_paises: remoto.envio_paises ?? null },
+  }, plan.pausar ? "WARN" : "INFO");
+  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
+}
+
+/** Lo que se mandó a Retador, en versión corta para el registro (sin repetir las 100 filas del envío ni los textos de las opiniones). */
+function resumenEnvio(e: Record<string, unknown>) {
+  const envio = e.envio as EnvioParaRetador | undefined;
+  const op = e.resenas_proveedor as any;
+  return {
+    ...(e.estado ? { estado: e.estado } : {}),
+    ...(e.variantes ? { variantes: e.variantes } : {}),
+    ...(envio ? { envio: { paises: envio.destinos.length, cotizado_en: envio.cotizado_en } } : {}),
+    ...(op ? { opiniones: { media: op.media ?? null, total: op.total ?? null, textos: Array.isArray(op.muestra) ? op.muestra.length : 0 } } : {}),
+  };
 }
 
 /* ───────────────────────────── Pedidos (docs/contrato-pedidos.md) ───────────────────────────── */
@@ -758,7 +992,7 @@ Deno.serve(async (req) => {
     const acciones: Record<string, (uid: string, c: any) => Promise<unknown>> = {
       conectar: accionConectar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
       publicar: accionPublicar, actualizar: accionActualizar, retirar: accionRetirar, estado: accionEstado,
-      eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
+      sincronizar: accionSincronizar, eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
     };
     const f = acciones[accion];
     if (!f) return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });
