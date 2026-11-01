@@ -6,7 +6,7 @@
  *   desconectar {storeId}                  Olvida el token; los productos ya publicados siguen en Retador.
  *   config {storeId}                       Pide a Retador sus tarifas, categorías y límites.
  *   preparar {storeId, itemId}             Calcula coste puesto en Cuba y beneficio neto por variante (sin publicar).
- *   publicar {storeId, itemId, variantes, cat, subcat, provincia, contenido?}
+ *   publicar {storeId, itemId, variantes, cat, subcat, contenido?}  (provincia ya no: los importados se envían desde fuera)
  *   actualizar {productId, estado?, variantes?, contenido?}
  *   retirar {productId}
  *   estado {storeId}                       Compara lo que hay en Retador con lo guardado aquí.
@@ -340,14 +340,13 @@ async function accionPublicar(uid: string, cuerpo: any) {
   if (!tarifas) throw new ErrorApp("config_incompleta", "Retador no ha enviado sus tarifas, así que no se puede calcular tu beneficio. Inténtalo más tarde.");
   const { item, ficha, proveedor } = await leerCatalogo(cuerpo.itemId);
 
-  // Categoría, subcategoría y provincia deben existir en Retador
+  // Categoría y subcategoría deben existir en Retador. La provincia ya no se pide:
+  // los productos importados se envían desde fuera (Retador la deja vacía).
   const cat = String(cuerpo.cat ?? "");
   const categoria = (cfg.categorias ?? []).find((c: any) => c.cat === cat);
   if (!categoria) throw new ErrorApp("datos_invalidos", "Elige una categoría de Retador", { campo: "cat" });
   const subcat = String(cuerpo.subcat ?? "");
   if (!subcat || !(categoria.subcategorias ?? []).includes(subcat)) throw new ErrorApp("datos_invalidos", "Elige una subcategoría de Retador", { campo: "subcat" });
-  const provincia = String(cuerpo.provincia ?? "");
-  if (!(cfg.provincias ?? []).includes(provincia)) throw new ErrorApp("datos_invalidos", "Elige una provincia", { campo: "provincia" });
 
   // Variantes elegidas: cada sku debe existir y tener beneficio calculable y positivo
   const elegidas: any[] = Array.isArray(cuerpo.variantes) ? cuerpo.variantes : [];
@@ -405,7 +404,7 @@ async function accionPublicar(uid: string, cuerpo: any) {
     remoto = await conRetador(tienda, "publicar", {
       ref, proveedor, pid: item.externalId,
       variantes: lineas.map(({ v, precio }) => ({ sku: v.sku, precio_venta_usd: precio, stock: v.stock })),
-      cat, subcat, provincia, contenido,
+      cat, subcat, contenido,
       // Opiniones reales del proveedor (con su origen), solo si Retador dice que las acepta
       ...(cfg.capacidades?.resenas_proveedor === true && resenasParaRetador(ficha, proveedor) ? { resenas_proveedor: resenasParaRetador(ficha, proveedor) } : {}),
     });

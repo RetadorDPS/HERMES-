@@ -96,7 +96,10 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         // Sin categoría por defecto: la elige la persona (antes salía la primera de la lista y se podía publicar una depiladora como «Muebles»)
         setCat('');
         setSubcat('');
-        setProvincia(p.provincias.includes('La Habana') ? 'La Habana' : p.provincias[0] ?? '');
+        // Los productos importados se envían desde fuera: no tienen provincia. La
+        // pantalla ya no la pide; se manda la primera solo por compatibilidad con la
+        // función ya desplegada (Retador la ignora en estos productos).
+        setProvincia(p.provincias[0] ?? '');
       } catch (e) {
         if (vivo) setError((e as Error).message);
       } finally {
@@ -138,7 +141,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
   if (perdidas.length) problemas.push(esContratoV13(prep?.tarifas) ? 'Hay variantes por debajo del precio mínimo (el del Importador de Retador) o con las que perderías dinero. Sube el precio.' : 'Hay variantes por debajo del precio mínimo (coste estimado). Sube el precio.');
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
-  if (!provincia) problemas.push('Elige la provincia.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
   if (tituloEdit.length > 150) problemas.push('El título pasa de 150 caracteres.');
   if (descripcion.length > 5000) problemas.push('La descripción pasa de 5000 caracteres.');
@@ -360,16 +362,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                     {(categoria?.subcategorias ?? []).map((s) => (
                       <option key={s} value={s}>
                         {s}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="space-y-1 text-[12px]">
-                  <span className="text-muted-foreground">Provincia</span>
-                  <select className="h-9 w-full rounded-lg border border-white/10 bg-white/[0.03] px-2 text-sm" value={provincia} onChange={(e) => setProvincia(e.target.value)}>
-                    {prep.provincias.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
                       </option>
                     ))}
                   </select>
