@@ -129,6 +129,20 @@ export interface PrecioEnRiesgo {
   variantes: { sku: string; titulo: string; precioActual: number; minimoUsd: number; costeAntes: number; costeAhora: number; costeProductoAhora: number; pierde: boolean }[];
 }
 
+/** Precio automático: el precio sigue la regla de precios del vendedor cuando cambia el coste del proveedor (decisión del vendedor, por producto). */
+export interface PrecioAutomatico {
+  activo: boolean;
+  ultimoCambio: Date | null;
+  /** Quién lo apagó, si está apagado: «vendedor» (lo apagó él o puso un precio a mano). */
+  apagadoPor: string | null;
+}
+
+export interface VistaPrecioAuto {
+  regla: { markupPct: number; propia: boolean; nombre: string | null };
+  variantes: { sku: string; titulo: string; precioActual: number; precioNuevo: number; minimo: number | null }[];
+  cambian: number;
+}
+
 export interface ProductoRetador {
   id: string;
   title: string;
@@ -143,6 +157,7 @@ export interface ProductoRetador {
   vendidos: number | null;
   cambiadoEnRetador: boolean;
   precioEnRiesgo: PrecioEnRiesgo | null;
+  precioAuto: PrecioAutomatico | null;
   variantes: VarianteRetador[];
 }
 
@@ -173,6 +188,7 @@ export async function obtenerProductosRetador(storeId: string): Promise<Producto
       moderacion: ret.moderacion ?? null,
       vendidos: typeof ret.vendidos === 'number' ? ret.vendidos : null,
       cambiadoEnRetador: ret.origenUltimoCambio === 'vendedor',
+      precioAuto: ret.autoPrecio ? { activo: ret.autoPrecio.activo === true, ultimoCambio: ret.autoPrecio.ultimoCambio ? new Date(ret.autoPrecio.ultimoCambio) : null, apagadoPor: ret.autoPrecio.apagadoPor ?? null } : null,
       precioEnRiesgo: ret.precioEnRiesgo && Array.isArray(ret.precioEnRiesgo.variantes) && ret.precioEnRiesgo.variantes.length ? (ret.precioEnRiesgo as PrecioEnRiesgo) : null,
       variantes: [...(p.variants ?? [])]
         .sort((a: any, b: any) => a.position - b.position)

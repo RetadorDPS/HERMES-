@@ -6,13 +6,13 @@
  * rechaza cualquier precio con el que se pierda dinero.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { ExternalLink, Loader2, MessageSquareQuote, Pause, Pencil, Play, Trash2, TriangleAlert } from 'lucide-react';
+import { ExternalLink, Loader2, MessageSquareQuote, Pause, Pencil, Play, Trash2, TriangleAlert, Wand2 } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { llamarTienda, obtenerProductosRetador, type PrecioEnRiesgo, type ProductoRetador, type TiendaRetador } from '@/lib/real/retador';
+import { llamarTienda, obtenerProductosRetador, type PrecioEnRiesgo, type ProductoRetador, type TiendaRetador, type VistaPrecioAuto } from '@/lib/real/retador';
 import { liquidacion } from '@/lib/retador/precios';
 import { cn } from '@/lib/utils';
 
@@ -42,6 +42,8 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
   const [aviso, setAviso] = useState<string | null>(null);
   const [editando, setEditando] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState<string | null>(null);
+  // Vista previa del precio automático de un producto (qué precios saldrían con la regla) antes de activarlo
+  const [autoVista, setAutoVista] = useState<{ id: string; datos: VistaPrecioAuto } | null>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -99,6 +101,20 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
       await cargar();
       setAviso(ok);
       setEditando(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setOcupado(null);
+    }
+  }
+
+  async function verPrecioAuto(p: ProductoRetador) {
+    setOcupado(`${p.id}:auto`);
+    setError(null);
+    setAviso(null);
+    try {
+      const r = await llamarTienda<VistaPrecioAuto>({ accion: 'precio_auto', productId: p.id, activo: true });
+      setAutoVista({ id: p.id, datos: r });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -170,6 +186,73 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
                 </Alert>
               )}
 
+              {p.status !== 'ARCHIVED' && (
+                <div className="space-y-1.5 rounded-lg border border-white/[0.07] bg-white/[0.02] p-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Wand2 className="size-3.5 text-indigo-300" />
+                    <span className="text-[12px] font-medium">Precio automático</span>
+                    <Badge variant={p.precioAuto?.activo ? 'success' : 'outline'}>{p.precioAuto?.activo ? 'Activado' : 'Apagado'}</Badge>
+                    <span className="flex-1" />
+                    {p.precioAuto?.activo ? (
+                      <Button size="sm" variant="ghost" disabled={!!ocupado} onClick={() => accion(p.id, 'autooff', { accion: 'precio_auto', activo: false }, 'Precio automático apagado: el precio solo cambiará cuando tú lo cambies.')}>
+                        {ocupado === `${p.id}:autooff` ? <Loader2 className="animate-spin" /> : null} Apagar
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled={!!ocupado} onClick={() => void verPrecioAuto(p)}>
+                        {ocupado === `${p.id}:auto` ? <Loader2 className="animate-spin" /> : <Wand2 />} Activar…
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    {p.precioAuto?.activo
+                      ? 'Cuando el coste del proveedor sube o baja, tu precio sube o baja solo con tu regla de precios. Se avisa en el Monitor cada vez.'
+                      : p.precioAuto?.apagadoPor === 'vendedor'
+                        ? 'Está apagado porque pusiste un precio a mano. Puedes volver a activarlo cuando quieras.'
+                        : 'Si lo activas, el precio seguirá tu regla de precios cuando cambie el coste del proveedor.'}
+                  </p>
+                  {autoVista?.id === p.id && (
+                    <div className="space-y-2 rounded-md border border-indigo-400/30 bg-indigo-500/[0.05] p-2.5 text-[12px]">
+                      <p>
+                        Tu regla: <strong>{autoVista.datos.regla.markupPct} % de margen</strong>
+                        {autoVista.datos.regla.propia ? '' : ' (regla por defecto: todavía no has guardado una propia en «Precios y márgenes»)'}.
+                      </p>
+                      {autoVista.datos.cambian ? (
+                        <ul className="space-y-1">
+                          {autoVista.datos.variantes
+                            .filter((x) => Math.abs(x.precioNuevo - x.precioActual) > 0.005)
+                            .map((x) => (
+                              <li key={x.sku}>
+                                <strong>«{x.titulo}»</strong>: de {usd(x.precioActual)} a <strong>{usd(x.precioNuevo)}</strong>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <p>Tus precios ya coinciden con tu regla: no cambia ninguno.</p>
+                      )}
+                      <p className="text-[11px] text-muted-foreground">
+                        Para que el precio no baile: solo se mueve si el cambio es de al menos el 2 % (o 0,50 USD), como mucho una vez al día, y nunca por debajo del mínimo de Retador. Si el cambio es de más del 25 % no lo hace solo: te avisa y decides tú.
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="gradient"
+                          disabled={!!ocupado}
+                          onClick={async () => {
+                            await accion(p.id, 'autoon', { accion: 'precio_auto', activo: true, confirmar: true }, autoVista.datos.cambian ? 'Precio automático activado y precios actualizados en Retador.' : 'Precio automático activado.');
+                            setAutoVista(null);
+                          }}
+                        >
+                          {ocupado === `${p.id}:autoon` ? <Loader2 className="animate-spin" /> : null} {autoVista.datos.cambian ? 'Activar y aplicar estos precios' : 'Activar'}
+                        </Button>
+                        <Button size="sm" variant="ghost" disabled={!!ocupado} onClick={() => setAutoVista(null)}>
+                          Cancelar
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {editando === p.id ? (
                 <EditorProducto
                   producto={p}
@@ -181,7 +264,11 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
                       p.id,
                       'guardar',
                       { accion: 'actualizar', variantes },
-                      p.precioEnRiesgo && p.status === 'PAUSED' ? 'Precio guardado en Retador. El producto sigue pausado: pulsa «Reactivar» cuando quieras volver a venderlo.' : 'Cambios guardados en Retador.',
+                      p.precioEnRiesgo && p.status === 'PAUSED'
+                        ? 'Precio guardado en Retador. El producto sigue pausado: pulsa «Reactivar» cuando quieras volver a venderlo.'
+                        : p.precioAuto?.activo
+                          ? 'Cambios guardados en Retador. Si cambiaste un precio, el precio automático de este producto se ha apagado.'
+                          : 'Cambios guardados en Retador.',
                     )
                   }
                 />
@@ -307,6 +394,7 @@ function EditorProducto({
           </div>
         );
       })}
+      {producto.precioAuto?.activo && <p className="text-[11px] text-amber-300">Si cambias un precio a mano, el precio automático de este producto se apaga y se respeta el tuyo.</p>}
       <div className="flex gap-2 pt-1">
         <Button size="sm" variant="gradient" disabled={guardando || !cambios.length} onClick={() => alGuardar(cambios)}>
           {guardando ? <Loader2 className="animate-spin" /> : null} Guardar en Retador

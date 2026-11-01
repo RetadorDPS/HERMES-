@@ -10,8 +10,10 @@
  *   actualizar {productId, estado?, variantes?, contenido?, resenas?, envio?}
  *   retirar {productId}
  *   estado {storeId}                       Compara lo que hay en Retador con lo guardado aquí.
+ *   precio_auto {productId, activo, confirmar?}  Activa o apaga el precio automático de un producto (sigue la regla de precios del vendedor
+ *                                          con frenos). Sin `confirmar` solo enseña cómo quedarían los precios; con `confirmar` los aplica.
  *   sincronizar {productId, retirado?}     Empuja a Retador lo que cambió en el proveedor (stock, variantes retiradas, envío por país,
- *                                          opiniones). El precio NUNCA se cambia solo: si el coste sube y el precio ya no vale, se pausa y se avisa.
+ *                                          opiniones). Con el precio automático apagado el precio NUNCA se cambia solo: si el coste sube y el precio ya no vale, se pausa y se avisa.
  *                                          Lo pide `monitor-proveedor` (vía interna) tras revisar al proveedor.
  *
  * Reglas: el coste del proveedor nunca se envía a Retador; ningún número se inventa (stock desconocido = null);
@@ -38,6 +40,8 @@ import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-ped
 import { resenasParaRetador } from "./resenas.ts";
 import { envioParaRetador, huellaEnvio, type EnvioParaRetador } from "./retador-envio.ts";
 import { huellaResenas, planificarSincronizacion } from "./retador-sync.ts";
+import { decidirPrecioAuto } from "./retador-precio-auto.ts";
+import { reglaDeFila } from "./reglas-precio.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -349,6 +353,12 @@ async function fusionarRetador(productId: string, parche: Record<string, unknown
   await servicio.from("Product").update({ rawPayload: { ...raw, retador }, updatedAt: ahora() }).eq("id", productId);
 }
 
+/** Regla de precios del vendedor (la predeterminada, o la primera), igual que la que usa la pantalla; sin regla propia, la de por defecto (40 %). */
+async function reglaDelUsuario(uid: string) {
+  const { data } = await servicio.from("PricingRule").select("*").eq("userId", uid).order("isDefault", { ascending: false }).order("name", { ascending: true }).limit(1).maybeSingle();
+  return { regla: reglaDeFila(data), propia: Boolean(data), nombre: data?.name ?? null };
+}
+
 /** Ficha del catálogo común que corresponde a un producto publicado, o null si ya no está o no tiene la ficha completa. */
 async function catalogoDeProducto(p: any) {
   const provider = p.supplierId === ID_PROVEEDOR.CJ_DROPSHIPPING ? "CJ_DROPSHIPPING" : p.supplierId === ID_PROVEEDOR.ALIEXPRESS ? "ALIEXPRESS" : null;
@@ -478,6 +488,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
         stockProveedor: Object.fromEntries(lineas.map(({ v }) => [v.sku, v.stock])),
         ...(envioPublicar && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0 ? { envioHash: huellaEnvio(envioPublicar), envioEnviadoEn: ahora() } : {}),
         ...(opinionesPublicar ? { resenasHash: huellaResenas(opinionesPublicar) } : {}),
+        // Precio automático (decisión del vendedor al publicar): los precios publicados son el punto de partida
+        ...(cuerpo.precioAuto === true ? { autoPrecio: { activo: true, desde: ahora(), ultimoCambio: null, precios: Object.fromEntries(lineas.map(({ v, precio }) => [v.sku, typeof confirmadas.get(v.sku)?.precio_venta_usd === "number" ? confirmadas.get(v.sku).precio_venta_usd : precio])) } } : {}),
       },
     }, updatedAt: ahora(),
   }).eq("id", productId);
@@ -619,11 +631,16 @@ async function accionActualizar(uid: string, cuerpo: any) {
   if (huellaEnvioNueva && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0) { parche.envioHash = huellaEnvioNueva; parche.envioEnviadoEn = ahora(); }
   if (huellaResenasNueva) parche.resenasHash = huellaResenasNueva;
   if (cuerpo.estado === "activo") parche.precioEnRiesgo = null;
+  // Si el vendedor pone un precio a mano, el precio automático de ese producto se apaga: su decisión manda (puede volver a activarlo cuando quiera)
+  const precioAMano = Array.isArray(cuerpo.variantes) && cuerpo.variantes.some((x: any) => x?.precioVentaUsd !== undefined);
+  const autoPrevio = p.rawPayload?.retador?.autoPrecio;
+  const autoApagado = precioAMano && autoPrevio?.activo === true;
+  if (autoApagado) parche.autoPrecio = { ...autoPrevio, activo: false, apagadoPor: "vendedor", en: ahora() };
   if (Object.keys(parche).length) await fusionarRetador(p.id, parche);
   await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Actualizado en Retador (${cambios.join("; ")})`, {
     cambios, ...(envio.envio ? { envio: { paisesEnviados: huellaEnvioNueva ? (envio.envio as EnvioParaRetador).destinos.length : null, paisesConfirmados: remoto.envio_paises ?? null } } : {}),
   });
-  return { productId: p.id, estado: remoto.estado, variantes: remoto.variantes ?? [], envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
+  return { productId: p.id, estado: remoto.estado, variantes: remoto.variantes ?? [], envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null, precioAutomaticoApagado: autoApagado };
 }
 
 /** Copia a las tablas locales lo que Retador confirma tras publicar o actualizar. */
@@ -763,6 +780,24 @@ async function accionSincronizar(uid: string, cuerpo: any) {
   const propias: any[] = locales ?? [];
   await aplicarRemotoALocal(p.id, fila);
 
+  // Precio automático (solo si el vendedor lo activó para este producto)
+  let auto: any = previo.autoPrecio?.activo === true ? previo.autoPrecio : null;
+  if (auto) {
+    // Si el vendedor cambió un precio a mano en Retador, el automático se apaga para este producto: su decisión manda
+    const referencia: Record<string, number> = auto.precios ?? {};
+    const movido = (fila.variantes ?? []).find((v: any) => {
+      if (typeof v.precio_venta_usd !== "number") return false;
+      const antes = referencia[String(v.sku)] ?? Number(propias.find((l) => l.sku === v.sku)?.sellingPrice);
+      return Number.isFinite(antes) && Math.abs(v.precio_venta_usd - antes) > 0.005;
+    });
+    if (movido) {
+      await fusionarRetador(p.id, { autoPrecio: { ...auto, activo: false, apagadoPor: "vendedor", en: ahora() } });
+      await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Has cambiado a mano el precio de «${p.title}» en Retador: el precio automático de este producto se ha apagado y se respeta tu precio. Puedes volver a activarlo desde «Productos».`, { sincronizacion: true, tipo: "PRECIO_AUTO_APAGADO" }, "WARN");
+      auto = null;
+    }
+  }
+  const reglaAuto = auto ? await reglaDelUsuario(uid) : null;
+
   const { variantes: hoy } = prepararVariantes(cat.ficha, cat.proveedor, tarifas);
   const hoyPorSku = new Map(hoy.map((v) => [v.sku, v]));
   const skusPropios = new Set(propias.map((v) => v.sku));
@@ -782,6 +817,7 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     estadoRemoto: String(fila.estado ?? "activo"),
     admiteEnvio, envio: envioHoy, huellaEnvioPrevia: previo.envioHash ?? null,
     admiteResenas, resenas: admiteResenas ? resenasParaRetador(cat.ficha, cat.proveedor) : null, huellaResenasPrevia: previo.resenasHash ?? null,
+    ...(auto && reglaAuto ? { auto: { regla: reglaAuto.regla, ultimoCambioMs: auto.ultimoCambio ? Date.parse(auto.ultimoCambio) : null, ahoraMs: Date.now() } } : {}),
   });
 
   // «Precio en riesgo»: se avisa una sola vez mientras sea el mismo problema (no cada 6 horas)
@@ -796,20 +832,55 @@ async function accionSincronizar(uid: string, cuerpo: any) {
       { sincronizacion: true, tipo: "PRECIO_EN_RIESGO", variantes: plan.riesgos }, "WARN");
   }
 
+  // Cambios de precio grandes (más del 25 %) que el sistema NO hace solo: se avisa una vez por cada objetivo distinto
+  const yaAvisados: Record<string, number> = auto?.avisados ?? {};
+  const porAvisar = plan.revisiones.filter((r) => Math.abs((yaAvisados[r.sku] ?? 0) - r.nuevo) > 0.005);
+  if (auto && porAvisar.length) {
+    const r = porAvisar[0];
+    await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS",
+      `El coste de «${r.titulo}» cambió mucho y tu regla pediría pasar el precio de ${usdTexto(r.antes)} a ${usdTexto(r.nuevo)} (${r.cambioPct > 0 ? "+" : ""}${r.cambioPct.toLocaleString("es-ES")} %). Un cambio tan grande no lo hago solo, por si es un error del proveedor: revisa el producto y ajusta el precio si es correcto.`,
+      { sincronizacion: true, tipo: "PRECIO_AUTO_REVISAR", variantes: porAvisar }, "WARN");
+  }
+  const avisadosNuevos = auto ? { ...yaAvisados, ...Object.fromEntries(porAvisar.map((r) => [r.sku, r.nuevo])) } : undefined;
+  // Precios que Retador tiene ahora (referencia para detectar un cambio a mano del vendedor la próxima vez)
+  const preciosDe = (vs: any[]) => Object.fromEntries((vs ?? []).filter((v: any) => typeof v.precio_venta_usd === "number").map((v: any) => [String(v.sku), v.precio_venta_usd]));
+  const parcheAuto = (precios: Record<string, number>, cambio: boolean) => (auto ? { autoPrecio: { ...auto, precios: { ...(auto.precios ?? {}), ...precios }, avisados: avisadosNuevos, ...(cambio ? { ultimoCambio: ahora() } : {}) } } : {});
+
   if (!plan.hayCambios) {
-    await fusionarRetador(p.id, { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual });
+    await fusionarRetador(p.id, { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual, ...parcheAuto(preciosDe(fila.variantes), false) });
     return { productId: p.id, sinCambios: true, precioEnRiesgo: plan.riesgos.length > 0 };
   }
 
-  const envio: Record<string, unknown> = { ref };
-  if (plan.variantes.length) envio.variantes = plan.variantes;
-  if (plan.pausar) envio.estado = "pausado";
-  if (plan.envio) envio.envio = plan.envio;
-  if (plan.resenas) envio.resenas_proveedor = plan.resenas;
+  // Lo que se manda a Retador: stock y precio de cada variante van juntos en la misma línea
+  const construirEnvio = (conPrecios: boolean) => {
+    const e: Record<string, unknown> = { ref };
+    const lineas = new Map<string, Record<string, unknown>>();
+    for (const v of plan.variantes) lineas.set(v.sku, { sku: v.sku, stock: v.stock });
+    if (conPrecios) for (const pr of plan.precios) lineas.set(pr.sku, { ...(lineas.get(pr.sku) ?? { sku: pr.sku }), precio_venta_usd: pr.nuevo });
+    if (lineas.size) e.variantes = [...lineas.values()];
+    if (plan.pausar) e.estado = "pausado";
+    if (plan.envio) e.envio = plan.envio;
+    if (plan.resenas) e.resenas_proveedor = plan.resenas;
+    return e;
+  };
+  let envio = construirEnvio(true);
+  let preciosAplicados = plan.precios.length > 0;
 
   let remoto: any;
   try {
-    remoto = await conRetador(tienda, "actualizar", envio);
+    try {
+      remoto = await conRetador(tienda, "actualizar", envio);
+    } catch (e) {
+      // Retador tiene su propio mínimo: si no acepta el precio nuevo, se manda todo lo demás y se avisa
+      if (preciosAplicados && e instanceof ErrorRetador && e.codigo === "precio_bajo_minimo") {
+        await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "FAILED", `Retador no aceptó el precio automático de «${p.title}» (queda por debajo de su mínimo). Se mantiene el precio actual: revísalo en «Productos».`, { sincronizacion: true, tipo: "PRECIO_AUTO_RECHAZADO", extra: e.extra }, "WARN");
+        preciosAplicados = false;
+        envio = construirEnvio(false);
+        remoto = Object.keys(envio).length > 1 ? await conRetador(tienda, "actualizar", envio) : fila;
+      } else {
+        throw e;
+      }
+    }
   } catch (e) {
     await servicio.from("Product").update({ lastSyncStatus: "FAILED", lastSyncError: (e as Error).message, updatedAt: ahora() }).eq("id", p.id);
     await marcarProductoSiDesaparecio(p.id, e);
@@ -817,17 +888,81 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     throw e;
   }
   await aplicarRemotoALocal(p.id, remoto);
-  const parche: Record<string, unknown> = { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual };
+  const parche: Record<string, unknown> = { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual, ...parcheAuto(preciosDe(remoto.variantes), preciosAplicados) };
   // Solo se da por mandado el envío si Retador confirma cuántos países guardó (si no, se vuelve a intentar en la próxima revisión)
   if (plan.huellaEnvio && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0) { parche.envioHash = plan.huellaEnvio; parche.envioEnviadoEn = ahora(); }
   if (plan.huellaResenas) parche.resenasHash = plan.huellaResenas;
   await fusionarRetador(p.id, parche);
+  if (preciosAplicados && reglaAuto) {
+    const lista = plan.precios.map((x) => `«${x.titulo}»: de ${usdTexto(x.antes)} a ${usdTexto(x.nuevo)}`).join("; ");
+    await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Precio ajustado con tu regla (${reglaAuto.regla.markupPct} % de margen) porque cambió el coste del proveedor: ${lista}.`, { sincronizacion: true, tipo: "PRECIO_AUTOMATICO", regla: reglaAuto.regla, precios: plan.precios });
+  }
   await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "SUCCESS", `Sincronizado con Retador: ${plan.resumen.join("; ")}.`, {
     sincronizacion: true,
     enviado: resumenEnvio(envio),
     respuesta: { estado: remoto.estado ?? null, variantes: remoto.variantes ?? [], envio_actualizado_en: remoto.envio_actualizado_en ?? null, envio_paises: remoto.envio_paises ?? null },
   }, plan.pausar ? "WARN" : "INFO");
-  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
+  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar, preciosCambiados: preciosAplicados ? plan.precios.length : 0, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
+}
+
+/**
+ * Precio automático de un producto: activarlo o apagarlo. Al activarlo, SIN `confirmar` solo se enseña cómo quedarían los precios con la regla
+ * del vendedor (para que decida con los números delante); CON `confirmar` se aplican a Retador y queda activado. Apagarlo es inmediato.
+ */
+async function accionPrecioAuto(uid: string, cuerpo: any) {
+  const { p, tienda, ref } = await productoPropio(uid, cuerpo.productId);
+  const previo: any = p.rawPayload?.retador ?? {};
+  if (cuerpo.activo !== true) {
+    await fusionarRetador(p.id, { autoPrecio: { ...(previo.autoPrecio ?? {}), activo: false, apagadoPor: "vendedor", en: ahora() } });
+    await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Precio automático apagado en «${p.title}»: el precio ya solo cambia cuando tú lo cambies.`, { tipo: "PRECIO_AUTO_APAGADO" });
+    return { productId: p.id, activo: false };
+  }
+  const cat = await catalogoDeProducto(p);
+  if (!cat) throw new ErrorApp("sin_ficha", "Este producto ya no tiene ficha en el catálogo, así que no se puede calcular su precio con la regla.");
+  const cfg = await conRetador(tienda, "config");
+  const tarifas = tarifasDeConfig(cfg);
+  if (!tarifas) throw new ErrorApp("config_incompleta", "Retador no ha enviado sus tarifas, así que no se puede calcular el precio mínimo. Inténtalo más tarde.");
+  const estadoRemoto = await conRetador(tienda, "estado", { refs: [ref] });
+  const fila: any = (estadoRemoto.productos ?? [])[0];
+  if (!fila || fila.existe === false || fila.estado === "eliminado") {
+    await liberarProducto(p.id, "Ya no existe en Retador");
+    throw new ErrorApp("producto_no_encontrado", "Este producto ya no existe en Retador.");
+  }
+  const { data: locales } = await servicio.from("ProductVariant").select("sku,title,sellingPrice").eq("productId", p.id).eq("isActive", true);
+  const { variantes: hoy } = prepararVariantes(cat.ficha, cat.proveedor, tarifas);
+  const hoyPorSku = new Map(hoy.map((v) => [v.sku, v]));
+  const { regla, propia, nombre } = await reglaDelUsuario(uid);
+  const remotoPorSku = new Map<string, number>((fila.variantes ?? []).filter((v: any) => typeof v.precio_venta_usd === "number").map((v: any) => [String(v.sku), v.precio_venta_usd]));
+  const lista: { sku: string; titulo: string; precioActual: number; precioNuevo: number; minimo: number | null }[] = [];
+  for (const l of locales ?? []) {
+    const actual = remotoPorSku.get(l.sku) ?? Number(l.sellingPrice);
+    const c = hoyPorSku.get(l.sku)?.coste;
+    if (!c) continue; // sin coste de hoy no se puede calcular: esa variante no cambia
+    const d = decidirPrecioAuto({ precioActual: actual, coste: c, tarifas, regla, ultimoCambioMs: null, ahoraMs: Date.now(), forzar: true });
+    lista.push({ sku: l.sku, titulo: String(l.title ?? l.sku), precioActual: actual, precioNuevo: d.tipo === "cambiar" ? d.nuevo : actual, minimo: d.minimo });
+  }
+  const cambian = lista.filter((x) => Math.abs(x.precioNuevo - x.precioActual) > 0.005);
+  if (cuerpo.confirmar !== true) {
+    return { productId: p.id, vistaPrevia: true, regla: { markupPct: regla.markupPct, propia, nombre }, variantes: lista, cambian: cambian.length };
+  }
+
+  let remoto: any = fila;
+  if (cambian.length) {
+    try {
+      remoto = await conRetador(tienda, "actualizar", { ref, variantes: cambian.map((x) => ({ sku: x.sku, precio_venta_usd: x.precioNuevo })) });
+    } catch (e) {
+      await marcarProductoSiDesaparecio(p.id, e);
+      throw e;
+    }
+    await aplicarRemotoALocal(p.id, remoto);
+  }
+  const precios = Object.fromEntries(((remoto.variantes ?? fila.variantes) ?? []).filter((v: any) => typeof v.precio_venta_usd === "number").map((v: any) => [String(v.sku), v.precio_venta_usd]));
+  await fusionarRetador(p.id, { autoPrecio: { activo: true, desde: ahora(), ultimoCambio: cambian.length ? ahora() : null, precios }, precioEnRiesgo: null });
+  await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", cambian.length
+    ? `Precio automático activado en «${p.title}»: ${cambian.map((x) => `«${x.titulo}» pasa de ${usdTexto(x.precioActual)} a ${usdTexto(x.precioNuevo)}`).join("; ")}. A partir de ahora el precio sigue tu regla (${regla.markupPct} % de margen) cuando cambie el coste del proveedor.`
+    : `Precio automático activado en «${p.title}»: los precios ya coinciden con tu regla (${regla.markupPct} % de margen).`,
+    { tipo: "PRECIO_AUTO_ACTIVADO", regla, cambios: cambian });
+  return { productId: p.id, activo: true, cambiados: cambian.length, variantes: lista };
 }
 
 /** Lo que se mandó a Retador, en versión corta para el registro (sin repetir las 100 filas del envío ni los textos de las opiniones). */
@@ -993,7 +1128,7 @@ Deno.serve(async (req) => {
     const acciones: Record<string, (uid: string, c: any) => Promise<unknown>> = {
       conectar: accionConectar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
       publicar: accionPublicar, actualizar: accionActualizar, retirar: accionRetirar, estado: accionEstado,
-      sincronizar: accionSincronizar, eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
+      sincronizar: accionSincronizar, precio_auto: accionPrecioAuto, eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
     };
     const f = acciones[accion];
     if (!f) return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });

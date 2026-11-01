@@ -62,6 +62,8 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   const [tituloEdit, setTituloEdit] = useState('');
   const [descripcion, setDescripcion] = useState('');
   const [fotos, setFotos] = useState<string[]>([]);
+  // Por defecto el precio sigue la regla del vendedor cuando cambie el coste del proveedor (se puede quitar)
+  const [precioAuto, setPrecioAuto] = useState(true);
 
   useEffect(() => {
     let vivo = true;
@@ -152,6 +154,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         itemId,
         cat,
         subcat,
+        precioAuto,
         variantes: marcadas.map((v) => ({ sku: v.sku, precioVentaUsd: Number(precios[v.sku]) })),
         contenido: { titulo: tituloEdit.trim(), descripcion: descripcion.trim(), imagenes: fotos },
       });
@@ -409,6 +412,14 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
 
         <footer className="space-y-1.5 border-t border-white/[0.07] px-4 py-3">
           {problemas.length > 0 && prep && !hecho && !prep.yaPublicado && <p className="text-[11px] text-amber-300">{problemas[0]}</p>}
+          {prep && !hecho && !prep.yaPublicado && (
+            <label className="flex items-start gap-2 text-[12px]">
+              <input type="checkbox" className="mt-0.5 size-3.5 accent-indigo-500" checked={precioAuto} onChange={(e) => setPrecioAuto(e.target.checked)} />
+              <span>
+                <strong>Precio automático:</strong> cuando cambie el coste del proveedor, mi precio sube o baja solo con mi regla de precios (con frenos para que no baile; lo puedes apagar cuando quieras).
+              </span>
+            </label>
+          )}
           {hecho ? (
             <Button className="w-full" variant="gradient" onClick={onClose}>
               <CheckCircle2 /> Listo

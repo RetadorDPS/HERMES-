@@ -184,6 +184,17 @@ Tras revisar cada producto publicado en el proveedor (cada 6 h, en serie), Drops
 - **Stock por variante** (CJ: almacén + fábrica; AliExpress: el de la variante). Se manda lo que cambió en el proveedor desde la última vez; las ventas que Retador ya descontó no se pisan al alza (se lee `dropship-estado` antes). Stock 0 = Retador lo deja AGOTADO solo. Stock desconocido viaja como `null`. Variante que el proveedor retira = stock 0. Variante nueva = solo aviso (el contrato no permite añadir variantes por actualizar).
 - **Producto que el proveedor ya no devuelve**: `dropship-retirar` (pausado) y aviso.
 - **Envío por país** y **opiniones** (si cambian media o total): solo si cambiaron desde la última vez.
-- **PRECIO: nunca se cambia solo.** Si el coste sube (más de 0,05 USD y 1 %) y el precio publicado queda por debajo del mínimo de Retador o el vendedor perdería dinero, el producto se PAUSA en Retador (`estado: "pausado"`), se anota el aviso y la pantalla Monitor muestra «Ajustar precio» (abre la edición del precio con el mínimo de hoy como punto de partida). Si el coste baja, solo aviso.
+- **PRECIO: sin el precio automático, nunca se cambia solo** (con él, ver la sección siguiente). Si el coste sube (más de 0,05 USD y 1 %) y el precio publicado queda por debajo del mínimo de Retador o el vendedor perdería dinero, el producto se PAUSA en Retador (`estado: "pausado"`), se anota el aviso y la pantalla Monitor muestra «Ajustar precio» (abre la edición del precio con el mínimo de hoy como punto de partida). Si el coste baja, solo aviso.
 - Cada envío queda en el registro del vendedor (`SyncLog`): qué se mandó y qué respondió Retador. El coste del proveedor no viaja nunca a Retador.
 
+
+
+## Precio automático (v50, mismo `version_contrato: 1`; no cambia nada del contrato)
+
+Es decisión del vendedor, producto por producto (casilla al publicar o interruptor en «Productos»). Usa la acción que ya existe, `dropship-actualizar`, con `variantes[].precio_venta_usd`; Retador no necesita cambiar nada.
+
+- Precio ideal = regla de precios del vendedor (porcentaje, tarifa fija, beneficio mínimo, redondeo) aplicada al coste de hoy del proveedor, sin envío. SUBE y BAJA con el coste: si el proveedor baja, el precio baja.
+- Frenos: (1) suelo: nunca por debajo del mínimo del Importador de Retador ni de lo que haga perder al vendedor; (2) cambios de menos del 2 % del precio o de 0,50 USD (el menor) no se aplican; (3) como mucho un cambio de precio cada 24 h por producto (salvo que el precio actual ya no valga); (4) un cambio de más del 25 % no se hace solo: se avisa y decide el vendedor (si el precio actual ya hace perder dinero, el producto se pausa como antes).
+- Si Retador rechaza un precio por su propio mínimo (`precio_bajo_minimo`), se mantiene el precio actual, se manda el resto de la sincronización y se avisa al vendedor.
+- Si el vendedor cambia un precio a mano (en Retador o en DropshipPilot), el precio automático de ese producto se apaga solo y se respeta su precio. Retador debe seguir aceptando que el precio de una variante cambie varias veces y no marcar esos cambios como «edición del vendedor» cuando llegan con el token de DropshipPilot (`origen_ultimo_cambio` = dropship).
+- Cada cambio queda en el registro del vendedor (`PRECIO_AUTOMATICO`, `PRECIO_AUTO_REVISAR`, `PRECIO_AUTO_APAGADO`, `PRECIO_AUTO_RECHAZADO`).
