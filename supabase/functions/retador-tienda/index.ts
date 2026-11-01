@@ -771,7 +771,8 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     locales: propias.map((l) => ({
       sku: l.sku,
       titulo: String(l.title ?? l.sku),
-      stockProveedorPrevio: previo.stockProveedor && l.sku in previo.stockProveedor ? previo.stockProveedor[l.sku] : l.stockVerificado === true ? Number(l.stock) : null,
+      // Sin registro de lo último que se mandó (productos publicados antes de la sincronización) no se supone nada: la primera vez solo se baja y se anota la referencia
+      stockProveedorPrevio: previo.stockProveedor && l.sku in previo.stockProveedor ? previo.stockProveedor[l.sku] : null,
       precioActual: Number(l.sellingPrice),
       costeAntes: Number(l.costPrice) + Number(l.shippingCost),
     })),
@@ -791,7 +792,7 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     const r = plan.riesgos[0];
     const otras = plan.riesgos.length > 1 ? ` (y ${plan.riesgos.length - 1} variante${plan.riesgos.length > 2 ? "s" : ""} más)` : "";
     await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS",
-      `El coste de «${r.titulo}»${otras} subió de ${usdTexto(r.costeAntes)} a ${usdTexto(r.costeAhora)} y tu precio (${usdTexto(r.precioActual)}) ya no vale: ${r.pierde ? "perderías dinero" : "queda por debajo del mínimo de Retador"}, que ahora es ${usdTexto(r.minimoUsd)}. ${plan.pausar ? "Hemos pausado el producto en Retador para que no se venda así. " : ""}Sube el precio en «Productos» y reactívalo.`,
+      `El coste de «${r.titulo}»${otras} subió de ${usdTexto(r.costeAntes)} a ${usdTexto(r.costeAhora)} y tu precio (${usdTexto(r.precioActual)}) ya no vale: ${r.pierde ? "perderías dinero" : "queda por debajo del mínimo de Retador"}. El mínimo ahora es ${usdTexto(r.minimoUsd)}. ${plan.pausar ? "Hemos pausado el producto en Retador para que no se venda así. " : ""}Sube el precio en «Productos» y reactívalo.`,
       { sincronizacion: true, tipo: "PRECIO_EN_RIESGO", variantes: plan.riesgos }, "WARN");
   }
 

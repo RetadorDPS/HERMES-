@@ -59,7 +59,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   const [precios, setPrecios] = useState<Record<string, string>>({});
   const [cat, setCat] = useState('');
   const [subcat, setSubcat] = useState('');
-  const [provincia, setProvincia] = useState('');
   const [tituloEdit, setTituloEdit] = useState('');
   const [descripcion, setDescripcion] = useState('');
   const [fotos, setFotos] = useState<string[]>([]);
@@ -96,10 +95,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         // Sin categoría por defecto: la elige la persona (antes salía la primera de la lista y se podía publicar una depiladora como «Muebles»)
         setCat('');
         setSubcat('');
-        // Los productos importados se envían desde fuera: no tienen provincia. La
-        // pantalla ya no la pide; se manda la primera solo por compatibilidad con la
-        // función ya desplegada (Retador la ignora en estos productos).
-        setProvincia(p.provincias[0] ?? '');
       } catch (e) {
         if (vivo) setError((e as Error).message);
       } finally {
@@ -157,7 +152,6 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         itemId,
         cat,
         subcat,
-        provincia,
         variantes: marcadas.map((v) => ({ sku: v.sku, precioVentaUsd: Number(precios[v.sku]) })),
         contenido: { titulo: tituloEdit.trim(), descripcion: descripcion.trim(), imagenes: fotos },
       });
