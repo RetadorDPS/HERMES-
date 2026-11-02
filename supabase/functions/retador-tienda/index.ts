@@ -727,6 +727,7 @@ async function accionEstado(uid: string, cuerpo: any) {
 /* ───────────────────────────── Sincronización automática ───────────────────────────── */
 
 const usdTexto = (n: number) => `${n.toFixed(2)} USD`;
+const estadoRemotoActivo = (fila: any) => String(fila?.estado ?? "activo") !== "pausado";
 
 /**
  * Empuja a Retador lo que cambió en el proveedor de un producto ya publicado. Lo pide `monitor-proveedor` (vía interna) después de refrescar
@@ -860,6 +861,7 @@ async function accionSincronizar(uid: string, cuerpo: any) {
   const rechazadosPrevios: Record<string, number> = auto?.rechazados ?? {};
   for (const pr of plan.precios) if (Math.abs((rechazadosPrevios[pr.sku] ?? -1) - pr.nuevo) < 0.005) sinPrecio.add(pr.sku);
   let sinEnvioValido = false;
+  let pausarPorRechazo = false; // Retador no aceptó el precio y el que tiene ya no vale: se pausa para que no se venda perdiendo dinero
   const preciosEnviados = () => (sinTodosLosPrecios ? [] : plan.precios.filter((x) => !sinPrecio.has(x.sku)));
   const construirEnvio = () => {
     const e: Record<string, unknown> = { ref };
@@ -867,7 +869,7 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     for (const v of plan.variantes) lineas.set(v.sku, { sku: v.sku, stock: v.stock });
     for (const pr of preciosEnviados()) lineas.set(pr.sku, { ...(lineas.get(pr.sku) ?? { sku: pr.sku }), precio_venta_usd: pr.nuevo });
     if (lineas.size) e.variantes = [...lineas.values()];
-    if (plan.pausar) e.estado = "pausado";
+    if (plan.pausar || pausarPorRechazo) e.estado = "pausado";
     if (plan.envio && !sinEnvioValido) e.envio = plan.envio;
     if (plan.resenas) e.resenas_proveedor = plan.resenas;
     return e;
@@ -897,6 +899,12 @@ async function accionSincronizar(uid: string, cuerpo: any) {
           const nuevosCulpables = culpables.filter((k) => preciosEnviados().some((x) => x.sku === k));
           if (nuevosCulpables.length) nuevosCulpables.forEach((k) => sinPrecio.add(k));
           else sinTodosLosPrecios = true;
+          // Si el precio que se quedó es uno que ya no vale (el cambio era urgente), no se deja a la venta: se pausa y se avisa
+          const rechazadasUrgentes = plan.precios.filter((x) => x.urgente && (sinTodosLosPrecios || sinPrecio.has(x.sku)));
+          if (rechazadasUrgentes.length && e.codigo === "precio_bajo_minimo" && estadoRemotoActivo(fila)) {
+            pausarPorRechazo = true;
+            await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Retador no aceptó el precio nuevo de «${rechazadasUrgentes[0].titulo}» y el precio actual ya no vale con el coste de hoy. Hemos pausado el producto en Retador para que no se venda perdiendo dinero. Ajusta el precio en «Productos» y reactívalo.`, { sincronizacion: true, tipo: "PRECIO_EN_RIESGO", variantes: rechazadasUrgentes }, "WARN");
+          }
           if (!rechazoAvisado) {
             rechazoAvisado = true;
             await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "FAILED", `Retador no aceptó el precio automático de «${p.title}» (queda por debajo de su mínimo). Se mantiene el precio actual: revísalo en «Productos».`, { sincronizacion: true, tipo: "PRECIO_AUTO_RECHAZADO", extra: e.extra }, "WARN");
@@ -932,7 +940,7 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     enviado: resumenEnvio(envio),
     respuesta: { estado: remoto.estado ?? null, variantes: remoto.variantes ?? [], envio_actualizado_en: remoto.envio_actualizado_en ?? null, envio_paises: remoto.envio_paises ?? null },
   }, plan.pausar ? "WARN" : "INFO");
-  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar, preciosCambiados: preciosAplicados ? preciosEnviados().length : 0, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
+  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar || pausarPorRechazo, preciosCambiados: preciosAplicados ? preciosEnviados().length : 0, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
 }
 
 /**
