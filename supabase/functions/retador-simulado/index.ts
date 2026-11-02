@@ -5,7 +5,7 @@
  * por «dsp_sim_», solo para el administrador. Nada de lo que hace sale de nuestra base de datos y nunca llama a
  * un proveedor. Solo la puede llamar `retador-tienda` (con la clave de servicio).
  *   · dsp_sim_caducado…  → 401 token_caducado        · dsp_sim_revocado… → 401 token_invalido
- *   · precio < 1 USD     → 409 precio_bajo_minimo    · stock null        → 5 y stock_estimado = true
+ *   · precio < 1 USD     → 409 precio_bajo_minimo (en `actualizar` rechaza la llamada entera y trae `variantes:[{sku, minimo_usd}]`)    · stock null        → 5 y stock_estimado = true
  *   · acción extra `simular_edicion_vendedor` {ref}  → marca el producto como cambiado a mano en Retador
  *   · contrato v1.5: `envio` {cotizado_en, destinos[]} en publicar y actualizar (se valida igual que Retador); la ficha responde con
  *     `envio_actualizado_en` y `envio_paises`
@@ -154,6 +154,9 @@ Deno.serve(async (req) => {
       if (c.estado !== "activo" && c.estado !== "pausado") return fallo(400, "datos_invalidos", "Estado no válido", { campo: "estado" });
       p.estado = c.estado;
     }
+    // Como el Retador real: si alguna variante trae un precio bajo el mínimo, se rechaza TODA la llamada y se dice cuáles son
+    const bajoMinimo = (c.variantes ?? []).filter((v: any) => typeof v?.precio_venta_usd === "number" && v.precio_venta_usd > 0 && v.precio_venta_usd < 1);
+    if (bajoMinimo.length) return fallo(409, "precio_bajo_minimo", "El precio está por debajo del mínimo", { variantes: bajoMinimo.map((v: any) => ({ sku: v.sku, minimo_usd: 1 })) });
     for (const v of c.variantes ?? []) {
       const local = p.variantes.find((x: any) => x.sku === v?.sku);
       if (!local) return fallo(404, "sku_no_pertenece", "Esa variante no es de este producto", { sku: v?.sku });

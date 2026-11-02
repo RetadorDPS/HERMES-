@@ -851,33 +851,58 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     return { productId: p.id, sinCambios: true, precioEnRiesgo: plan.riesgos.length > 0 };
   }
 
-  // Lo que se manda a Retador: stock y precio de cada variante van juntos en la misma línea
-  const construirEnvio = (conPrecios: boolean) => {
+  // Lo que se manda a Retador: stock y precio de cada variante van juntos en la misma línea.
+  // Retador rechaza la llamada ENTERA (no aplica nada, ni stock ni envío ni opiniones) si un precio queda bajo su mínimo (409 `precio_bajo_minimo`,
+  // con las variantes culpables) o si `envio` no es válido (400 `datos_invalidos`). Por eso, ante cada rechazo se quita solo lo que lo causó y se reenvía el resto.
+  const sinPrecio = new Set<string>(); // variantes cuyo precio Retador no aceptó
+  let sinTodosLosPrecios = false;
+  // Un precio que Retador ya rechazó no se vuelve a mandar ni a avisar en cada revisión (cada 6 h) mientras el precio propuesto sea el mismo
+  const rechazadosPrevios: Record<string, number> = auto?.rechazados ?? {};
+  for (const pr of plan.precios) if (Math.abs((rechazadosPrevios[pr.sku] ?? -1) - pr.nuevo) < 0.005) sinPrecio.add(pr.sku);
+  let sinEnvioValido = false;
+  const preciosEnviados = () => (sinTodosLosPrecios ? [] : plan.precios.filter((x) => !sinPrecio.has(x.sku)));
+  const construirEnvio = () => {
     const e: Record<string, unknown> = { ref };
     const lineas = new Map<string, Record<string, unknown>>();
     for (const v of plan.variantes) lineas.set(v.sku, { sku: v.sku, stock: v.stock });
-    if (conPrecios) for (const pr of plan.precios) lineas.set(pr.sku, { ...(lineas.get(pr.sku) ?? { sku: pr.sku }), precio_venta_usd: pr.nuevo });
+    for (const pr of preciosEnviados()) lineas.set(pr.sku, { ...(lineas.get(pr.sku) ?? { sku: pr.sku }), precio_venta_usd: pr.nuevo });
     if (lineas.size) e.variantes = [...lineas.values()];
     if (plan.pausar) e.estado = "pausado";
-    if (plan.envio) e.envio = plan.envio;
+    if (plan.envio && !sinEnvioValido) e.envio = plan.envio;
     if (plan.resenas) e.resenas_proveedor = plan.resenas;
     return e;
   };
-  let envio = construirEnvio(true);
-  let preciosAplicados = plan.precios.length > 0;
+  let envio = construirEnvio();
+  let rechazoAvisado = false;
 
   let remoto: any;
   try {
-    try {
-      remoto = await conRetador(tienda, "actualizar", envio);
-    } catch (e) {
-      // Retador tiene su propio mínimo: si no acepta el precio nuevo, se manda todo lo demás y se avisa
-      if (preciosAplicados && e instanceof ErrorRetador && e.codigo === "precio_bajo_minimo") {
-        await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "FAILED", `Retador no aceptó el precio automático de «${p.title}» (queda por debajo de su mínimo). Se mantiene el precio actual: revísalo en «Productos».`, { sincronizacion: true, tipo: "PRECIO_AUTO_RECHAZADO", extra: e.extra }, "WARN");
-        preciosAplicados = false;
-        envio = construirEnvio(false);
-        remoto = Object.keys(envio).length > 1 ? await conRetador(tienda, "actualizar", envio) : fila;
-      } else {
+    for (let intento = 0; ; intento++) {
+      envio = construirEnvio();
+      if (Object.keys(envio).length <= 1) { remoto = fila; break; } // tras quitar lo rechazado no queda nada que mandar
+      try {
+        remoto = await conRetador(tienda, "actualizar", envio);
+        break;
+      } catch (e) {
+        if (!(e instanceof ErrorRetador) || intento >= 3) throw e;
+        const campoEnvio = e.codigo === "datos_invalidos" && /envio/i.test(String(e.extra?.campo ?? e.message)) && plan.envio && !sinEnvioValido;
+        if (campoEnvio) {
+          sinEnvioValido = true;
+          await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "FAILED", `Retador no aceptó el envío por país de «${p.title}» (${e.message}). Se manda lo demás y se vuelve a intentar el envío en la próxima revisión.`, { sincronizacion: true, tipo: "ENVIO_RECHAZADO", extra: e.extra }, "WARN");
+          continue;
+        }
+        // Retador tiene su propio mínimo: se quita el precio de las variantes que no aceptó (o todos si no dice cuáles) y se manda todo lo demás
+        if (e.codigo === "precio_bajo_minimo" && preciosEnviados().length > 0) {
+          const culpables = (Array.isArray(e.extra?.variantes) ? (e.extra.variantes as any[]) : []).map((v) => String(v?.sku ?? "")).filter(Boolean);
+          const nuevosCulpables = culpables.filter((k) => preciosEnviados().some((x) => x.sku === k));
+          if (nuevosCulpables.length) nuevosCulpables.forEach((k) => sinPrecio.add(k));
+          else sinTodosLosPrecios = true;
+          if (!rechazoAvisado) {
+            rechazoAvisado = true;
+            await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "FAILED", `Retador no aceptó el precio automático de «${p.title}» (queda por debajo de su mínimo). Se mantiene el precio actual: revísalo en «Productos».`, { sincronizacion: true, tipo: "PRECIO_AUTO_RECHAZADO", extra: e.extra }, "WARN");
+          }
+          continue;
+        }
         throw e;
       }
     }
@@ -887,22 +912,27 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "FAILED", `No se pudo sincronizar «${p.title}» con Retador (${plan.resumen.join("; ")}): ${(e as Error).message}`, { sincronizacion: true, enviado: resumenEnvio(envio) });
     throw e;
   }
+  const preciosAplicados = remoto === fila ? false : preciosEnviados().length > 0;
   await aplicarRemotoALocal(p.id, remoto);
   const parche: Record<string, unknown> = { stockProveedor: plan.stockProveedorNuevo, ultimaSincronizacion: ahora(), precioEnRiesgo: riesgoActual, ...parcheAuto(preciosDe(remoto.variantes), preciosAplicados) };
+  if (auto && parche.autoPrecio) {
+    const rechazados = Object.fromEntries(plan.precios.filter((x) => sinTodosLosPrecios || sinPrecio.has(x.sku)).map((x) => [x.sku, x.nuevo]));
+    parche.autoPrecio = { ...(parche.autoPrecio as object), rechazados };
+  }
   // Solo se da por mandado el envío si Retador confirma cuántos países guardó (si no, se vuelve a intentar en la próxima revisión)
-  if (plan.huellaEnvio && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0) { parche.envioHash = plan.huellaEnvio; parche.envioEnviadoEn = ahora(); }
+  if (plan.huellaEnvio && !sinEnvioValido && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0) { parche.envioHash = plan.huellaEnvio; parche.envioEnviadoEn = ahora(); }
   if (plan.huellaResenas) parche.resenasHash = plan.huellaResenas;
   await fusionarRetador(p.id, parche);
   if (preciosAplicados && reglaAuto) {
-    const lista = plan.precios.map((x) => `«${x.titulo}»: de ${usdTexto(x.antes)} a ${usdTexto(x.nuevo)}`).join("; ");
-    await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Precio ajustado con tu regla (${reglaAuto.regla.markupPct} % de margen) porque cambió el coste del proveedor: ${lista}.`, { sincronizacion: true, tipo: "PRECIO_AUTOMATICO", regla: reglaAuto.regla, precios: plan.precios });
+    const lista = preciosEnviados().map((x) => `«${x.titulo}»: de ${usdTexto(x.antes)} a ${usdTexto(x.nuevo)}`).join("; ");
+    await registrar(uid, tienda.id, p.id, "PRICE_UPDATE", "SUCCESS", `Precio ajustado con tu regla (${reglaAuto.regla.markupPct} % de margen) porque cambió el coste del proveedor: ${lista}.`, { sincronizacion: true, tipo: "PRECIO_AUTOMATICO", regla: reglaAuto.regla, precios: preciosEnviados() });
   }
   await registrar(uid, tienda.id, p.id, "FULL_REFRESH", "SUCCESS", `Sincronizado con Retador: ${plan.resumen.join("; ")}.`, {
     sincronizacion: true,
     enviado: resumenEnvio(envio),
     respuesta: { estado: remoto.estado ?? null, variantes: remoto.variantes ?? [], envio_actualizado_en: remoto.envio_actualizado_en ?? null, envio_paises: remoto.envio_paises ?? null },
   }, plan.pausar ? "WARN" : "INFO");
-  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar, preciosCambiados: preciosAplicados ? plan.precios.length : 0, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
+  return { productId: p.id, enviado: true, resumen: plan.resumen, pausado: plan.pausar, preciosCambiados: preciosAplicados ? preciosEnviados().length : 0, estado: remoto.estado ?? null, envioPaises: typeof remoto.envio_paises === "number" ? remoto.envio_paises : null };
 }
 
 /**
