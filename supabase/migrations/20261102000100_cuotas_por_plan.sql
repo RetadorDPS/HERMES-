@@ -137,3 +137,41 @@ as $$
 $$;
 revoke all on function public.contar_llamada_proveedor(text, boolean) from public, anon, authenticated;
 grant execute on function public.contar_llamada_proveedor(text, boolean) to service_role;
+
+-- 6) Turno por proveedor: nunca dos consultas a la vez contra el mismo proveedor (el turno caduca solo por si algo falla).
+create table if not exists public."TurnoProveedor" (
+  proveedor text primary key check (proveedor in ('CJ_DROPSHIPPING', 'ALIEXPRESS')),
+  hasta     timestamp without time zone not null default now()
+);
+alter table public."TurnoProveedor" enable row level security;
+revoke all on public."TurnoProveedor" from anon, authenticated;
+insert into public."TurnoProveedor" (proveedor, hasta) values ('CJ_DROPSHIPPING', now() - interval '1 minute'), ('ALIEXPRESS', now() - interval '1 minute') on conflict (proveedor) do nothing;
+
+create or replace function public.tomar_turno_proveedor(p_proveedor text, p_segundos integer default 120)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_filas integer;
+begin
+  update public."TurnoProveedor" set hasta = now() + make_interval(secs => greatest(least(p_segundos, 300), 5))
+   where proveedor = p_proveedor and hasta <= now();
+  get diagnostics v_filas = row_count;
+  return v_filas = 1;
+end;
+$$;
+
+create or replace function public.soltar_turno_proveedor(p_proveedor text)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public."TurnoProveedor" set hasta = now() - interval '1 second' where proveedor = p_proveedor;
+$$;
+revoke all on function public.tomar_turno_proveedor(text, integer) from public, anon, authenticated;
+revoke all on function public.soltar_turno_proveedor(text) from public, anon, authenticated;
+grant execute on function public.tomar_turno_proveedor(text, integer) to service_role;
+grant execute on function public.soltar_turno_proveedor(text) to service_role;

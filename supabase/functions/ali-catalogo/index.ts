@@ -118,14 +118,14 @@ Deno.serve(async (req) => {
 
   // ── Solo administradores, salvo la vía interna ──
   // La función central `importar-enlace` (que ya comprobó la sesión, el límite diario y que no haya otra importación en curso)
-  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar`, `envio` y `refrescar` (esta última, el monitor de precio y existencias).
+  // llama aquí con la clave de servicio, que solo vive en el servidor, y SOLO puede pedir `importar`, `envio`, `detalle` (completar ficha, pedida por `acciones-usuario` con límite por plan) y `refrescar` (el monitor de precio y existencias).
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const cuerpo = await req.json().catch(() => ({}));
   let accion: string = cuerpo?.accion ?? "probar";
   const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   let uid = "";
   if (interna) {
-    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar" && accion !== "detalle") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
   } else {
     const { data: auth } = await servicio.auth.getUser(jwt);
     uid = auth?.user?.id ?? "";

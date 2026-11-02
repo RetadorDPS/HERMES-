@@ -85,6 +85,15 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
   const [destino, setDestino] = useState('');
   const [verVariantes, setVerVariantes] = useState(false);
   const [esAdmin, setEsAdmin] = useState(false);
+  // Lo que lleva gastado el usuario de su plan (completar fichas y cotizar envíos): los límites los cuenta el servidor
+  const [uso, setUso] = useState<UsoPlan | null>(null);
+  const cargarUso = useCallback(async () => {
+    const { data } = await supabase().functions.invoke('acciones-usuario', { body: { accion: 'uso' } });
+    if (data?.ok) setUso({ plan: data.plan, ilimitado: Boolean(data.ilimitado), limites: data.limites ?? {} });
+  }, []);
+  useEffect(() => {
+    void cargarUso();
+  }, [cargarUso]);
   const [trabajando, setTrabajando] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
   const [otroPais, setOtroPais] = useState('');
@@ -141,12 +150,13 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     }
   }, [itemId, cargar]);
 
-  /** Acciones del administrador sobre este artículo (completar ficha, cotizar envío). */
+  /** Acciones del usuario sobre este artículo (completar ficha, cotizar envío) con el límite de su plan: pasan por `acciones-usuario`. */
   const ejecutarCj = async (accion: 'detalle' | 'envio', extra: Record<string, unknown> = {}) => {
     if (!itemId) return;
     setTrabajando(accion);
     setAviso(null);
-    const { data, error: e } = await supabase().functions.invoke(item?.provider === 'ALIEXPRESS' ? 'ali-catalogo' : 'cj-catalogo', { body: { accion, ids: [itemId], ...extra } });
+    const cuerpo = accion === 'detalle' ? { accion: 'completar_ficha', itemId } : { accion: 'cotizar_envio', itemId, paises: Array.isArray(extra.paises) && extra.paises.length ? extra.paises : [...PAISES_PRINCIPALES] };
+    const { data, error: e } = await supabase().functions.invoke('acciones-usuario', { body: cuerpo });
     setTrabajando(null);
     if (e || !data?.ok) {
       let texto = e?.message ?? data?.error ?? 'No se pudo completar';
@@ -172,6 +182,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     }
     setAviso(`${data.mensaje ?? 'Hecho'}.${extraTexto}`.replace('..', '.'));
     await cargar(itemId);
+    void cargarUso();
   };
 
   /** Cotiza un país. Para Cuba se consulta el tramo del proveedor hasta EE. UU. (el cálculo de Cuba lo usa), sin que haga falta explicarlo. */
@@ -348,14 +359,13 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
               {!ficha && (
                 <Alert variant="info" title="La ficha completa de este artículo todavía no se ha descargado">
                   Aquí se mostrarán las variantes, el stock por almacén, el envío por país, las reseñas y las características.
-                  {esAdmin && (
-                    <div className="mt-2">
-                      <Button size="sm" variant="gradient" disabled={trabajando !== null} onClick={() => ejecutarCj('detalle')}>
-                        {trabajando === 'detalle' && <Loader2 className="size-4 animate-spin" />}
-                        Completar la ficha ahora
-                      </Button>
-                    </div>
-                  )}
+                  <div className="mt-2 space-y-1">
+                    <Button size="sm" variant="gradient" disabled={trabajando !== null} onClick={() => ejecutarCj('detalle')}>
+                      {trabajando === 'detalle' && <Loader2 className="size-4 animate-spin" />}
+                      Completar la ficha ahora
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">{textoCupo(uso, 'FICHA')}</p>
+                  </div>
                 </Alert>
               )}
               {aviso && (
@@ -425,10 +435,10 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     </>
                   )}
 
-                  {esAdmin && (
+                  {(
                     <div className="space-y-2 border-t border-white/[0.06] pt-2">
                       <p className="text-[11px] text-muted-foreground">
-                        Solo para el administrador. Cada país cotizado cuesta {item?.provider === 'ALIEXPRESS' ? 'una llamada a AliExpress' : 'unas llamadas a CJ (una por almacén)'}.
+                        Cada país nuevo que cotizas gasta 1 de tu cupo (los que ya están cotizados no gastan nada). {textoCupo(uso, 'COTIZACION_ENVIO')}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <select
@@ -673,12 +683,10 @@ function EnvioACubaPanel({ ficha, proveedor, tarifa, esAdmin, trabajando, onCoti
     return (
       <div className="space-y-2 text-[12px]">
         <p className="text-muted-foreground">El envío a Cuba todavía no está cotizado para este producto.</p>
-        {esAdmin && (
-          <Button size="sm" variant="gradient" disabled={trabajando} onClick={onCotizar}>
-            {trabajando && <Loader2 className="size-4 animate-spin" />}
-            Cotizar envío a Cuba
-          </Button>
-        )}
+        <Button size="sm" variant="gradient" disabled={trabajando} onClick={onCotizar}>
+          {trabajando && <Loader2 className="size-4 animate-spin" />}
+          Cotizar envío a Cuba
+        </Button>
       </div>
     );
   }
@@ -712,4 +720,22 @@ function EnvioACubaPanel({ ficha, proveedor, tarifa, esAdmin, trabajando, onCoti
       </details>
     </div>
   );
+}
+
+
+/** Lo que lleva gastado el usuario de su plan, tal como lo cuenta el servidor. */
+interface UsoPlan {
+  plan: string;
+  ilimitado: boolean;
+  limites: Record<string, { ventana: 'MES' | 'TOTAL'; limiteVentana: number; usadoVentana: number; limiteDia: number; usadoDia: number; restanteVentana: number; restanteDia: number }>;
+}
+
+/** «Te quedan 12 este mes (3 hoy).» a partir del uso que informa el servidor; sin datos, no dice nada que no sepa. */
+function textoCupo(uso: UsoPlan | null, tipo: 'FICHA' | 'COTIZACION_ENVIO'): string {
+  if (!uso) return '';
+  if (uso.ilimitado) return 'Administrador: sin límite de plan.';
+  const l = uso.limites[tipo];
+  if (!l) return '';
+  const hoy = Math.min(l.restanteDia, l.restanteVentana);
+  return `Te quedan ${l.restanteVentana} ${l.ventana === 'TOTAL' ? 'en tu prueba' : 'este mes'} (${hoy} hoy).`;
 }
