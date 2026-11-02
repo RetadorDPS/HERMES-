@@ -54,7 +54,30 @@ function paisesCotizadosVigentes(ficha: any): Set<string> {
       if (Number.isFinite(t) && Date.now() - t < COTIZACION_VIGENTE_MS) vistos.add(pais.toUpperCase());
     }
   }
+  // Un país que el proveedor ya dijo que no tiene servicio también cuenta como consultado (si no, se cobraría cupo por repetir lo mismo)
+  for (const [pais, q] of Object.entries(ficha?.envio?.sinServicio ?? {}) as [string, any][]) {
+    const t = Date.parse(String(q?.actualizado ?? ""));
+    if (Number.isFinite(t) && Date.now() - t < COTIZACION_VIGENTE_MS) vistos.add(pais.toUpperCase());
+  }
   return vistos;
+}
+
+/** Mensajes del proveedor que hablan de claves o cuentas: un usuario normal nunca los ve (solo el administrador). */
+const MENSAJE_DE_CLAVES = /api.?key|clave|token|unauthori|expired|invalid|secret|appkey|signature|permission|forbidden/i;
+const MENSAJE_GENERICO = "El proveedor no está disponible ahora mismo. Inténtalo más tarde.";
+
+/** Lo que se devuelve a la pantalla: SOLO lo necesario. Nunca los diagnósticos internos del proveedor (longitud de claves, secretos vistos…). */
+function respuestaPublica(r: any, esAdmin: boolean) {
+  const limpio = (t: unknown) => (esAdmin || !MENSAJE_DE_CLAVES.test(String(t ?? "")) ? String(t ?? "") : MENSAJE_GENERICO);
+  const salida: Record<string, unknown> = { ok: Boolean(r?.ok) };
+  if (typeof r?.mensaje === "string") salida.mensaje = limpio(r.mensaje);
+  if (typeof r?.error === "string") salida.error = limpio(r.error);
+  if (Array.isArray(r?.avisos)) salida.avisos = r.avisos.slice(0, 5).map(limpio);
+  if (Array.isArray(r?.informe)) {
+    salida.informe = r.informe.slice(0, 5).map((i: any) => ({ id: i?.id, ok: i?.ok !== false, ...(i?.error ? { error: limpio(i.error) } : {}), ...(Array.isArray(i?.avisos) ? { avisos: i.avisos.slice(0, 3).map(limpio) } : {}) }));
+  }
+  if (r?.devuelto) salida.devuelto = true;
+  return salida;
 }
 
 async function llamarProveedor(provider: string, cuerpo: Record<string, unknown>) {
@@ -74,7 +97,9 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return responder({ ok: false, error: "Usa POST" }, 405);
 
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  const uid = (await servicio.auth.getUser(jwt)).data?.user?.id;
+  // Vía interna del servidor (pruebas y futuras funciones propias): con la clave de servicio, que solo vive en el servidor, se actúa en nombre del usuario de `x-usuario`
+  const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const uid = interna ? (req.headers.get("x-usuario") ?? undefined) : (await servicio.auth.getUser(jwt)).data?.user?.id;
   if (!uid) return responder({ ok: false, codigo: "sesion", error: "Sesión no válida" }, 401);
   const cuerpo = await req.json().catch(() => ({}));
   const accion = String(cuerpo?.accion ?? "");
@@ -152,7 +177,7 @@ Deno.serve(async (req) => {
       cupoGastado = false;
       respuesta.devuelto = true;
     }
-    return responder({ ...respuesta, gastado: cupoGastado ? cantidad : 0 });
+    return responder({ ...respuestaPublica(respuesta, esAdmin), gastado: cupoGastado ? cantidad : 0 });
   } catch (e) {
     if (cupoGastado) await servicio.rpc("devolver_cuota", { p_user: uid, p_tipo: tipo, p_cantidad: cantidad });
     console.error("acciones-usuario", accion, (e as Error)?.message);
