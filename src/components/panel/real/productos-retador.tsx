@@ -5,6 +5,7 @@
  * estimado, con edición de precio y stock, pausa y reactivación. Todo pasa por la función `retador-tienda`, que
  * rechaza cualquier precio con el que se pierda dinero.
  */
+import { Foto } from './foto';
 import { useCallback, useEffect, useState } from 'react';
 import { ExternalLink, Loader2, MessageSquareQuote, Pause, Pencil, Play, Trash2, TriangleAlert, Wand2 } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
@@ -147,8 +148,7 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
             <div key={p.id} id={`producto-${p.id}`} className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-3">
               <div className="flex gap-3">
                 {p.foto ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.foto} alt="" className="size-14 shrink-0 rounded-md object-cover" />
+                  <Foto src={p.foto} ancho={240} className="size-14 shrink-0 rounded-md object-cover" />
                 ) : (
                   <div className="size-14 shrink-0 rounded-md bg-white/5" />
                 )}

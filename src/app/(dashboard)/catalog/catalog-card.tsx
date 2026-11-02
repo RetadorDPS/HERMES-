@@ -7,6 +7,7 @@
  * cuánto se venderá con la regla de margen DEL USUARIO y cuánto gana por unidad.
  * Si el artículo viene del catálogo de muestra, se dice con una etiqueta.
  */
+import { Foto } from '@/components/panel/real/foto';
 import { Star, TrendingUp, Truck } from 'lucide-react';
 import { Badge as UiBadge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -48,13 +49,7 @@ export function CatalogCard({
     <div data-tour="catalog:card" className="group relative flex flex-col overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.02] transition-all hover:border-indigo-400/30 hover:bg-white/[0.04] hover:shadow-xl hover:shadow-indigo-500/5">
       <button type="button" onClick={() => onOpen(item)} className="relative block aspect-[5/4] w-full overflow-hidden bg-black/30 text-left sm:aspect-square">
         {item.imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.imageUrl}
-            alt={item.title}
-            loading="lazy"
-            className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.04]"
-          />
+          <Foto src={item.imageUrl} alt={item.title} ancho={480} perezosa className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
         ) : (
           <span className="grid size-full place-items-center text-[11px] text-muted-foreground">Sin imagen</span>
         )}

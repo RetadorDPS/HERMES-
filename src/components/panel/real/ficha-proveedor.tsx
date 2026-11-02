@@ -12,6 +12,7 @@ import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { formatNumber, cn } from '@/lib/utils';
+import { Foto } from './foto';
 import { supabase } from '@/lib/supabase/cliente';
 import { obtenerPerfil } from '@/lib/real/datos';
 import { nombrePais, PAISES_FRECUENTES, PAISES_PRINCIPALES, textoPopularidad } from '@/lib/paises';
@@ -267,8 +268,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                 <div className="space-y-2">
                   <div className="overflow-hidden rounded-xl border border-white/[0.07] bg-black/30">
                     {imagenes[foto] ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={imagenes[foto]} alt={item.title} className="max-h-64 w-full object-contain sm:aspect-square sm:max-h-none sm:object-cover" />
+                      <Foto key={imagenes[foto]} src={imagenes[foto]} alt={item.title} ancho={640} className="max-h-64 w-full object-contain sm:aspect-square sm:max-h-none sm:object-cover" />
                     ) : (
                       <div className="grid aspect-square place-items-center text-[11px] text-muted-foreground">Sin imagen</div>
                     )}
@@ -277,8 +277,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                     <div className="flex flex-wrap gap-1.5">
                       {imagenes.slice(0, 8).map((u, i) => (
                         <button key={`${u}-${i}`} type="button" onClick={() => setFoto(i)} className={cn('size-10 overflow-hidden rounded-md border', i === foto ? 'border-indigo-400' : 'border-white/10 opacity-70 hover:opacity-100')}>
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={u} alt="" className="size-full object-cover" />
+                          <Foto src={u} ancho={240} className="size-full object-cover" />
                         </button>
                       ))}
                       {imagenes.length > 8 && <span className="grid size-10 place-items-center text-[11px] text-muted-foreground">+{imagenes.length - 8}</span>}
@@ -473,8 +472,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                       return (
                         <li key={v.vid ?? v.sku} className="flex gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2 text-[12px]">
                           {v.imagen && (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={v.imagen} alt="" className="size-11 shrink-0 rounded-md object-cover" />
+                            <Foto src={v.imagen} ancho={240} className="size-11 shrink-0 rounded-md object-cover" />
                           )}
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
@@ -592,8 +590,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                           {r.fotos?.length > 0 && (
                             <div className="mt-1 flex gap-1">
                               {r.fotos.slice(0, 4).map((u: string, k: number) => (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img key={k} src={u} alt="" className="size-12 rounded object-cover" />
+                                <Foto key={k} src={u} ancho={240} className="size-12 rounded object-cover" />
                               ))}
                             </div>
                           )}

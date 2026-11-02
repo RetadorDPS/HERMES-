@@ -7,6 +7,7 @@
  * peso) y esta pantalla propone el precio con la regla de margen del usuario y enseña lo que le queda de verdad
  * tras la comisión de Retador y la pasarela. Si falta un dato real (peso, envío al hub), la variante no se puede publicar.
  */
+import { Foto } from './foto';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, Star, X } from 'lucide-react';
@@ -253,8 +254,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                             onChange={(e) => setElegidas((x) => ({ ...x, [v.sku]: e.target.checked }))}
                           />
                           {v.imagen && (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={v.imagen} alt="" className="size-9 shrink-0 rounded object-cover" />
+                            <Foto src={v.imagen} ancho={240} className="size-9 shrink-0 rounded object-cover" />
                           )}
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-medium">{v.nombre}</span>
@@ -386,8 +386,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
                   <div className="grid grid-cols-4 gap-2 sm:grid-cols-6">
                     {fotos.map((url, i) => (
                       <div key={url} className="group relative aspect-square overflow-hidden rounded-lg border border-white/10">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={url} alt="" className="size-full object-cover" />
+                        <Foto src={url} ancho={240} className="size-full object-cover" />
                         {i === 0 && <Badge className="absolute left-1 top-1 gap-1 bg-black/70 px-1 py-0 text-[10px]"><Star className="size-2.5" /> Portada</Badge>}
                         <div className="absolute inset-x-0 bottom-0 flex justify-between bg-black/60 p-0.5">
                           {i > 0 ? (

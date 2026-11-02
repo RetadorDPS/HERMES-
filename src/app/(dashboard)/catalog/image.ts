@@ -4,6 +4,7 @@
  * hotlinking y funciona aunque el visor no tenga salida a internet.
  */
 import { ESTATICO } from '@/lib/ruta';
+import { fotoPorNuestroServidor } from '@/lib/real/foto';
 
 export const imageSrc = (url: string | null | undefined) =>
-  !url ? '' : url.startsWith('/') || url.startsWith('data:') || ESTATICO ? url : `/api/img?u=${encodeURIComponent(url)}`;
+  !url ? '' : url.startsWith('/') || url.startsWith('data:') ? url : ESTATICO ? fotoPorNuestroServidor(url, 480) : `/api/img?u=${encodeURIComponent(url)}`;
