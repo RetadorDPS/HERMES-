@@ -177,6 +177,15 @@ Deno.serve(async (req) => {
       cupoGastado = false;
       respuesta.devuelto = true;
     }
+    // Países que el proveedor no pudo consultar (fallo de red o de límite): no se cobran
+    if (!fallo && cupoGastado && accion === "cotizar_envio") {
+      const sinHacer = new Set(Object.values(respuesta?.resumen ?? {}).flatMap((r: any) => (Array.isArray(r?.pendientes) ? r.pendientes : [])).map((c: unknown) => String(c).toUpperCase().slice(0, 2))).size;
+      if (sinHacer > 0) {
+        const devolver = Math.min(sinHacer, cantidad);
+        await servicio.rpc("devolver_cuota", { p_user: uid, p_tipo: tipo, p_cantidad: devolver });
+        return responder({ ...respuestaPublica(respuesta, esAdmin), gastado: cantidad - devolver, devuelto: true });
+      }
+    }
     return responder({ ...respuestaPublica(respuesta, esAdmin), gastado: cupoGastado ? cantidad : 0 });
   } catch (e) {
     if (cupoGastado) await servicio.rpc("devolver_cuota", { p_user: uid, p_tipo: tipo, p_cantidad: cantidad });

@@ -156,11 +156,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     setTrabajando(accion);
     setAviso(null);
     const cuerpo = accion === 'detalle' ? { accion: 'completar_ficha', itemId } : { accion: 'cotizar_envio', itemId, paises: Array.isArray(extra.paises) && extra.paises.length ? extra.paises : [...PAISES_PRINCIPALES] };
-    // Completar la ficha: el administrador sigue llamando directo al proveedor hasta que CJ y AliExpress acepten «detalle» por la puerta con límites
-    const directo = accion === 'detalle' && esAdmin;
-    const { data, error: e } = directo
-      ? await supabase().functions.invoke(item?.provider === 'ALIEXPRESS' ? 'ali-catalogo' : 'cj-catalogo', { body: { accion, ids: [itemId] } })
-      : await supabase().functions.invoke('acciones-usuario', { body: cuerpo });
+    const { data, error: e } = await supabase().functions.invoke('acciones-usuario', { body: cuerpo });
     setTrabajando(null);
     if (e || !data?.ok) {
       let texto = e?.message ?? data?.error ?? 'No se pudo completar';

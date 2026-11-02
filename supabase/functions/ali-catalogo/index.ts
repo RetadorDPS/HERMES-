@@ -616,6 +616,7 @@ Deno.serve(async (req) => {
     const crudoEnvio: Record<string, any> = { ...(((det.raw as any)?.envio) ?? {}) };
     const avisos: string[] = [];
     let hechas = 0;
+    let transitorios = 0;
     const almacenesVistos = new Set<string>();
     const hayCotizacionReciente = (d: string) =>
       Object.values(envio.porOrigen).some((m: any) => m?.[d] && Date.now() - new Date(m[d].actualizado).getTime() < 24 * 3_600_000 && !m[d].error) ||
@@ -627,6 +628,12 @@ Deno.serve(async (req) => {
         queryDeliveryReq: JSON.stringify({ productId: String(item.externalId), quantity: "1", shipToCountry: destino, selectedSkuId: sku?.vid ?? "", language: "es_ES", currency: MONEDA, locale: "es_ES" }),
       });
       hechas += 1;
+      // Un fallo de red o de límite NO es «sin servicio»: no se guarda como tal (se volvería a ofrecer solo mañana) y se devuelve como pendiente
+      if (!r.ok && /^RED$|call.?limit|frequency|too many|timeout|abort|expire/i.test(`${r.codigo ?? ""} ${r.mensaje}`)) {
+        transitorios += 1;
+        avisos.push(`${destino}: AliExpress no respondió a tiempo; inténtalo de nuevo más tarde`);
+        continue;
+      }
       if (!r.ok) {
         envio.sinServicio[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), error: r.mensaje };
         crudoEnvio[destino] = { error: r.mensaje, detalle: r.crudo };
@@ -666,6 +673,8 @@ Deno.serve(async (req) => {
       }
       for (const origen of Object.keys(envio.porOrigen)) if (!grupos.has(origen)) delete envio.porOrigen[origen][destino]; // cotizaciones viejas de otro almacén ya no valen
     }
+    // Si TODAS las consultas fallaron por red o límite, no se guarda nada y se dice (quien llama puede devolver el cupo)
+    if (hechas > 0 && transitorios === hechas) return responder({ ok: false, error: "AliExpress no respondió a tiempo. Inténtalo de nuevo en unos minutos.", avisos });
     for (const origen of Object.keys(envio.porOrigen)) if (!Object.keys(envio.porOrigen[origen]).length) delete envio.porOrigen[origen];
     ficha.envio = envio;
     // Almacenes de la ficha: los que AliExpress ha dicho de verdad. El stock por almacén NO existe en AliExpress: se deja sin dato (nunca 0 inventado).
