@@ -170,6 +170,9 @@ Deno.serve(async (req) => {
       ? await llamarProveedor(item.provider, { accion: "detalle", ids: [itemId] })
       : await llamarProveedor(item.provider, { accion: "envio", ids: [itemId], paises: paisesPendientes });
 
+    // Se cuentan las llamadas reales que hizo el proveedor (para medir el uso diario de cada uno); si falla el contador no pasa nada
+    const llamadasReales = Number(respuesta?.llamadasACj ?? respuesta?.llamadasAAliExpress ?? 0);
+    if (llamadasReales > 0) await servicio.rpc("sumar_llamadas_proveedor", { p_proveedor: item.provider, p_llamadas: llamadasReales, p_rechazos: 0 });
     const fallos = (Array.isArray(respuesta?.informe) ? respuesta.informe : []).filter((i: any) => i && i.ok === false);
     const fallo = !respuesta?.ok || (accion === "completar_ficha" && fallos.length > 0);
     if (fallo && cupoGastado) {
