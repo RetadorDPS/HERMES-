@@ -208,3 +208,30 @@ Es decisión del vendedor, producto por producto (casilla al publicar o interrup
 - «Opiniones del producto»: bloque en la ficha, sin nombre del proveedor y aparte de las de compradores de Retador. En la TARJETA del catálogo las estrellas muestran la valoración con MÁS opiniones entre la de Retador y la importada (decisión del dueño de Retador).
 - `dropship-eliminar`: la acción existe en la base y el código desplegado de las funciones `dropship-*` la incluye; Retador no pudo comprobarla en vivo. **Pendiente: probarla con un producto de prueba del vendedor antes de darla por buena.**
 - **Rechazos que NO aplican nada de la llamada:** (1) si UNA variante trae un precio por debajo del mínimo, `dropship-actualizar` responde `409 precio_bajo_minimo` con `variantes: [{sku, minimo_usd}]` y no aplica NADA (ni stock, ni envío, ni opiniones); (2) si `envio` no es válido, `400 datos_invalidos` (campo `envio.*`) y tampoco aplica nada. DropshipPilot reenvía entonces la llamada SIN `precio_venta_usd` en las variantes rechazadas (o sin `envio`) para no perder lo demás, avisa al vendedor y no repite un precio ya rechazado mientras el precio propuesto sea el mismo.
+
+## Parte C — Vincular cuenta (PROPUESTA del 3/11/2026, sin programar hasta que Retador la confirme)
+
+Objetivo: que el vendedor NO tenga que crear y pegar una clave. Pulsa «Vincular cuenta con Retador», entra en Retador con SU cuenta de siempre, aprueba y vuelve a DropshipPilot ya conectado. Una sola persona, una sola cuenta. La clave `dsp_…` sigue siendo la credencial de todas las llamadas de arriba (nada de lo anterior cambia); lo único nuevo es la forma de obtenerla y de renovarla.
+
+### Flujo (código de un solo uso, nunca viaja la clave por la dirección del navegador)
+1. DropshipPilot (`retador-tienda`, acción `vincular_iniciar`) genera un `state` aleatorio de un solo uso (caduca a los 10 min, guardado como hash, ligado al usuario) y manda al vendedor a la página de Retador `…/vincular-dropship?state=<state>&retorno=<dirección de retorno de DropshipPilot>`.
+2. En esa página de Retador, el vendedor inicia sesión (si no la tiene abierta) y ve qué va a permitir: «Publicar y actualizar tus productos, ver tus pedidos de dropshipping y leer las tarifas». Aprueba o cancela. Retador comprueba aquí los mismos requisitos de siempre (plan pro/premium, sin deuda, no suspendido) y si no los cumple lo dice ahí, en lenguaje claro.
+3. Si aprueba, Retador redirige a la dirección de retorno con `?codigo=<código de un solo uso, 60 s>&state=<el mismo state>`. Si cancela, `?error=cancelado&state=…`. Solo se aceptan direcciones de retorno de una lista cerrada en Retador (la de DropshipPilot).
+4. DropshipPilot (`retador-tienda`, acción `vincular_completar {codigo, state}`) comprueba el `state`, y llama a Retador **de servidor a servidor**: `POST dropship-vincular { codigo }` con una cabecera `x-dropship-cliente` (secreto de DropshipPilot, que solo vive en un secreto de las funciones). Retador responde `{ ok, token: "dsp_…", caduca_en, vendedor: { id, email, nombre_tienda, plan } }` y el código queda gastado. DropshipPilot guarda el token cifrado igual que hoy (`accessTokenEnc`).
+5. Misma cuenta: DropshipPilot compara el `email` que devuelve Retador con el de su usuario. Si no coincide NO lo bloquea, pero lo dice con claridad («Tu cuenta de Retador usa otro correo») y pide confirmación.
+
+### Renovación sin intervención (adiós a la caducidad de 90 días)
+- `POST dropship-renovar` con el token vigente (o recién caducado, hasta 7 días de gracia) y `x-dropship-cliente`: Retador devuelve un token nuevo y revoca el anterior en el mismo paso. DropshipPilot lo llama solo cuando faltan menos de 14 días. Si falla, avisa al vendedor para que vuelva a vincular.
+- Revocar desde Retador (o «Desconectar» en DropshipPilot) funciona como hoy.
+
+### Lo que NO cambia
+- Las llamadas `dropship-config/publicar/actualizar/retirar/eliminar/estado/pedidos…` y la cabecera `x-dropship-token`.
+- Los límites de Retador (máximo 3 claves vivas por vendedor): una vinculación cuenta como una.
+- El simulador (`retador-simulado`) imita estas dos llamadas para probar sin tocar el Retador real.
+
+### Preguntas para Retador (hasta que las conteste NO se programa la parte real)
+1. ¿Les parece bien este flujo (código de un solo uso + intercambio de servidor a servidor + renovación)? ¿Qué cambiarían?
+2. Dirección exacta de la página de vinculación y de retorno permitida (hoy la de AliExpress usa la dirección de retorno de Retador con un `state` que empieza por «dropshippilot.»; ¿repetimos ese truco o la ponen en su lista cerrada?).
+3. ¿Cómo se anunciará que esto existe? Propuesta: `capacidades.vincular_cuenta` en una llamada pública `dropship-capacidades` (sin clave), para que DropshipPilot enseñe el botón solo cuando Retador lo tenga.
+4. Una sola cuenta de verdad: ¿el vendedor de Retador y el usuario de DropshipPilot se identifican por el mismo correo verificado? ¿Quieren que al registrarse en uno se pueda entrar con la cuenta del otro (inicio de sesión único)? Eso es otra pieza aparte y no se programa sin su respuesta.
+5. Planes en conjunto: hoy el plan de Retador (`vendedor.plan`) y el de DropshipPilot son independientes. ¿Quieren un plan conjunto (un solo pago, límites de los dos lados) o que cada uno cobre lo suyo? Es decisión de negocio de Daniel; aquí solo hace falta saber qué pueden informar y recibir.
