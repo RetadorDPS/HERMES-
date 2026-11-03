@@ -29,7 +29,7 @@ const OPCIONES: OpcionDestino[] = [
 ];
 
 export function ElegirDestino({ titulo, onElegir, onClose }: { titulo: string; onElegir: (destino: DestinoPublicacion) => void; onClose: () => void }) {
-  // Estado de la tienda de Retador del usuario (solo informativo: la conexión se pide después, al publicar)
+  // Estado de la tienda de Retador del usuario (solo informativo: la vinculación se pide después, al publicar)
   const [retador, setRetador] = useState<'cargando' | 'conectada' | 'sin_conectar' | 'desconocido'>('cargando');
 
   useEffect(() => {
@@ -74,10 +74,10 @@ export function ElegirDestino({ titulo, onElegir, onClose }: { titulo: string; o
                     {o.id === 'RETADOR' && retador === 'cargando' && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
                     {o.id === 'RETADOR' && retador === 'conectada' && (
                       <Badge variant="success" className="gap-1">
-                        <CheckCircle2 className="size-3" /> Conectada
+                        <CheckCircle2 className="size-3" /> Vinculada
                       </Badge>
                     )}
-                    {o.id === 'RETADOR' && retador === 'sin_conectar' && <Badge variant="outline">Sin conectar todavía</Badge>}
+                    {o.id === 'RETADOR' && retador === 'sin_conectar' && <Badge variant="outline">Sin vincular todavía</Badge>}
                     {!o.disponible && <Badge variant="outline">Aún no disponible</Badge>}
                   </span>
                   <span className="mt-0.5 block text-[12px] text-muted-foreground">{o.detalle}</span>

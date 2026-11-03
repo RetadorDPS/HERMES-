@@ -1,8 +1,8 @@
 /**
  * src/lib/real/retador.ts — Conexión con la tienda de Retador desde el navegador.
  *
- * Todo pasa por la función `retador-tienda` (con la sesión del usuario): el token de Retador nunca llega al
- * navegador después de pegarlo, y el coste del proveedor nunca se envía a Retador. Contrato: docs/contrato-retador.md.
+ * Todo pasa por la función `retador-tienda` (con la sesión del usuario): la clave de Retador existe solo entre servidores (nadie la ve ni
+ * la pega: la cuenta se une con «Vincular con Retador») y el coste del proveedor nunca se envía a Retador. Contrato: docs/contrato-retador.md.
  */
 import { supabase } from '../supabase/cliente';
 import type { TarifasRetador } from '../retador/precios';
@@ -57,6 +57,8 @@ export interface TiendaRetador {
   publicados: number;
   /** Retador admite recibir las opiniones reales del proveedor (con su origen). */
   resenasProveedor: boolean;
+  /** El plan de Retador manda también aquí (plan conjunto): esta app no cobra a esta cuenta. */
+  planConjunto: boolean;
 }
 
 /** Convierte las tarifas que guarda la tienda (formato del contrato) al formato de las cuentas. */
@@ -109,6 +111,7 @@ export async function obtenerTiendaRetador(): Promise<TiendaRetador | null> {
     token: aj.token ? { prefijo: String(aj.token.prefijo ?? ''), caducaEn: aj.token.caduca_en ? new Date(aj.token.caduca_en) : null } : null,
     publicados: publicados.count ?? 0,
     resenasProveedor: aj.capacidades?.resenas_proveedor === true,
+    planConjunto: aj.planConjunto === true,
   };
 }
 
@@ -203,4 +206,48 @@ export async function obtenerProductosRetador(storeId: string): Promise<Producto
         })),
     };
   });
+}
+
+
+/* ───────────────────────────── Vincular con Retador (contrato 1.6) ───────────────────────────── */
+
+export interface VinculoPendiente {
+  id: string;
+  /** Desde dónde empezó la persona: pulsó el botón en Retador o en esta app. */
+  origen: 'retador' | 'dropshippilot';
+  emailRetador: string | null;
+  /** El correo de la cuenta de Retador es el mismo que el de esta cuenta. */
+  emailCoincide: boolean;
+}
+
+/** ¿Está disponible «Vincular con Retador»? ¿Hay una vinculación esperando confirmación? */
+export const vinculoInfo = () => llamarTienda<{ disponible: boolean; pendiente: VinculoPendiente | null }>({ accion: 'vinculo_info' });
+/** Empieza la vinculación desde aquí: devuelve la dirección de Retador a la que hay que ir. */
+export const iniciarVinculo = () => llamarTienda<{ url: string }>({ accion: 'vincular_iniciar' });
+/** Vuelta de Retador (empezó aquí). */
+export const canjearVinculo = (codigo: string, state: string) =>
+  llamarTienda<{ vinculada: boolean; emailRetador: string | null; pendiente?: VinculoPendiente }>({ accion: 'vincular_canjear', codigo, state });
+/** Entrada desde Retador (empezó allí): deja la vinculación pendiente de confirmar. */
+export const entradaVinculo = (codigo: string) => llamarTienda<{ pendiente: VinculoPendiente }>({ accion: 'vincular_entrada', codigo });
+export const confirmarVinculo = (id: string) => llamarTienda<{ vinculada: boolean; emailRetador: string | null }>({ accion: 'vincular_confirmar', id });
+export const cancelarVinculo = (id: string) => llamarTienda<{ cancelada: boolean }>({ accion: 'vincular_cancelar', id });
+
+const CLAVE_VOLVER = 'hermes-vincular-volver';
+/** Recuerda a qué pantalla volver cuando termine la vinculación (solo rutas propias). */
+export function recordarVolver(ruta: string) {
+  try {
+    if (ruta.startsWith('/') && !ruta.startsWith('//')) sessionStorage.setItem(CLAVE_VOLVER, ruta);
+  } catch {
+    /* sin almacenamiento: se vuelve a Tiendas */
+  }
+}
+export function tomarVolver(): string {
+  try {
+    const r = sessionStorage.getItem(CLAVE_VOLVER);
+    sessionStorage.removeItem(CLAVE_VOLVER);
+    if (r && r.startsWith('/') && !r.startsWith('//')) return r;
+  } catch {
+    /* ignorar */
+  }
+  return '/stores';
 }

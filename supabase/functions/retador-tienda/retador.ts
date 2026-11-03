@@ -88,6 +88,42 @@ export async function llamarRetador(token: string, accion: Accion, cuerpo: Recor
   return json;
 }
 
+/* ─────────────── Vinculación de cuenta (contrato 1.6): llamadas de la APLICACIÓN, con su secreto ─────────────── */
+
+/** Dirección pública de la función de Retador (sin clave): dice si «Vincular cuenta» ya está disponible. */
+export async function capacidadesDeRetador(): Promise<{ vincularCuenta: boolean; vincularUrl: string | null }> {
+  try {
+    const res = await fetch(`${URL_RETADOR}/dropship-capacidades`, { method: "GET", signal: AbortSignal.timeout(15_000) });
+    const json: any = await res.json().catch(() => null);
+    const c = json?.capacidades ?? {};
+    return { vincularCuenta: json?.ok === true && c.vincular_cuenta === true, vincularUrl: typeof json?.vincular_url === "string" ? json.vincular_url : null };
+  } catch {
+    return { vincularCuenta: false, vincularUrl: null };
+  }
+}
+
+/**
+ * Llama a una función de vinculación de Retador con el secreto de la aplicación (`x-dropship-cliente`).
+ * `token` solo se manda en la renovación (que además pide la clave vigente). Los errores salen con el código estable de Retador.
+ */
+export async function llamarRetadorApp(nombre: "vincular" | "renovar" | "avisos-registrar", secreto: string, cuerpo: Record<string, unknown>, token?: string): Promise<any> {
+  const cabeceras: Record<string, string> = { "Content-Type": "application/json", "x-dropship-cliente": secreto };
+  if (token) cabeceras["x-dropship-token"] = token;
+  let res: Response;
+  try {
+    res = await fetch(`${URL_RETADOR}/dropship-${nombre}`, { method: "POST", headers: cabeceras, body: JSON.stringify(cuerpo), signal: AbortSignal.timeout(30_000) });
+  } catch (e) {
+    throw new ErrorRetador("retador_no_responde", `No se pudo contactar con Retador (${(e as Error).name === "TimeoutError" ? "tardó demasiado" : "sin conexión"}). Inténtalo de nuevo en un momento.`);
+  }
+  const json: any = await res.json().catch(() => null);
+  if (!json || typeof json !== "object") throw new ErrorRetador("respuesta_invalida", `Retador respondió algo que no se entiende (HTTP ${res.status}).`, res.status);
+  if (json.ok !== true) {
+    const { ok: _ok, codigo, error, ...extra } = json;
+    throw new ErrorRetador(String(codigo ?? `http_${res.status}`), String(error ?? `Retador rechazó la petición (HTTP ${res.status}).`), res.status, extra);
+  }
+  return json;
+}
+
 /** Códigos que significan «este token ya no sirve»: la tienda pasa a error y se pide reconectar. */
 export const CODIGOS_TOKEN_MUERTO = new Set(["token_invalido", "token_caducado", "token_ilegible", "vendedor_suspendido"]);
 

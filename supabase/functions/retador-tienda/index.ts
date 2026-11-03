@@ -2,8 +2,13 @@
  * retador-tienda — Conexión de DropshipPilot con la tienda de un vendedor de Retador.
  *
  * Acciones (POST, JSON, con sesión de usuario):
- *   conectar {token}                       Guarda el token (cifrado) tras probarlo con Retador.
- *   desconectar {storeId}                  Olvida el token; los productos ya publicados siguen en Retador.
+ *   conectar {token}                       SOLO el Retador simulado (administrador). La cuenta real se une con «vincular_*»: nadie pega claves.
+ *   vinculo_info                           ¿Está disponible «Vincular con Retador»? ¿Hay una vinculación pendiente de confirmar?
+ *   vincular_iniciar                       (A, empieza en Hermes) crea el `state` de un solo uso y devuelve la dirección de Retador a la que ir.
+ *   vincular_canjear {codigo, state}       (A, vuelta de Retador) canjea el código por la clave (de servidor a servidor) y la guarda cifrada.
+ *   vincular_entrada {codigo}              (B, empieza en Retador) canjea el código y deja la vinculación PENDIENTE de que la persona confirme.
+ *   vincular_confirmar {id} / vincular_cancelar {id}   Cierra la vinculación pendiente (sin confirmar no se guarda nada).
+ *   desconectar {storeId}                  Desvincula: borra la clave guardada; los productos ya publicados siguen en Retador.
  *   config {storeId}                       Pide a Retador sus tarifas, categorías y límites.
  *   preparar {storeId, itemId}             Calcula coste puesto en Cuba y beneficio neto por variante (sin publicar).
  *   publicar {storeId, itemId, variantes, cat, subcat, contenido?}  (provincia ya no: los importados se envían desde fuera)
@@ -24,12 +29,14 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import {
   CODIGOS_TOKEN_MUERTO,
   ErrorRetador,
+  capacidadesDeRetador,
   cifrar,
   descifrar,
   esSimulado,
   htmlATexto,
   imagenPermitida,
   llamarRetador,
+  llamarRetadorApp,
   recortar,
   tarifasDeConfig,
   tokenConFormato,
@@ -71,24 +78,104 @@ async function tiendaPropia(uid: string, storeId: unknown, exigirConectada = tru
   const { data: tienda } = await servicio.from("Store").select("*").eq("id", storeId).eq("userId", uid).maybeSingle();
   if (!tienda || tienda.platform !== "RETADOR") throw new ErrorApp("tienda_no_encontrada", "No se encontró tu tienda de Retador");
   if (exigirConectada && (tienda.status !== "CONNECTED" || !tienda.accessTokenEnc)) {
-    throw new ErrorApp("tienda_desconectada", tienda.lastError || "La tienda de Retador no está conectada. Vuelve a conectarla con un token nuevo.");
+    throw new ErrorApp("tienda_desconectada", tienda.lastError || "Tu cuenta no está vinculada con Retador. Vincúlala desde Tiendas.");
   }
   return tienda;
 }
 
-/** Llama a Retador con el token de la tienda; si el token ya no vale, marca la tienda con error y lo explica. */
+/* ───────────────────── Vinculación: secreto de la aplicación y renovación de la clave ───────────────────── */
+
+const RENOVAR_ANTES_MS = 14 * 86_400_000;
+const MENSAJE_SIN_VINCULO = "Retador ya no tiene esta vinculación (la quitaste allí o caducó). Vincula de nuevo tu cuenta con Retador.";
+
+/** Secreto de la aplicación frente a Retador. Vive en el almacén de secretos de la base; nunca sale de las funciones. */
+async function secretoCliente(): Promise<string | null> {
+  const r = await servicio.rpc("leer_secreto_retador", { p_nombre: "retador_cliente_secreto" });
+  return !r.error && typeof r.data === "string" && r.data.length >= 32 ? r.data : null;
+}
+
+/**
+ * Plan conjunto (contrato 1.6): si Retador dice `plan_conjunto: true`, el plan de Retador manda y esta app no cobra a esa cuenta;
+ * las herramientas son las del plan equivalente de aquí (Gratis → Prueba, Pro → Starter, Premium → Pro) y no se regala más.
+ * Si deja de ser conjunto (o se desvincula) y el plan venía de Retador, se vuelve a Prueba. Si no es conjunto, cada app cobra lo suyo.
+ */
+const PLAN_EQUIVALENTE: Record<string, string> = { gratis: "TRIAL", pro: "STARTER", premium: "PRO" };
+
+async function aplicarPlanConjunto(uid: string, vendedor: any, simulada: boolean) {
+  if (simulada) return;
+  const { data: u } = await servicio.from("User").select("plan,\"planOrigen\",\"planElegidoEn\"").eq("id", uid).maybeSingle();
+  if (!u) return;
+  const equivalente = PLAN_EQUIVALENTE[String(vendedor?.plan ?? "").toLowerCase()];
+  if (vendedor?.plan_conjunto === true && equivalente) {
+    // Si el usuario tiene un plan propio más alto contratado aquí, no se le baja; solo se le cambia lo que ya venía de Retador o era Prueba
+    if (u.planOrigen === "RETADOR" || u.plan === "TRIAL") {
+      await servicio.from("User").update({ plan: equivalente, planOrigen: "RETADOR", planElegidoEn: u.planElegidoEn ?? ahora() }).eq("id", uid);
+    }
+  } else if (u.planOrigen === "RETADOR") {
+    await servicio.from("User").update({ plan: "TRIAL", planOrigen: "PROPIO" }).eq("id", uid);
+  }
+}
+
+/** La clave ya no sirve en Retador (se desvinculó allí o caducó del todo): la cuenta pasa a «no vinculada» y se olvida la clave. */
+async function marcarSinVinculo(tienda: any) {
+  await servicio.from("Store").update({ accessTokenEnc: null, status: "DISCONNECTED", lastError: MENSAJE_SIN_VINCULO, updatedAt: ahora() }).eq("id", tienda.id);
+  await aplicarPlanConjunto(tienda.userId, null, Boolean(tienda.settings?.simulada));
+}
+
+/**
+ * Si faltan menos de 14 días para que caduque la clave, pide una nueva a Retador (la anterior queda anulada en el mismo paso).
+ * Si dos llamadas lo intentan a la vez, la que pierde relee la clave que guardó la otra. Si no se puede renovar, sigue con la actual.
+ */
+async function renovarSiHaceFalta(tienda: any, token: string): Promise<{ tienda: any; token: string }> {
+  if (esSimulado(token)) return { tienda, token };
+  const caduca = Date.parse(String(tienda.settings?.token?.caduca_en ?? ""));
+  if (!Number.isFinite(caduca) || caduca - Date.now() > RENOVAR_ANTES_MS) return { tienda, token };
+  // Un solo intento por hora: si Retador no responde, no se retrasa cada llamada con la espera
+  const ultimo = Date.parse(String(tienda.settings?.renovacionIntentadaEn ?? ""));
+  if (Number.isFinite(ultimo) && Date.now() - ultimo < 3_600_000) return { tienda, token };
+  const secreto = await secretoCliente();
+  if (!secreto) return { tienda, token };
+  await servicio.from("Store").update({ settings: { ...(tienda.settings ?? {}), renovacionIntentadaEn: ahora() } }).eq("id", tienda.id);
+  tienda = { ...tienda, settings: { ...(tienda.settings ?? {}), renovacionIntentadaEn: ahora() } };
+  try {
+    const r = await llamarRetadorApp("renovar", secreto, {}, token);
+    if (typeof r.token !== "string" || !tokenConFormato(r.token)) return { tienda, token };
+    const ajustes = { ...(tienda.settings ?? {}), token: { prefijo: r.prefijo ?? r.token.slice(0, 8), caduca_en: r.caduca_en ?? null }, renovadaEn: ahora() };
+    const nueva = await cifrar(r.token);
+    const { data } = await servicio.from("Store").update({ accessTokenEnc: nueva, settings: ajustes, updatedAt: ahora() }).eq("id", tienda.id).select("*").single();
+    return { tienda: data ?? { ...tienda, settings: ajustes, accessTokenEnc: nueva }, token: r.token };
+  } catch (e) {
+    // Otra llamada ya la renovó: la clave vieja quedó anulada, pero en la base está la nueva
+    const { data: fresca } = await servicio.from("Store").select("*").eq("id", tienda.id).maybeSingle();
+    if (fresca?.accessTokenEnc && fresca.accessTokenEnc !== tienda.accessTokenEnc) {
+      try {
+        return { tienda: fresca, token: await descifrar(fresca.accessTokenEnc) };
+      } catch {
+        /* sigue con la actual */
+      }
+    }
+    console.error("retador-tienda", "renovar", (e as Error)?.message);
+    return { tienda, token };
+  }
+}
+
+/** Llama a Retador con la clave de la tienda (la renueva sola si está por caducar); si ya no sirve, la cuenta pasa a «no vinculada». */
 async function conRetador(tienda: any, accion: Parameters<typeof llamarRetador>[1], cuerpo: Record<string, unknown> = {}) {
   let token: string;
   try {
     token = await descifrar(tienda.accessTokenEnc);
   } catch (e) {
-    await marcarTiendaConError(tienda.id, (e as Error).message);
+    await marcarSinVinculo(tienda);
     throw e;
   }
+  ({ tienda, token } = await renovarSiHaceFalta(tienda, token));
   try {
     return await llamarRetador(token, accion, cuerpo);
   } catch (e) {
-    if (e instanceof ErrorRetador && CODIGOS_TOKEN_MUERTO.has(e.codigo)) await marcarTiendaConError(tienda.id, `${e.message} Vuelve a conectar Retador con un token nuevo.`);
+    if (e instanceof ErrorRetador && CODIGOS_TOKEN_MUERTO.has(e.codigo)) {
+      if (e.codigo === "vendedor_suspendido") await marcarTiendaConError(tienda.id, e.message);
+      else await marcarSinVinculo(tienda);
+    }
     throw e;
   }
 }
@@ -166,9 +253,13 @@ async function guardarConfig(tienda: any, cfg: any) {
     cupoProveedorDiario: cfg.cupo_proveedor_diario ?? null,
     token: cfg.token ?? null,
     capacidades: cfg.capacidades ?? null,
+    vendedorId: cfg.vendedor?.id ?? tienda.settings?.vendedorId ?? null,
+    planConjunto: cfg.vendedor?.plan_conjunto === true,
+    planVence: cfg.vendedor?.plan_vence ?? null,
     configActualizada: ahora(),
   };
   await servicio.from("Store").update({ settings: ajustes, status: "CONNECTED", lastError: null, lastPingAt: ahora(), updatedAt: ahora() }).eq("id", tienda.id);
+  await aplicarPlanConjunto(tienda.userId, cfg.vendedor, Boolean(ajustes.simulada));
   return ajustes;
 }
 
@@ -278,36 +369,170 @@ function contenidoFinal(entrada: any, base: ReturnType<typeof contenidoPorDefect
 
 /* ───────────────────────────── Acciones ───────────────────────────── */
 
-async function accionConectar(uid: string, cuerpo: any) {
-  const token = typeof cuerpo.token === "string" ? cuerpo.token.trim() : "";
-  if (!tokenConFormato(token)) throw new ErrorApp("token_invalido", "El token no tiene el formato correcto. Cópialo entero desde Retador (empieza por «dsp_»).");
-  if (esSimulado(token)) {
-    const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
-    if (yo?.role !== "ADMIN") throw new ErrorApp("token_invalido", "Ese token no es válido.");
-  }
+/** Guarda la clave (cifrada), crea o actualiza la tienda de Retador del usuario y lee sus tarifas. La clave nunca vuelve al navegador. */
+async function guardarTienda(uid: string, token: string, extra: Record<string, unknown> = {}) {
   const cfg = await llamarRetador(token, "config");
   const { data: previa } = await servicio.from("Store").select("*").eq("userId", uid).eq("platform", "RETADOR").maybeSingle();
   const nombre = esSimulado(token) ? "Retador (simulado)" : "Retador";
   const base = { name: nombre, domain: "retadormarketplace.es", accessTokenEnc: await cifrar(token), status: "CONNECTED", lastPingAt: ahora(), lastError: null, scopes: ["publicar", "actualizar", "retirar", "estado"], updatedAt: ahora() };
   let tienda = previa;
+  const ajustesBase = { ...(previa?.settings ?? {}), ...extra, simulada: esSimulado(token) };
   if (previa) {
-    const { data, error } = await servicio.from("Store").update(base).eq("id", previa.id).select("*").single();
-    if (error) throw new ErrorApp("error_interno", "No se pudo guardar la conexión");
+    const { data, error } = await servicio.from("Store").update({ ...base, settings: ajustesBase }).eq("id", previa.id).select("*").single();
+    if (error) throw new ErrorApp("error_interno", "No se pudo guardar la vinculación");
     tienda = data;
   } else {
-    const { data, error } = await servicio.from("Store").insert({ ...base, userId: uid, platform: "RETADOR", settings: { currency: "USD", simulada: esSimulado(token) } }).select("*").single();
-    if (error) throw new ErrorApp("error_interno", "No se pudo guardar la conexión");
+    const { data, error } = await servicio.from("Store").insert({ ...base, userId: uid, platform: "RETADOR", settings: { currency: "USD", ...ajustesBase } }).select("*").single();
+    if (error) throw new ErrorApp("error_interno", "No se pudo guardar la vinculación");
     tienda = data;
   }
-  const ajustes = await guardarConfig({ ...tienda, settings: { ...(tienda.settings ?? {}), simulada: esSimulado(token) } }, cfg);
+  const ajustes = await guardarConfig(tienda, cfg);
   return { tienda: vistaTienda({ ...tienda, settings: ajustes, status: "CONNECTED", lastError: null }) };
+}
+
+/** SOLO el Retador simulado y solo el administrador (para pruebas). La cuenta real se une con «Vincular con Retador»: nadie pega claves. */
+async function accionConectar(uid: string, cuerpo: any) {
+  const token = typeof cuerpo.token === "string" ? cuerpo.token.trim() : "";
+  if (!esSimulado(token) || !tokenConFormato(token)) throw new ErrorApp("usa_vincular", "Para unir tu cuenta con Retador usa el botón «Vincular con Retador».");
+  const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
+  if (yo?.role !== "ADMIN") throw new ErrorApp("token_invalido", "Ese acceso no es válido.");
+  return await guardarTienda(uid, token);
+}
+
+/* ───────────────────────────── Vincular con Retador (contrato 1.6) ───────────────────────────── */
+
+const URL_VINCULAR = "https://retadormarketplace.es/vincular-dropship/";
+const URL_RETORNO = "https://retadordps.github.io/HERMES-/vincular/retorno/";
+const TTL_STATE_MS = 10 * 60_000;
+const TTL_PENDIENTE_MS = 15 * 60_000;
+const STATE_VALIDO = /^[A-Za-z0-9._~-]{16,200}$/;
+
+const sha256Hex = async (s: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)))).map((b) => b.toString(16).padStart(2, "0")).join("");
+const aleatorioUrl = (bytes = 32) => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(bytes)))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+
+async function vinculoDisponible() {
+  const [cap, secreto] = await Promise.all([capacidadesDeRetador(), secretoCliente()]);
+  return cap.vincularCuenta && Boolean(secreto);
+}
+
+/** Traduce los errores de la vinculación a mensajes claros; nunca enseña datos internos (secretos, cabeceras). */
+function errorDeVinculo(e: unknown): never {
+  if (e instanceof ErrorRetador) {
+    if (e.codigo === "cliente_invalido") throw new ErrorApp("vinculo_no_configurado", "La vinculación con Retador todavía no está activada. Inténtalo más tarde.");
+    if (["codigo_invalido", "codigo_usado", "codigo_caducado"].includes(e.codigo)) throw new ErrorApp("codigo_caducado", "El permiso de Retador caducó o ya se usó. Empieza de nuevo desde «Vincular con Retador».");
+    if (e.codigo === "tope_conexiones") throw new ErrorApp("tope_conexiones", "Tienes demasiadas conexiones antiguas en Retador (el máximo es 3). Quita alguna en Retador y vuelve a intentarlo.");
+    if (e.codigo === "requisitos") throw new ErrorApp("requisitos", e.message || "Tu cuenta de Retador no cumple los requisitos para vincular.");
+  }
+  throw e;
+}
+
+async function canjearCodigo(codigo: string) {
+  const secreto = await secretoCliente();
+  if (!secreto) throw new ErrorApp("vinculo_no_configurado", "La vinculación con Retador todavía no está activada. Inténtalo más tarde.");
+  let r: any;
+  try {
+    r = await llamarRetadorApp("vincular", secreto, { codigo });
+  } catch (e) {
+    errorDeVinculo(e);
+  }
+  if (typeof r?.token !== "string" || !tokenConFormato(r.token) || esSimulado(r.token)) throw new ErrorApp("respuesta_invalida", "Retador respondió algo que no se entiende. Inténtalo de nuevo.");
+  return r;
+}
+
+const correoIgual = (a: unknown, b: unknown) => typeof a === "string" && typeof b === "string" && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+async function correoDeUsuario(uid: string): Promise<string | null> {
+  const { data } = await servicio.from("User").select("email").eq("id", uid).maybeSingle();
+  return data?.email ?? null;
+}
+
+/** Deja la respuesta de Retador guardada (cifrada, ligada al usuario) unos minutos, hasta que la persona confirme. */
+async function guardarPendiente(uid: string, tipo: "A" | "B", r: any) {
+  await servicio.from("VinculoRetador").delete().eq("userId", uid).not("respuestaEnc", "is", null);
+  const { data, error } = await servicio.from("VinculoRetador").insert({
+    userId: uid, tipo, respuestaEnc: await cifrar(JSON.stringify(r)), emailRetador: r.vendedor?.email ?? null, venceEn: new Date(Date.now() + TTL_PENDIENTE_MS).toISOString(), usadoEn: ahora(),
+  }).select("id").single();
+  if (error || !data) throw new ErrorApp("error_interno", "No se pudo preparar la vinculación. Inténtalo de nuevo.");
+  return data.id as string;
+}
+
+async function pendienteDe(uid: string) {
+  const { data } = await servicio.from("VinculoRetador").select("id,tipo,emailRetador,venceEn").eq("userId", uid).not("respuestaEnc", "is", null).gt("venceEn", ahora()).order("creadoEn", { ascending: false }).limit(1).maybeSingle();
+  if (!data) return null;
+  const correo = await correoDeUsuario(uid);
+  return { id: data.id as string, origen: data.tipo === "B" ? "retador" : "dropshippilot", emailRetador: data.emailRetador as string | null, emailCoincide: correoIgual(correo, data.emailRetador) };
+}
+
+async function accionVinculoInfo(uid: string) {
+  return { disponible: await vinculoDisponible(), pendiente: await pendienteDe(uid) };
+}
+
+async function accionVincularIniciar(uid: string) {
+  if (!(await vinculoDisponible())) throw new ErrorApp("vinculo_no_disponible", "Vincular con Retador todavía no está disponible. Inténtalo más tarde.");
+  await servicio.from("VinculoRetador").delete().eq("userId", uid).is("respuestaEnc", null);
+  const state = aleatorioUrl(32);
+  const { error } = await servicio.from("VinculoRetador").insert({ userId: uid, tipo: "A", stateHash: await sha256Hex(state), venceEn: new Date(Date.now() + TTL_STATE_MS).toISOString() });
+  if (error) throw new ErrorApp("error_interno", "No se pudo empezar la vinculación. Inténtalo de nuevo.");
+  return { url: `${URL_VINCULAR}?state=${encodeURIComponent(state)}&retorno=${encodeURIComponent(URL_RETORNO)}` };
+}
+
+/** Vuelta de Retador (empezó aquí): canjea el código y vincula. Si el correo de Retador no es el de esta cuenta, pide confirmar antes de guardar. */
+async function accionVincularCanjear(uid: string, cuerpo: any) {
+  const codigo = typeof cuerpo.codigo === "string" ? cuerpo.codigo.trim() : "";
+  const state = typeof cuerpo.state === "string" ? cuerpo.state : "";
+  if (!/^rc_[A-Za-z0-9_-]{8,200}$/.test(codigo) || !STATE_VALIDO.test(state)) throw new ErrorApp("datos_invalidos", "El enlace de vuelta desde Retador no es válido. Empieza de nuevo desde «Vincular con Retador».");
+  // El `state` solo sirve una vez, para este usuario y mientras no caduque (se gasta antes de canjear)
+  const { data: fila } = await servicio.from("VinculoRetador").update({ usadoEn: ahora() }).eq("userId", uid).eq("tipo", "A").eq("stateHash", await sha256Hex(state)).is("usadoEn", null).gt("venceEn", ahora()).select("id").maybeSingle();
+  if (!fila) throw new ErrorApp("state_invalido", "Esta vinculación caducó o ya se usó. Empieza de nuevo desde «Vincular con Retador».");
+  const r = await canjearCodigo(codigo);
+  const correo = await correoDeUsuario(uid);
+  await servicio.from("VinculoRetador").delete().eq("id", fila.id);
+  if (correoIgual(correo, r.vendedor?.email)) return { vinculada: true, emailRetador: r.vendedor?.email ?? null, ...(await vincularDefinitivo(uid, r)) };
+  return { vinculada: false, pendiente: { id: await guardarPendiente(uid, "A", r), origen: "dropshippilot", emailRetador: r.vendedor?.email ?? null, emailCoincide: false } };
+}
+
+/** Entrada desde Retador (empezó allí): canjea el código y deja la vinculación PENDIENTE; sin confirmar no se guarda nada. */
+async function accionVincularEntrada(uid: string, cuerpo: any) {
+  const codigo = typeof cuerpo.codigo === "string" ? cuerpo.codigo.trim() : "";
+  if (!/^rc_[A-Za-z0-9_-]{8,200}$/.test(codigo)) throw new ErrorApp("datos_invalidos", "El enlace de Retador no es válido. Empieza de nuevo desde Retador.");
+  try {
+    const r = await canjearCodigo(codigo);
+    return { pendiente: { id: await guardarPendiente(uid, "B", r), origen: r.iniciado_en === "dropshippilot" ? "dropshippilot" : "retador", emailRetador: r.vendedor?.email ?? null, emailCoincide: correoIgual(await correoDeUsuario(uid), r.vendedor?.email) } };
+  } catch (e) {
+    // Recargar la página gasta el código: si ya hay una vinculación pendiente de este usuario, se sigue con ella
+    const ya = e instanceof ErrorApp && e.codigo === "codigo_caducado" ? await pendienteDe(uid) : null;
+    if (ya) return { pendiente: ya };
+    throw e;
+  }
+}
+
+async function vincularDefinitivo(uid: string, r: any) {
+  const extra = { vinculada: true, vendedorId: r.vendedor?.id ?? null, emailRetador: r.vendedor?.email ?? null, vinculadaEn: ahora(), iniciadoEn: r.iniciado_en ?? "dropshippilot", token: { prefijo: String(r.token).slice(0, 8), caduca_en: r.caduca_en ?? null } };
+  return await guardarTienda(uid, r.token, extra);
+}
+
+async function accionVincularConfirmar(uid: string, cuerpo: any) {
+  const id = typeof cuerpo.id === "string" ? cuerpo.id : "";
+  const { data: fila } = await servicio.from("VinculoRetador").select("id,respuestaEnc").eq("id", id).eq("userId", uid).not("respuestaEnc", "is", null).gt("venceEn", ahora()).maybeSingle();
+  if (!fila) throw new ErrorApp("pendiente_caducada", "La vinculación caducó. Empieza de nuevo desde «Vincular con Retador».");
+  // Se borra antes de guardar: la respuesta de Retador (con la clave) no debe quedar esperando ni sirve dos veces
+  const { data: borrada } = await servicio.from("VinculoRetador").delete().eq("id", fila.id).select("id");
+  if (!borrada?.length) throw new ErrorApp("pendiente_caducada", "La vinculación ya se confirmó o caducó.");
+  const r = JSON.parse(await descifrar(fila.respuestaEnc));
+  return { vinculada: true, emailRetador: r.vendedor?.email ?? null, ...(await vincularDefinitivo(uid, r)) };
+}
+
+async function accionVincularCancelar(uid: string, cuerpo: any) {
+  await servicio.from("VinculoRetador").delete().eq("userId", uid).eq("id", String(cuerpo.id ?? ""));
+  return { cancelada: true };
 }
 
 async function accionDesconectar(uid: string, cuerpo: any) {
   const tienda = await tiendaPropia(uid, cuerpo.storeId, false);
   await servicio.from("Store").update({ accessTokenEnc: null, status: "DISCONNECTED", lastError: null, updatedAt: ahora() }).eq("id", tienda.id);
+  await aplicarPlanConjunto(uid, null, Boolean(tienda.settings?.simulada));
   const { count } = await servicio.from("Product").select("id", { count: "exact", head: true }).eq("storeId", tienda.id).not("storeProductId", "is", null);
-  return { productosEnRetador: count ?? 0, aviso: count ? "Tus productos siguen publicados en Retador, pero ya no se mantendrán actualizados desde aquí." : null };
+  return { productosEnRetador: count ?? 0, aviso: count ? "Tus productos siguen publicados en Retador, pero ya no se mantendrán actualizados desde aquí hasta que vuelvas a vincular tu cuenta." : null };
 }
 
 async function accionConfig(uid: string, cuerpo: any) {
@@ -1164,7 +1389,7 @@ Deno.serve(async (req) => {
 
   try {
     const acciones: Record<string, (uid: string, c: any) => Promise<unknown>> = {
-      conectar: accionConectar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
+      conectar: accionConectar, vinculo_info: accionVinculoInfo, vincular_iniciar: accionVincularIniciar, vincular_canjear: accionVincularCanjear, vincular_entrada: accionVincularEntrada, vincular_confirmar: accionVincularConfirmar, vincular_cancelar: accionVincularCancelar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
       publicar: accionPublicar, actualizar: accionActualizar, retirar: accionRetirar, estado: accionEstado,
       sincronizar: accionSincronizar, precio_auto: accionPrecioAuto, eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
     };

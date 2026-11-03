@@ -5,6 +5,7 @@
  *   completar_ficha {itemId}                 Descarga la ficha completa del producto (variantes, stock, peso, reseñas).
  *   cotizar_envio  {itemId, paises?}         Cotiza el envío del producto a uno o varios países (hasta 12).
  *   uso                                      Plan del usuario, límites y lo que lleva gastado (para enseñarlo en pantalla).
+ *   elegir_plan {plan}                       Paso obligatorio «Elige tu plan» al registrarse (hoy solo el Gratis; Pro y Premium se contratan en Retador).
  *
  * Reglas:
  *  · SIN lógica de proveedor: solo decide a qué función llamar según el proveedor del producto (`cj-catalogo` / `ali-catalogo`,
@@ -123,6 +124,13 @@ Deno.serve(async (req) => {
       detalle[l.tipo as string] = { ventana: l.ventana, limiteVentana: l.limiteVentana, usadoVentana, limiteDia: l.limiteDia, usadoDia, restanteVentana: Math.max(0, l.limiteVentana - usadoVentana), restanteDia: Math.max(0, l.limiteDia - usadoDia) };
     }
     return responder({ ok: true, plan: yo.plan, ilimitado: esAdmin, limites: detalle });
+  }
+
+  /* ───────── elegir_plan: paso obligatorio al registrarse. Hoy solo se puede elegir el plan Gratis (Prueba); Pro y Premium se contratan en Retador (plan conjunto) ───────── */
+  if (accion === "elegir_plan") {
+    if (String(cuerpo?.plan ?? "") !== "TRIAL") return responder({ ok: false, codigo: "plan_no_disponible", error: "Ese plan se contrata en Retador y se aplica aquí al vincular tu cuenta. Elige el plan Gratis para entrar ahora." });
+    await servicio.from("User").update({ planElegidoEn: new Date().toISOString() }).eq("id", uid).is("planElegidoEn", null);
+    return responder({ ok: true, plan: yo.plan });
   }
 
   if (accion !== "completar_ficha" && accion !== "cotizar_envio") return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });

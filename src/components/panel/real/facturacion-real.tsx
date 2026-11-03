@@ -8,12 +8,13 @@ import { CreditCard } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { obtenerPerfil, obtenerResumen } from '@/lib/real/datos';
 import { planFor } from '@/lib/plans';
+import { estadoPlan } from '@/lib/real/plan';
 import { PantallaReal, useCarga } from './comun';
 
 export function FacturacionReal() {
   const { datos, error, cargando, recargar } = useCarga(async () => {
-    const [resumen, cuenta] = await Promise.all([obtenerResumen(), obtenerPerfil()]);
-    return { resumen, ...cuenta };
+    const [resumen, cuenta, estado] = await Promise.all([obtenerResumen(), obtenerPerfil(), estadoPlan()]);
+    return { resumen, ...cuenta, vieneDeRetador: estado?.origen === 'RETADOR' };
   });
   const plan = planFor((datos?.suscripcion?.plan ?? datos?.perfil?.plan ?? 'TRIAL') as any);
 
@@ -25,7 +26,11 @@ export function FacturacionReal() {
             <CardTitle className="flex items-center gap-2 text-base">
               <CreditCard className="size-4 text-indigo-300" /> Tu plan: {plan.name}
             </CardTitle>
-            <CardDescription>Los planes de pago se activarán pronto. Hasta entonces no se te cobra nada, y te avisaremos antes de cualquier cambio.</CardDescription>
+            <CardDescription>
+              {datos.vieneDeRetador
+                ? 'Tu plan viene de Retador: es el mismo en las dos apps y aquí no se te cobra nada. Para cambiarlo, hazlo en Retador.'
+                : 'Los planes de pago se activarán pronto. Hasta entonces no se te cobra nada, y te avisaremos antes de cualquier cambio. Si ya tienes un plan en Retador, vincula tu cuenta en Tiendas y llegará solo.'}
+            </CardDescription>
           </CardHeader>
           <CardContent className="text-[12px] text-muted-foreground">Cuando estén disponibles podrás ver aquí tu plan, tus facturas y cambiar de plan.</CardContent>
         </Card>

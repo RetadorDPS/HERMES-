@@ -9,7 +9,6 @@
  */
 import { Foto } from './foto';
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, Star, X } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +19,7 @@ import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
 import { esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
 import { cn } from '@/lib/utils';
+import { BloqueVincular } from './vincular-retador';
 
 interface VarianteServidor {
   sku: string;
@@ -189,12 +189,11 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
           )}
 
           {!cargando && tienda !== undefined && (!tienda || tienda.status !== 'CONNECTED') && (
-            <Alert variant="warning" title="Primero conecta tu tienda de Retador">
-              Pega tu token de Retador en{' '}
-              <Link href="/stores" className="underline">
-                Tiendas conectadas
-              </Link>{' '}
-              y vuelve aquí.
+            <Alert variant="warning" title="Vincula tu cuenta con Retador">
+              Para publicar en Retador, primero vincula tu cuenta. Después podrás pulsar «Publicar en Retador».
+              <div className="mt-3">
+                <BloqueVincular />
+              </div>
             </Alert>
           )}
 

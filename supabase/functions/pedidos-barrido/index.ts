@@ -6,7 +6,8 @@
  * 2) Solo para los usuarios que tienen el modo AUTOMATICO (que exige 3 compras reales antes), pide a `compras-proveedor` comprar
  *    los pedidos pagados que sigan pendientes (máximo 5 por barrido). Con cualquier otro modo NO compra nada.
  *
- * Quién puede llamarla: solo el barrido programado, con la clave `monitor_secreto` del almacén de secretos (la misma del monitor).
+ * Quién puede llamarla: el barrido programado, con la clave `monitor_secreto` del almacén de secretos (la misma del monitor), o la vía
+ * interna del servidor (clave de servicio) cuando `retador-avisos` recibe un aviso de pedido: entonces llega `storeId` y solo se mira esa tienda.
  * Todo va de una en una. Esta función no habla con ningún proveedor: la compra la hace `compras-proveedor`.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -28,10 +29,15 @@ Deno.serve(async (req) => {
   const clave = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const servicio = createClient(url, clave, { auth: { persistSession: false } });
 
-  const secreto = req.headers.get("x-monitor-secreto");
-  if (!secreto) return responder({ ok: false, error: "Falta la clave del barrido" }, 401);
-  const { data: valido } = await servicio.rpc("monitor_secreto_valido", { p_secreto: secreto });
-  if (valido !== true) return responder({ ok: false, error: "Clave del barrido no válida" }, 401);
+  const interna = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "") === clave;
+  if (!interna) {
+    const secreto = req.headers.get("x-monitor-secreto");
+    if (!secreto) return responder({ ok: false, error: "Falta la clave del barrido" }, 401);
+    const { data: valido } = await servicio.rpc("monitor_secreto_valido", { p_secreto: secreto });
+    if (valido !== true) return responder({ ok: false, error: "Clave del barrido no válida" }, 401);
+  }
+  const cuerpoEntrada: any = await req.json().catch(() => ({}));
+  const soloTienda = interna && typeof cuerpoEntrada?.storeId === "string" ? cuerpoEntrada.storeId : null;
 
   const llamar = async (funcion: string, usuario: string, cuerpo: Record<string, unknown>) => {
     const res = await fetch(`${url}/functions/v1/${funcion}`, {
@@ -46,7 +52,9 @@ Deno.serve(async (req) => {
   const errores = informe.errores as string[];
 
   // 1) Sincronizar los pedidos de cada tienda de Retador real y conectada
-  const { data: tiendas } = await servicio.from("Store").select("id,userId,settings").eq("platform", "RETADOR").eq("status", "CONNECTED").limit(MAX_TIENDAS);
+  let consultaTiendas = servicio.from("Store").select("id,userId,settings").eq("platform", "RETADOR").eq("status", "CONNECTED");
+  if (soloTienda) consultaTiendas = consultaTiendas.eq("id", soloTienda);
+  const { data: tiendas } = await consultaTiendas.limit(MAX_TIENDAS);
   for (const t of tiendas ?? []) {
     if ((t.settings as any)?.simulada) continue;
     const r = await llamar("retador-tienda", t.userId, { accion: "pedidos_sincronizar", storeId: t.id });
@@ -56,7 +64,9 @@ Deno.serve(async (req) => {
   }
 
   // 2) Compra automática, solo para quien la activó (la tabla puede no existir todavía: entonces no se hace nada)
-  const { data: autos, error: eCfg } = await servicio.from("ConfigCompras").select("userId").eq("modo", "AUTOMATICO");
+  let consultaAutos = servicio.from("ConfigCompras").select("userId").eq("modo", "AUTOMATICO");
+  if (soloTienda) consultaAutos = consultaAutos.in("userId", (tiendas ?? []).map((t: any) => t.userId));
+  const { data: autos, error: eCfg } = await consultaAutos;
   if (!eCfg) {
     let hechas = 0;
     for (const a of autos ?? []) {
