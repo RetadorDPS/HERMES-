@@ -8,8 +8,11 @@ import { CreditCard } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { obtenerPerfil, obtenerResumen } from '@/lib/real/datos';
 import { planFor } from '@/lib/plans';
+import { TarjetasPlanes } from '@/components/planes/tarjetas-planes';
 import { estadoPlan } from '@/lib/real/plan';
 import { PantallaReal, useCarga } from './comun';
+
+const NOMBRE_PLAN: Record<string, string> = { TRIAL: 'Prueba', STARTER: 'Starter', PRO: 'Pro', ENTERPRISE: 'A medida' };
 
 export function FacturacionReal() {
   const { datos, error, cargando, recargar } = useCarga(async () => {
@@ -19,21 +22,23 @@ export function FacturacionReal() {
   const plan = planFor((datos?.suscripcion?.plan ?? datos?.perfil?.plan ?? 'TRIAL') as any);
 
   return (
-    <PantallaReal titulo="Facturación" subtitulo="Tu plan" cargando={cargando} error={error} alRecargar={recargar} tour="screen:billing">
+    <PantallaReal titulo="Facturación" subtitulo="Tu plan y los planes disponibles" cargando={cargando} error={error} alRecargar={recargar} tour="screen:billing">
       {datos && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <CreditCard className="size-4 text-indigo-300" /> Tu plan: {plan.name}
-            </CardTitle>
-            <CardDescription>
-              {datos.vieneDeRetador
-                ? 'Tu plan viene de Retador: es el mismo en las dos apps y aquí no se te cobra nada. Para cambiarlo, hazlo en Retador.'
-                : 'Los planes de pago se activarán pronto. Hasta entonces no se te cobra nada, y te avisaremos antes de cualquier cambio. Si ya tienes un plan en Retador, vincula tu cuenta en Tiendas y llegará solo.'}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="text-[12px] text-muted-foreground">Cuando estén disponibles podrás ver aquí tu plan, tus facturas y cambiar de plan.</CardContent>
-        </Card>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <CreditCard className="size-4 text-indigo-300" /> Tu plan: {plan.name}
+              </CardTitle>
+              <CardDescription>
+                {datos.vieneDeRetador
+                  ? 'Tu plan viene de Retador: es el mismo en las dos apps y aquí no se te cobra nada. Para cambiarlo, hazlo en Retador.'
+                  : 'Hoy no se te cobra nada. Los planes de pago se activan muy pronto y te avisaremos antes de cualquier cambio. Si ya tienes un plan en Retador, vincula tu cuenta en Tiendas y llegará solo.'}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+          <TarjetasPlanes modo="facturacion" planActual={NOMBRE_PLAN[plan.tier] ?? 'Prueba'} />
+        </div>
       )}
     </PantallaReal>
   );

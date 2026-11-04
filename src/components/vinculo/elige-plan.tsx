@@ -7,21 +7,13 @@
  */
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, ExternalLink, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AuthShell } from '@/components/auth/auth-shell';
 import { useSesion } from '@/components/auth/sesion';
 import { BloqueVincular } from '@/components/panel/real/vincular-retador';
+import { TarjetasPlanes } from '@/components/planes/tarjetas-planes';
 import { elegirPlanGratis, estadoPlan } from '@/lib/real/plan';
-
-const PLANES = [
-  { id: 'gratis', nombre: 'Gratis', productos: 'Hasta 10 productos', herramientas: '5 fichas completas y 10 cotizaciones de envío para probar', gratis: true },
-  { id: 'pro', nombre: 'Pro', productos: 'Hasta 50 productos', herramientas: '20 fichas completas y 60 cotizaciones de envío al mes', gratis: false },
-  { id: 'premium', nombre: 'Premium', productos: 'Hasta 500 productos', herramientas: '80 fichas completas y 300 cotizaciones de envío al mes', gratis: false },
-];
 
 export function ElegirPlan() {
   const router = useRouter();
@@ -71,44 +63,27 @@ export function ElegirPlan() {
   }
 
   return (
-    <AuthShell title="Elige tu plan" subtitle="Todos empiezan gratis. Pro y Premium se contratan en Retador y sirven en las dos apps.">
-      <div className="space-y-4">
+    <main className="relative min-h-screen overflow-x-clip px-4 py-10 sm:px-6">
+      <div className="pointer-events-none absolute inset-0 -z-10">
+        <div className="absolute -left-32 -top-32 size-[520px] rounded-full bg-indigo-600/20 blur-[120px]" />
+        <div className="absolute -bottom-40 -right-24 size-[520px] rounded-full bg-cyan-500/10 blur-[120px]" />
+      </div>
+      <div className="mx-auto w-full max-w-6xl space-y-8">
+        <header className="text-center">
+          <div className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-xl text-white shadow-lg shadow-indigo-500/25">⚡</div>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Elige tu plan</h1>
+          <p className="mx-auto mt-2 max-w-2xl text-sm text-muted-foreground">
+            Empiezas gratis y sin tarjeta. Cuando tu tienda crezca, un plan conjunto te da tu tienda de Retador y las herramientas de DropshipPilot en una sola cuenta y con un solo pago.
+          </p>
+        </header>
         {error && <Alert variant="danger">{error}</Alert>}
-        <div className="space-y-3">
-          {PLANES.map((p) => (
-            <Card key={p.id} className={p.gratis ? 'border-indigo-500/30' : ''}>
-              <CardHeader className="pb-2">
-                <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-                  {p.nombre}
-                  {p.gratis && <Badge variant="success">Entras al momento</Badge>}
-                </CardTitle>
-                <CardDescription>{p.productos}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-[13px]">
-                <p className="flex items-start gap-2 text-muted-foreground">
-                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-300" /> {p.herramientas}
-                </p>
-                {p.gratis ? (
-                  <Button variant="gradient" className="w-full" disabled={ocupado} onClick={() => void empezarGratis()}>
-                    {ocupado && <Loader2 className="size-4 animate-spin" />} Empezar con el plan Gratis
-                  </Button>
-                ) : (
-                  <Button asChild variant="outline" className="w-full">
-                    <a href="https://retadormarketplace.es/" target="_blank" rel="noopener noreferrer">
-                      Contratar en Retador <ExternalLink className="size-3.5" />
-                    </a>
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+        <TarjetasPlanes modo="elegir" alEmpezarGratis={() => void empezarGratis()} ocupado={ocupado} />
+        <div className="mx-auto max-w-xl space-y-2 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <p className="text-[13px] font-medium">¿Ya tienes un plan en Retador?</p>
           <p className="text-[12px] text-muted-foreground">Vincula tu cuenta y tu plan llega solo, sin pagar dos veces.</p>
           <BloqueVincular alVincular={() => router.replace('/dashboard')} />
         </div>
       </div>
-    </AuthShell>
+    </main>
   );
 }
