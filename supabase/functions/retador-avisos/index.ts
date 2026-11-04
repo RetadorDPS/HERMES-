@@ -62,8 +62,19 @@ async function llamarInterna(funcion: string, usuario: string | null, cuerpo: Re
   return await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
 }
 
-/** Hace el trabajo de un aviso ya aceptado. Si falla, queda anotado y Retador volverá a mandarlo solo si no se respondió 2xx (aquí ya se respondió), así que el barrido de seguridad lo cubre. */
+/** Hace el trabajo de un aviso ya aceptado. Si falla, queda anotado y el barrido de seguridad lo cubre (aquí ya se respondió 2xx). */
 async function procesar(aviso: any) {
+  // «Tarifas cambiadas» es un aviso general (sin vendedor): se relee la configuración de TODAS las tiendas vinculadas, de una en una
+  if (aviso.tipo === "tarifas_cambiadas" && !aviso.vendedor_id) {
+    const { data: tiendas } = await servicio.from("Store").select("id,userId,settings").eq("platform", "RETADOR").eq("status", "CONNECTED").limit(50);
+    let hechas = 0;
+    for (const t of tiendas ?? []) {
+      if ((t.settings as any)?.simulada) continue;
+      await llamarInterna("retador-tienda", t.userId, { accion: "config", storeId: t.id });
+      hechas += 1;
+    }
+    return { tiendas: hechas };
+  }
   const { data: tienda } = await servicio.from("Store").select("id,userId,settings").eq("platform", "RETADOR").eq("settings->>vendedorId", String(aviso.vendedor_id ?? "")).eq("status", "CONNECTED").maybeSingle();
   if (!tienda) return { omitido: "sin_tienda_vinculada" };
   switch (aviso.tipo) {
