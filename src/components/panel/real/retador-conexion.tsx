@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/card";
 import { obtenerPerfil } from "@/lib/real/datos";
 import {
+  desvincularCuenta,
   llamarTienda,
   obtenerTiendaRetador,
   type TiendaRetador,
@@ -239,10 +240,7 @@ export function RetadorConexion() {
                     )
                       return;
                     void ejecutar("desconectar", async () => {
-                      const r = await llamarTienda<{ aviso: string | null }>({
-                        accion: "desconectar",
-                        storeId: tienda.id,
-                      });
+                      const r = await desvincularCuenta(tienda.id);
                       return r.aviso ?? "Cuenta desvinculada de Retador.";
                     });
                   }}

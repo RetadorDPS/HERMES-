@@ -251,3 +251,20 @@ export function tomarVolver(): string {
   }
   return '/stores';
 }
+
+/** Desvincula la cuenta: anula la clave en Retador y la olvida aquí (función `retador-desvincular`). Los productos ya publicados siguen en Retador. */
+export async function desvincularCuenta(storeId: string): Promise<{ productosEnRetador: number; aviso: string | null }> {
+  const { data, error } = await supabase().functions.invoke('retador-desvincular', { body: { storeId } });
+  if (error) {
+    let mensaje = 'No se pudo contactar con el servidor. Revisa tu conexión e inténtalo de nuevo.';
+    try {
+      const c = await (error as any).context?.json?.();
+      if (c?.error) mensaje = c.error;
+    } catch {
+      /* mensaje general */
+    }
+    throw new ErrorTiendaRetador(mensaje, 'red');
+  }
+  if (!data?.ok) throw new ErrorTiendaRetador(data?.error ?? 'No se pudo desvincular.', data?.codigo ?? 'desconocido');
+  return data;
+}
