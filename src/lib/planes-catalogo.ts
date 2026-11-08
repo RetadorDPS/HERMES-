@@ -13,7 +13,7 @@ export type CicloPlan = 'mensual' | 'anual';
 export const MESES_DE_ANUAL = 10;
 
 /** Lo que cobra Retador por sus propios planes (USD/mes). null = todavía no confirmado por Retador. */
-export const RETADOR_PRO_USD: number | null = null;
+export const RETADOR_PRO_USD: number | null = 22;
 export const RETADOR_PREMIUM_USD = 45;
 
 export interface PlanTarjeta {

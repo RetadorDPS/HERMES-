@@ -657,7 +657,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
             }}
           />
         )}
-        {publicando === 'RETADOR' && item && <PublicarEnRetador itemId={item.id} titulo={ficha?.titulo ?? item.title} onClose={() => setPublicando(null)} />}
+        {publicando === 'RETADOR' && item && <PublicarEnRetador itemId={item.id} titulo={ficha?.titulo ?? item.title} categoriaProveedor={ruta || item.categoryName || null} onClose={() => setPublicando(null)} />}
       </aside>
     </div>
   );

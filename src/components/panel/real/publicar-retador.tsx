@@ -18,6 +18,7 @@ import { DEFAULT_RULE } from '@/lib/pricing';
 import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
 import { esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
+import { sugerirCategoria } from '@/lib/retador/sugerir-categoria';
 import { cn } from '@/lib/utils';
 import { BloqueVincular } from './vincular-retador';
 
@@ -48,11 +49,11 @@ interface Preparacion {
 const usd = (n: number) => `${n.toFixed(2)} USD`;
 const MAX_VARIANTES = 12;
 
-/** Códigos de variante que Retador acepta hoy (sin espacios ni comillas, hasta 100 caracteres). Los de CJ suelen llevar espacios y Retador los rechaza con «Cada variante necesita su sku». */
-const SKU_ADMITIDO_POR_RETADOR = /^[^\s<>"']{1,100}$/;
-const MOTIVO_SKU = 'un código de variante que Retador admita (el de este producto lleva espacios y Retador todavía no los acepta; ya se le ha pedido que los admita)';
+/** Códigos de variante que Retador acepta (9/11/2026): con espacios normales, sin comillas, < >, saltos de línea ni caracteres de control, hasta 100 caracteres. */
+const SKU_ADMITIDO_POR_RETADOR = /^[^<>"'\u0000-\u001f\u007f]{1,100}$/;
+const MOTIVO_SKU = 'un código de variante que Retador admita (lleva comillas, signos de mayor o menor, o más de 100 caracteres)';
 
-export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string; titulo: string; onClose: () => void }) {
+export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose }: { itemId: string; titulo: string; categoriaProveedor?: string | null; onClose: () => void }) {
   const [tienda, setTienda] = useState<TiendaRetador | null | undefined>(undefined);
   const [prep, setPrep] = useState<Preparacion | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +117,8 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
   }, [itemId]);
 
   const categoria = prep?.categorias.find((c) => c.cat === cat);
+  // Sugerencia (nunca se aplica sola): la categoría más cercana de Retador según la del proveedor y el título
+  const sugerencia = useMemo(() => (prep ? sugerirCategoria(prep.categorias, tituloEdit || titulo, categoriaProveedor) : null), [prep, tituloEdit, titulo, categoriaProveedor]);
   const marcadas = prep?.variantes.filter((v) => elegidas[v.sku]) ?? [];
 
   /** Cuentas por variante con lo que escribe el usuario. */
@@ -207,7 +210,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
 
           {prep && !hecho && !prep.yaPublicado && prep.variantes.length > 0 && prep.variantes.every((v) => v.faltan.includes(MOTIVO_SKU)) && (
             <Alert variant="warning" title="Este producto todavía no se puede publicar en Retador">
-              Los códigos de todas sus variantes llevan espacios y Retador todavía no los acepta. Ya se le ha pedido que los admita; en cuanto lo haga podrás publicarlo desde aquí sin cambiar nada.
+              Los códigos de todas sus variantes llevan comillas, signos de mayor o menor, o pasan de 100 caracteres, y Retador no los acepta.
             </Alert>
           )}
 
@@ -344,6 +347,24 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
               </section>
 
               {/* Dónde se publica */}
+              {sugerencia && !(cat === sugerencia.cat && subcat === sugerencia.subcat) && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-indigo-400/25 bg-indigo-400/[0.06] p-2.5 text-[12px]">
+                  <span className="min-w-0 flex-1">
+                    Categoría sugerida: <b>{sugerencia.nombreCat} › {sugerencia.subcat}</b>
+                    {categoriaProveedor ? <span className="text-muted-foreground"> (según «{categoriaProveedor}»)</span> : null}. Revísala antes de usarla.
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setCat(sugerencia.cat);
+                      setSubcat(sugerencia.subcat);
+                    }}
+                  >
+                    Usar esta
+                  </Button>
+                </div>
+              )}
               <section className="grid gap-2 sm:grid-cols-3">
                 <label className="space-y-1 text-[12px]">
                   <span className="text-muted-foreground">Categoría en Retador</span>
