@@ -45,6 +45,8 @@ interface Respuesta {
   detalleError?: unknown;
   formaRespuesta?: string[];
   forma?: { claves?: string[] };
+  recibidos?: number;
+  guardados?: number;
   urlRetorno?: string;
   urlAutorizacion?: string;
   autorizada?: boolean;
@@ -84,6 +86,48 @@ async function articulosSinFicha(proveedor: Proveedor, cantidad: number): Promis
 }
 
 const DESTINOS_DEFECTO = 12;
+
+/* ───────── Descarga de CJ por páginas: recuerda por categoría la siguiente página para no repetir siempre las mismas ───────── */
+
+const claveCursor = (categoria: string) => `hermes-cj-descarga:${categoria || 'todas'}`;
+const leerCursor = (categoria: string): number | null => {
+  try {
+    const v = Number(localStorage.getItem(claveCursor(categoria)));
+    return Number.isInteger(v) && v >= 1 ? v : null;
+  } catch {
+    return null;
+  }
+};
+const guardarCursor = (categoria: string, pagina: number | null) => {
+  try {
+    if (pagina === null) localStorage.removeItem(claveCursor(categoria));
+    else localStorage.setItem(claveCursor(categoria), String(pagina));
+  } catch {
+    /* sin almacenamiento: la siguiente vez se calcula con lo ya descargado */
+  }
+};
+
+/** Cuántos productos de CJ hay ya guardados (en una categoría o en total). */
+async function contarCj(categoria: string): Promise<number> {
+  let c = supabase().from('CatalogItem').select('id', { count: 'exact', head: true }).eq('provider', 'CJ_DROPSHIPPING');
+  if (categoria) c = c.eq('categoryId', categoria);
+  const { count, error } = await c;
+  if (error) throw new Error(error.message);
+  return count ?? 0;
+}
+
+/** Página por la que seguir: la recordada; si no hay, se calcula con lo ya descargado (así no se repiten las primeras páginas). */
+async function paginaSiguiente(categoria: string, tamano: number): Promise<number> {
+  const guardada = leerCursor(categoria);
+  if (guardada) return guardada;
+  return Math.floor((await contarCj(categoria)) / tamano) + 1;
+}
+
+interface CategoriaCj {
+  externalId: string;
+  name: string;
+  parentName: string | null;
+}
 
 /** Elige, entre los artículos del proveedor con ficha, el MÁS POPULAR al que todavía le faltan cotizaciones de envío. */
 async function articuloSinEnvio(proveedor: Proveedor): Promise<string | null> {
@@ -210,6 +254,9 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
   const [cantidades, setCantidades] = useState({ descargar: esCj ? 150 : 50, detalle: esCj ? 3 : 1, envio: 1, almacen: 50 });
   const [progreso, setProgreso] = useState<string | null>(null);
   const detener = useRef(false);
+  const [categorias, setCategorias] = useState<CategoriaCj[]>([]);
+  const [categoriaId, setCategoriaId] = useState('');
+  const [seguira, setSeguira] = useState<number | null>(null);
   const LIMITES = { descargar: esCj ? 500 : 150, detalle: 30, envio: 10, almacen: 50 };
   const fijar = (clave: keyof typeof cantidades, valor: string) => {
     const n = Math.floor(Number(valor));
@@ -226,6 +273,26 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     setResultado(estado === 'ok' ? { ok: true, mensaje } : { ok: false, error: mensaje || 'La autorización no se completó' });
     window.history.replaceState(null, '', window.location.pathname);
   }, [esCj]);
+
+  // Categorías de CJ (salen de «1. Descargar categorías») para llenar el catálogo categoría por categoría
+  useEffect(() => {
+    if (!esCj) return;
+    let vivo = true;
+    supabase()
+      .from('CatalogCategory')
+      .select('externalId,name,parentName')
+      .eq('provider', 'CJ_DROPSHIPPING')
+      .order('parentName', { ascending: true })
+      .order('name', { ascending: true })
+      .limit(2000)
+      .then(({ data }) => vivo && setCategorias((data ?? []) as CategoriaCj[]));
+    return () => {
+      vivo = false;
+    };
+  }, [esCj, resultado]);
+  useEffect(() => {
+    if (esCj) setSeguira(leerCursor(categoriaId));
+  }, [esCj, categoriaId, resultado]);
 
   /** Repite una llamada de una en una (con progreso y botón «Detener») y junta el resultado en un mensaje claro. */
   const enSerie = async (total: number, unidad: string, paso: (i: number) => Promise<Respuesta | 'fin'>) => {
@@ -256,6 +323,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     setResultado(null);
     try {
       if (accion === 'probar' || accion === 'categorias' || accion === 'feeds' || accion === 'sondear' || accion === 'autorizar') setResultado(await invocar(proveedor, { accion }));
+      else if (accion === 'descargar' && esCj) await descargarCj();
       else if (accion === 'descargar') {
         // Se reparte en páginas de hasta 50 (CJ) o de hasta 50 (AliExpress), una llamada por página
         const n = cantidades.descargar;
@@ -278,6 +346,60 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     } finally {
       setTrabajando(null);
     }
+  };
+
+  /** Descarga de CJ por páginas, SIEMPRE por donde se quedó la vez anterior (por categoría). Una página por llamada, en serie. */
+  const descargarCj = async () => {
+    detener.current = false;
+    const n = cantidades.descargar;
+    const paginas = Math.ceil(n / 50);
+    const tamano = Math.ceil(n / paginas);
+    const antes = await contarCj('');
+    let pagina = await paginaSiguiente(categoriaId, tamano);
+    const desdePagina = pagina;
+    let guardados = 0;
+    let recibidos = 0;
+    let llamadas = 0;
+    let fin: string | null = null;
+    let fallo: string | null = null;
+    for (let i = 0; i < paginas; i += 1) {
+      if (detener.current) break;
+      setProgreso(`Descargando de CJ, página ${pagina} (${i + 1} de ${paginas})…`);
+      const r = await invocar('CJ_DROPSHIPPING', { accion: 'descargar', paginas: 1, tamano, orden: 1, paginaInicial: pagina, ...(categoriaId ? { categoryId: categoriaId } : {}) });
+      if (!r.ok) {
+        fallo = r.error ?? 'Falló una llamada';
+        break;
+      }
+      llamadas += r.llamadasACj ?? 1;
+      const hubo = r.recibidos ?? 0;
+      recibidos += hubo;
+      guardados += r.guardados ?? 0;
+      if (hubo === 0) {
+        fin = 'Ya descargaste todos los productos de esta categoría. La próxima vez empezará otra vez desde la página 1.';
+        guardarCursor(categoriaId, null);
+        break;
+      }
+      pagina += 1;
+      guardarCursor(categoriaId, pagina);
+      if (hubo < tamano) {
+        fin = 'Era la última página de esta categoría. La próxima vez empezará otra vez desde la página 1.';
+        guardarCursor(categoriaId, null);
+        break;
+      }
+    }
+    setProgreso(null);
+    const despues = await contarCj('').catch(() => antes);
+    const nuevos = Math.max(0, despues - antes);
+    const soloActualizados = Math.max(0, guardados - nuevos);
+    const parada = detener.current ? ' (detenido por ti)' : '';
+    if (fallo) {
+      setResultado({ ok: false, error: `${fallo} — se guardaron ${guardados} productos (${nuevos} nuevos)${parada}.`, llamadasACj: llamadas });
+      return;
+    }
+    const resumen = recibidos
+      ? `Páginas ${desdePagina} a ${Math.max(desdePagina, pagina - (fin ? 0 : 1))}: ${recibidos} recibidos de CJ · ${nuevos} NUEVOS · ${soloActualizados} que ya tenías y solo se actualizaron${parada}.`
+      : '';
+    setResultado({ ok: true, mensaje: `${resumen} ${fin ?? ''}`.trim() || `Sin productos nuevos${parada}.`, llamadasACj: llamadas });
   };
 
   /** Descarga de CJ por almacén: solo productos con existencias en ese país, anotando el almacén en cada uno. */
@@ -338,6 +460,44 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
         </div>
         <div className="space-y-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
           <p className="text-[12px] font-medium">Cuántos quieres en cada pulsación</p>
+          {esCj && (
+            <div className="space-y-1.5 rounded-lg border border-white/[0.07] p-2">
+              <label className="flex flex-wrap items-center gap-2 text-[12px]">
+                Categoría de CJ para «2. Descargar productos populares»
+                <select
+                  value={categoriaId}
+                  onChange={(e) => setCategoriaId(e.target.value)}
+                  disabled={trabajando !== null}
+                  className="h-9 min-w-0 max-w-full flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]"
+                  aria-label="Categoría de CJ"
+                >
+                  <option value="">Todas las categorías (los más populares de CJ)</option>
+                  {categorias.map((c) => (
+                    <option key={c.externalId} value={c.externalId}>
+                      {c.parentName ? `${c.parentName} › ${c.name}` : c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                {seguira ? `Seguirá desde la página ${seguira}. ` : 'Empezará por donde dejaste lo ya descargado. '}
+                {seguira && (
+                  <button
+                    type="button"
+                    className="text-indigo-300 underline-offset-2 hover:underline"
+                    disabled={trabajando !== null}
+                    onClick={() => {
+                      guardarCursor(categoriaId, 1);
+                      setSeguira(1);
+                    }}
+                  >
+                    Empezar desde el principio
+                  </button>
+                )}
+                {categorias.length === 0 && ' Pulsa «1. Descargar categorías» para ver la lista de categorías.'}
+              </p>
+            </div>
+          )}
           <div className="grid gap-2 sm:grid-cols-3">
             {cantidad('descargar', esCj ? '2. Descargar productos populares' : '2. Descargar productos más vendidos', 'productos', `Máx. ${LIMITES.descargar}. Una llamada por cada 50.`)}
             {cantidad('detalle', '3. Completar fichas', 'fichas', `Máx. ${LIMITES.detalle}. Una llamada por ficha (la más popular primero).`)}

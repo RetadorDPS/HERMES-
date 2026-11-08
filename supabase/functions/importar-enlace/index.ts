@@ -21,7 +21,7 @@ import { analizarEnlace, hostEsEnlaceCortoAli, hostPermitidoAli, type ProveedorE
 
 const FUNCION: Record<ProveedorEnlace, string> = { CJ_DROPSHIPPING: "cj-catalogo", ALIEXPRESS: "ali-catalogo" };
 const NOMBRE: Record<ProveedorEnlace, string> = { CJ_DROPSHIPPING: "CJ Dropshipping", ALIEXPRESS: "AliExpress" };
-const LIMITE_USUARIO_DIA = 15;
+const LIMITE_USUARIO_DIA = 15; // por persona y día (salvo quien esté en `UsuarioSinLimite`)
 const LIMITE_GLOBAL_DIA = 120;
 const VENTANA_BLOQUEO_MS = 120_000;
 const FICHA_VIEJA_MS = 7 * 24 * 3_600_000; // una ficha de más de 7 días se vuelve a leer (el precio puede haber cambiado)
@@ -117,7 +117,9 @@ Deno.serve(async (req) => {
   // ── Límites y exclusión mutua ──
   const desde24h = new Date(Date.now() - 24 * 3_600_000).toISOString();
   const { count: delUsuario } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("userId", uid).gte("createdAt", desde24h).neq("estado", "sin_llamada");
-  if ((delUsuario ?? 0) >= LIMITE_USUARIO_DIA) return falla(`Has llegado al máximo de ${LIMITE_USUARIO_DIA} importaciones por enlace al día. Vuelve a intentarlo mañana; mientras tanto puedes usar el catálogo.`, { motivo: "limite_usuario" });
+  // Quien está marcado «sin límite» (tabla privada que solo cambia el administrador) no tiene el tope diario PERSONAL; el tope por proveedor de más abajo sigue valiendo para no agotar la cuota de CJ y AliExpress
+  const { data: marcaSinLimite } = await servicio.from("UsuarioSinLimite").select("userId").eq("userId", uid).maybeSingle();
+  if (!marcaSinLimite && (delUsuario ?? 0) >= LIMITE_USUARIO_DIA) return falla(`Has llegado al máximo de ${LIMITE_USUARIO_DIA} importaciones por enlace al día. Vuelve a intentarlo mañana; mientras tanto puedes usar el catálogo.`, { motivo: "limite_usuario" });
   const { count: globales } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("provider", proveedor).gte("createdAt", desde24h).neq("estado", "sin_llamada");
   if ((globales ?? 0) >= LIMITE_GLOBAL_DIA) return falla(`Hoy ya se han hecho muchas importaciones desde ${NOMBRE[proveedor]} y se pausa para no agotar su cuota. Vuelve a intentarlo mañana.`, { motivo: "limite_global" });
 

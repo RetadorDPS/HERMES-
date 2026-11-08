@@ -13,7 +13,8 @@
  *  · Si la ficha o la cotización ya están al día en el catálogo común, NO se llama al proveedor y NO se gasta cupo.
  *  · Se gasta el cupo antes de llamar (todo o nada) y se DEVUELVE si el proveedor falla.
  *  · Nunca dos consultas a la vez contra el mismo proveedor (turno con caducidad): AliExpress corta con `AppApiCallLimit` si se llama en paralelo.
- *  · El administrador no tiene límite de plan (usa las mismas herramientas para mantener el catálogo).
+ *  · El administrador no tiene límite de plan (usa las mismas herramientas para mantener el catálogo). Tampoco las personas marcadas en la tabla privada
+ *    `UsuarioSinLimite` (solo el administrador las marca): sin límite de cupo, pero sin ningún otro permiso de administrador.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -108,6 +109,9 @@ Deno.serve(async (req) => {
   const { data: yo } = await servicio.from("User").select("role,plan").eq("id", uid).maybeSingle();
   if (!yo) return responder({ ok: false, codigo: "sesion", error: "No se encontró tu cuenta" }, 401);
   const esAdmin = yo.role === "ADMIN";
+  // «Sin límite» por persona (tabla privada que solo cambia el administrador): no cuenta cupo de fichas ni de cotizaciones, pero NO tiene ningún otro permiso de administrador
+  const { data: marcaSinLimite } = await servicio.from("UsuarioSinLimite").select("userId").eq("userId", uid).maybeSingle();
+  const sinLimite = esAdmin || Boolean(marcaSinLimite);
 
   /* ───────── uso: plan, límites y lo gastado ───────── */
   if (accion === "uso") {
@@ -123,7 +127,7 @@ Deno.serve(async (req) => {
       const usadoDia = (usos ?? []).find((u: any) => u.tipo === l.tipo && u.clave === dia)?.usado ?? 0;
       detalle[l.tipo as string] = { ventana: l.ventana, limiteVentana: l.limiteVentana, usadoVentana, limiteDia: l.limiteDia, usadoDia, restanteVentana: Math.max(0, l.limiteVentana - usadoVentana), restanteDia: Math.max(0, l.limiteDia - usadoDia) };
     }
-    return responder({ ok: true, plan: yo.plan, ilimitado: esAdmin, limites: detalle });
+    return responder({ ok: true, plan: yo.plan, ilimitado: sinLimite, limites: detalle });
   }
 
   /* ───────── elegir_plan: paso obligatorio al registrarse. Hoy solo se puede elegir el plan Gratis (Prueba); Pro y Premium se contratan en Retador (plan conjunto) ───────── */
@@ -168,7 +172,7 @@ Deno.serve(async (req) => {
 
   let cupoGastado = false;
   try {
-    if (!esAdmin) {
+    if (!sinLimite) {
       const c = await servicio.rpc("consumir_cuota", { p_user: uid, p_tipo: tipo, p_cantidad: cantidad });
       if (c.error) return responder({ ok: false, codigo: "cuota", error: "No se pudo comprobar tu límite. Inténtalo de nuevo en un momento." });
       if (!(c.data as any)?.permitido) return responder({ ok: false, codigo: "cuota", error: mensajeDeCuota(tipo, c.data), cuota: c.data });
