@@ -70,6 +70,8 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   const [fotos, setFotos] = useState<string[]>([]);
   // Por defecto el precio sigue la regla del vendedor cuando cambie el coste del proveedor (se puede quitar)
   const [precioAuto, setPrecioAuto] = useState(true);
+  // Confirmación explícita cuando el precio solo deja ganancia si el comprador cubre el envío
+  const [aceptoRiesgoEnvio, setAceptoRiesgoEnvio] = useState(false);
 
   useEffect(() => {
     let vivo = true;
@@ -123,7 +125,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
 
   /** Cuentas por variante con lo que escribe el usuario. */
   const cuentas = useMemo(() => {
-    const m = new Map<string, { precio: number; neto: number; margen: number; minimo: number } | null>();
+    const m = new Map<string, { precio: number; neto: number; margen: number; minimo: number; costeProducto: number; pasarela: number; comision: number; envio: number; netoSiPagasElEnvio: number } | null>();
     if (!prep?.tarifas) return m;
     for (const v of prep.variantes) {
       const precio = Number(precios[v.sku]);
@@ -132,7 +134,20 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         continue;
       }
       const l = liquidacion(precio, v.coste.total, prep.tarifas, v.coste.producto);
-      m.set(v.sku, { precio, neto: l.neto, margen: l.margenNetoPct, minimo: precioMinimoSinPerdida(v.coste.total, prep.tarifas, v.coste.producto) });
+      // Envío estimado = coste puesto en Cuba − costo del producto (0 si no se pudo estimar)
+      const envio = v.coste.sinEnvio ? 0 : Math.max(0, Math.round((v.coste.total - v.coste.producto) * 100) / 100);
+      m.set(v.sku, {
+        precio,
+        neto: l.neto,
+        margen: l.margenNetoPct,
+        minimo: precioMinimoSinPerdida(v.coste.total, prep.tarifas, v.coste.producto),
+        costeProducto: v.coste.producto,
+        pasarela: l.pasarela,
+        comision: l.comision,
+        envio,
+        // Caso más prudente: si el dinero del envío no llegara al vendedor, el envío saldría de su neto
+        netoSiPagasElEnvio: Math.round((l.neto - envio) * 100) / 100,
+      });
     }
     return m;
   }, [prep, precios]);
@@ -142,11 +157,16 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
     return !c || c.neto < 0 || c.precio < c.minimo;
   });
   const sinPrecio = marcadas.filter((v) => !cuentas.get(v.sku));
+  const riesgoEnvio = marcadas.filter((v) => {
+    const c = cuentas.get(v.sku);
+    return Boolean(c && c.envio > 0 && c.netoSiPagasElEnvio < 0);
+  });
   const problemas: string[] = [];
   if (!marcadas.length) problemas.push('Elige al menos una variante.');
-  if (marcadas.length > MAX_VARIANTES) problemas.push(`Como máximo ${MAX_VARIANTES} variantes.`);
+  if (marcadas.length > MAX_VARIANTES) problemas.push(`Has elegido ${marcadas.length} variantes y Retador admite ${MAX_VARIANTES} como máximo: quita ${marcadas.length - MAX_VARIANTES}.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
   if (perdidas.length) problemas.push(esContratoV13(prep?.tarifas) ? 'Hay variantes por debajo del precio mínimo (el del Importador de Retador) o con las que perderías dinero. Sube el precio.' : 'Hay variantes por debajo del precio mínimo (coste estimado). Sube el precio.');
+  if (riesgoEnvio.length && !aceptoRiesgoEnvio) problemas.push('Con algún precio perderías dinero si el envío no lo cubre el comprador: súbelo o confirma abajo que lo entiendes.');
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
   if (tituloEdit.length > 150) problemas.push('El título pasa de 150 caracteres.');
@@ -253,10 +273,21 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                     ? 'El envío al comprador lo cotiza Retador cuando compra y se paga aparte: no forma parte del precio. Aquí solo se estima con las cotizaciones del proveedor.'
                     : 'Coste estimado = producto + envío estimado.'}
                 </p>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
+                  <span className={cn(marcadas.length > MAX_VARIANTES ? 'font-medium text-rose-300' : 'text-muted-foreground')}>
+                    Elegidas: <b>{marcadas.length}</b> de {MAX_VARIANTES} (Retador admite {MAX_VARIANTES} como máximo por producto){prep.variantes.length > MAX_VARIANTES ? ` · este producto tiene ${prep.variantes.length}` : ''}
+                  </span>
+                  {marcadas.length > 0 && (
+                    <button type="button" className="rounded-md px-2 py-1 text-indigo-300 hover:bg-white/10" onClick={() => setElegidas({})}>
+                      Quitar todas
+                    </button>
+                  )}
+                </div>
                 <div className="space-y-2">
                   {prep.variantes.map((v) => {
                     const c = cuentas.get(v.sku);
                     const activa = Boolean(elegidas[v.sku]);
+                    const llenas = !activa && marcadas.length >= MAX_VARIANTES;
                     return (
                       <div key={v.sku} className={cn('rounded-lg border p-2.5 text-[12px]', activa ? 'border-indigo-400/40 bg-indigo-500/[0.06]' : 'border-white/10 bg-white/[0.02]', !v.coste && 'opacity-70')}>
                         <label className="flex items-start gap-2">
@@ -264,7 +295,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                             type="checkbox"
                             className="mt-0.5"
                             checked={activa}
-                            disabled={!v.coste}
+                            disabled={!v.coste || llenas}
                             onChange={(e) => setElegidas((x) => ({ ...x, [v.sku]: e.target.checked }))}
                           />
                           {v.imagen && (
@@ -310,12 +341,37 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                             </label>
                             {c ? (
                               <span className={cn('font-medium', c.neto < 0 || c.precio < c.minimo ? 'text-rose-300' : 'text-emerald-300')}>
-                                Te quedan {usd(c.neto)} netos ({c.margen.toFixed(0)} %)
+                                {c.envio > 0 ? 'Sin contar el envío, te quedan' : 'Te quedan'} {usd(c.neto)} netos ({c.margen.toFixed(0)} %)
                                 {c.precio < c.minimo && ` · mínimo ${usd(c.minimo)}`}
                               </span>
                             ) : (
                               <span className="text-amber-300">Pon un precio</span>
                             )}
+                          </div>
+                        )}
+                        {activa && v.coste && c && (
+                          <div className="mt-2 space-y-1.5 pl-6">
+                            {c.envio > 0 && (
+                              <p className={cn('flex items-start gap-1', c.netoSiPagasElEnvio < 0 ? 'text-rose-300' : 'text-amber-300')}>
+                                <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+                                <span>
+                                  El envío estimado ({usd(c.envio)}) no está dentro de esa cuenta: lo paga el comprador aparte. Si por alguna razón saliera de tu bolsillo, te quedarían{' '}
+                                  <b>{usd(c.netoSiPagasElEnvio)}</b>
+                                  {c.netoSiPagasElEnvio < 0 ? ' (perderías dinero)' : ''}.
+                                </span>
+                              </p>
+                            )}
+                            <details className="text-muted-foreground">
+                              <summary className="cursor-pointer text-indigo-300">Ver la cuenta completa</summary>
+                              <ul className="mt-1 space-y-0.5">
+                                <li>Precio de venta: <b className="text-foreground">{usd(c.precio)}</b></li>
+                                <li>− Costo del producto en el proveedor: {usd(c.costeProducto)}</li>
+                                <li>− Pasarela de pago: {usd(c.pasarela)}</li>
+                                <li>− Comisión de Retador: {usd(c.comision)}</li>
+                                <li>= Te quedan, sin contar el envío: <b className="text-foreground">{usd(c.neto)}</b></li>
+                                {c.envio > 0 && <li>Envío estimado (producto → hub → destino): {usd(c.envio)}, que paga el comprador aparte</li>}
+                              </ul>
+                            </details>
                           </div>
                         )}
                       </div>
@@ -444,6 +500,14 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         <footer className="space-y-1.5 border-t border-white/[0.07] px-4 py-3">
           {error && prep && <Alert variant="danger" title="No se pudo publicar">{error}</Alert>}
           {problemas.length > 0 && prep && !hecho && !prep.yaPublicado && <p className="text-[11px] text-amber-300">{problemas[0]}</p>}
+          {prep && !hecho && !prep.yaPublicado && riesgoEnvio.length > 0 && (
+            <label className="flex items-start gap-2 text-[12px] text-rose-200">
+              <input type="checkbox" className="mt-0.5 size-3.5 accent-rose-500" checked={aceptoRiesgoEnvio} onChange={(e) => setAceptoRiesgoEnvio(e.target.checked)} />
+              <span>
+                Entiendo que en {riesgoEnvio.length === 1 ? 'una variante' : `${riesgoEnvio.length} variantes`} solo gano si el comprador paga el envío aparte; si no, perdería dinero.
+              </span>
+            </label>
+          )}
           {prep && !hecho && !prep.yaPublicado && (
             <label className="flex items-start gap-2 text-[12px]">
               <input type="checkbox" className="mt-0.5 size-3.5 accent-indigo-500" checked={precioAuto} onChange={(e) => setPrecioAuto(e.target.checked)} />
