@@ -225,20 +225,19 @@ Lo que hace DropshipPilot (funciones `retador-tienda`, `retador-avisos`, `accion
 - **Sin claves en pantalla:** la tarjeta de Retador solo tiene «Vincular con Retador» (con confirmación) y «Desvincular». Solo el administrador conserva la conexión con el Retador SIMULADO para pruebas.
 
 
-## Criterio de DropshipPilot sobre el envío y las cuentas del vendedor (9/11/2026)
+## Criterio de DropshipPilot sobre el envío y las cuentas del vendedor (9/11/2026, decisión de Daniel)
 
-Problema: Retador calcula el neto del vendedor SIN el envío, porque se lo cobra al comprador aparte. El comprador paga producto + envío, pero el vendedor paga al proveedor producto + envío. Mientras no esté confirmado a quién llega el dinero del envío, enseñar solo el neto de Retador puede hacer creer al vendedor que gana mucho más de lo que recoge.
+Reparto (como ya funciona el checkout de Retador): el vendedor pone SOLO el precio del producto; el comprador paga producto + envío («total a pagar») y Retador gestiona el envío («Envío internacional · lo gestiona RETADOR»; «Pago único: producto y envío juntos»). El envío NO sale del dinero del vendedor.
 
-Decisión de DropshipPilot (lado nuestro, ya aplicado en la pantalla y, tras desplegar, en el servidor):
+Lo que hace DropshipPilot al importar:
+- Propone el precio con la regla de margen del vendedor aplicada al **costo del producto** (no al coste con envío) y nunca por debajo del mínimo de Retador. Marca el producto con `precioBase: "producto"` (los publicados antes no la llevan y siguen con la base «total»: regla sobre producto + envío estimado y mínimo prudente contando el envío).
+- Enseña «te quedan» = precio − costo del producto − pasarela − comisión (el neto de Retador), y aparte lo que verá pagar el comprador (precio + envío estimado) para que el vendedor decida con datos. El envío estimado = flete real del proveedor al destino + tramo del centro logístico, y debe coincidir con lo que cobra Retador.
+- Opción «Envío gratis para el comprador (incluido en mi precio)»: aparece desactivada («Muy pronto») hasta que Retador la permita. Con ella, el neto sí descontaría el envío (`netoContandoEnvio`) y el mínimo sería `precioMinimoContandoEnvio`; el código ya está listo en `_compartido/retador-costes.ts`.
+- Variantes: «Elegir todas», «Quitar todas», agrupadas por color, con precio común. El máximo por producto se lee de `limites.max_variantes` de `dropship-config` (si no viene, 12).
 
-- La cifra principal que ve el vendedor es **«te quedan, contando el envío»** = neto de Retador − envío estimado (proveedor → hub → destino). Es la cifra prudente: sigue siendo cierta aunque el envío saliera de su bolsillo. `netoContandoEnvio` en `_compartido/retador-costes.ts`.
-- Se enseña también **lo que paga el comprador en total** (precio + envío estimado) y un aviso si es más de 3 veces el costo del producto.
-- **Precio mínimo para no perder contando el envío** (`precioMinimoContandoEnvio`): nunca baja del mínimo de Retador. Ejemplo real (zapatillas: producto 11,45, envío 23,76, tarifas del 8/11/2026): mínimo de Retador 13,39; mínimo contando el envío 40,40. La pantalla no deja publicar por debajo; el precio propuesto nunca baja de él.
-- El máximo de variantes por producto se lee de `limites.max_variantes` de `dropship-config` (si no viene, 12). Cuando Retador lo suba, la pantalla y `retador-tienda` lo respetan sin tocar nada más.
-
-Lo que debe confirmar Retador (sin esto no se puede bajar el precio con seguridad):
-
-1. A quién llega el dinero del envío que paga el comprador, y cuándo.
-2. Quién paga al proveedor el envío proveedor → hub y quién el tramo hub → destino.
-3. Si habrá un modo de «envío incluido» (el precio ya lo lleva y el comprador no paga envío aparte), que es como lo muestran las grandes tiendas.
-4. Subir el máximo de variantes por producto (hay productos con 40 y más) y publicarlo en `limites.max_variantes`.
+Lo que debe resolver o confirmar Retador (ver el mensaje final):
+1. ERROR DE DINERO en `ali-buyer-freight-quote`: divide `shipping_fee_cent` entre 100, pero AliExpress lo manda ya en dólares (`"18.93"`, con `shipping_fee_format` `"$18.93"`). Cobra 0,19 en vez de 18,93.
+2. Confirmar por escrito que el envío cobrado al comprador cubre el envío del proveedor y que no sale del vendedor.
+3. Permitir «envío gratis / incluido» por producto.
+4. Subir el máximo de variantes y publicarlo en `limites.max_variantes`.
+5. Al elegir una variante (color o talla) en la ficha del producto, cambiar la foto a la de esa variante.

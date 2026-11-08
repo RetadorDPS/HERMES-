@@ -107,3 +107,16 @@ assert.equal(salto.pausar, true);
 assert.equal(planificarSincronizacion(entrada({ auto })).hayCambios, false);
 
 console.log('✓ precio automático: todo correcto');
+
+// ── Base «producto»: la regla se aplica solo al costo del producto (el envío lo paga el comprador aparte) ──
+{
+  const tarifas13 = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3, pasarelaACargo: 'vendedor' as const, comisionBase: 'precio_venta_menos_costo_producto_menos_pasarela' as const, gananciaMinimaRetadorUsd: 1 };
+  const coste = { total: 35.21, producto: 11.45 };
+  const reglaDef = { markupPct: 40, fixedFee: 0, minProfit: 1.5, minPrice: null, maxPrice: null, roundTo: 0.99 };
+  const dProducto = decidirPrecioAuto({ precioActual: 16.99, coste, tarifas: tarifas13, regla: reglaDef, base: 'producto', ultimoCambioMs: null, ahoraMs: 0 });
+  assert.equal(dProducto.tipo, 'sin_cambio');
+  assert.equal(dProducto.objetivo, 16.99); // 11,45 × 1,4 = 16,03 → 16,99
+  const dTotal = decidirPrecioAuto({ precioActual: 49.99, coste, tarifas: tarifas13, regla: reglaDef, ultimoCambioMs: null, ahoraMs: 0 }); // sin base = «total»
+  assert.equal(dTotal.objetivo, 49.99); // 35,21 × 1,4 = 49,29 → 49,99 (comportamiento de los antiguos intacto)
+}
+console.log('precio automático con base del producto: ok');

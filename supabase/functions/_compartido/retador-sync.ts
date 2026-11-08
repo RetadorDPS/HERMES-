@@ -11,7 +11,7 @@
  *    0 = Retador lo deja agotado solo; desconocido viaja como null (Retador marca «estimado», nunca inventamos nosotros);
  *  · envío y opiniones: solo si cambiaron desde la última vez que se mandaron.
  */
-import { liquidacion, precioMinimoContandoEnvio, type TarifasRetador } from "./retador-costes.ts";
+import { liquidacion, precioMinimoPorBase, type BasePrecio, type TarifasRetador } from "./retador-costes.ts";
 import { huellaEnvio, huellaTexto, type EnvioParaRetador } from "./retador-envio.ts";
 import type { OpinionesProveedor } from "./resenas.ts";
 import { decidirPrecioAuto, type DecisionPrecio } from "./retador-precio-auto.ts";
@@ -59,6 +59,8 @@ export interface EntradaPlan {
   admiteResenas: boolean;
   resenas: OpinionesProveedor | null;
   huellaResenasPrevia: string | null;
+  /** Cómo se fijó el precio de este producto (si falta, 'total': los productos antiguos). */
+  base?: BasePrecio;
   /** Precio automático de este producto (solo si el vendedor lo activó). */
   auto?: { regla: ReglaPrecio; ultimoCambioMs: number | null; ahoraMs: number };
 }
@@ -155,7 +157,7 @@ export function planificarSincronizacion(e: EntradaPlan): PlanSync {
 
     // Precio automático: la regla del vendedor, con sus frenos, mueve el precio cuando cambia el coste
     if (e.auto && act && act.coste && e.tarifas) {
-      const d: DecisionPrecio = decidirPrecioAuto({ precioActual: precio, coste: act.coste, tarifas: e.tarifas, regla: e.auto.regla, ultimoCambioMs: e.auto.ultimoCambioMs, ahoraMs: e.auto.ahoraMs });
+      const d: DecisionPrecio = decidirPrecioAuto({ precioActual: precio, coste: act.coste, tarifas: e.tarifas, regla: e.auto.regla, base: e.base, ultimoCambioMs: e.auto.ultimoCambioMs, ahoraMs: e.auto.ahoraMs });
       const fila: CambioPrecio = { sku: l.sku, titulo: l.titulo, antes: precio, nuevo: "nuevo" in d ? d.nuevo : precio, objetivoRegla: d.objetivo, costeAhora: act.coste.total, urgente: "urgente" in d ? d.urgente : false, cambioPct: "cambioPct" in d ? d.cambioPct : 0 };
       if (d.tipo === "cambiar") {
         precios.push(fila);
@@ -169,7 +171,7 @@ export function planificarSincronizacion(e: EntradaPlan): PlanSync {
     const subida = act.coste.total - l.costeAntes;
     const pct = l.costeAntes > 0 ? (subida / l.costeAntes) * 100 : 100;
     if (subida < SUBIDA_MIN_USD || pct < SUBIDA_MIN_PCT) continue; // oscilación de céntimos: no es una subida de coste
-    const minimo = precioMinimoContandoEnvio(act.coste.total, e.tarifas, act.coste.producto);
+    const minimo = precioMinimoPorBase(e.base ?? "total", act.coste.total, e.tarifas, act.coste.producto);
     const liq = liquidacion(precio, act.coste.total, e.tarifas, act.coste.producto);
     if (precio + 0.004 < minimo || liq.neto < 0) {
       riesgos.push({ sku: l.sku, titulo: l.titulo, precioActual: precio, minimoUsd: minimo, costeAntes: l.costeAntes, costeAhora: act.coste.total, costeProductoAhora: act.coste.producto, pierde: liq.neto < 0 });

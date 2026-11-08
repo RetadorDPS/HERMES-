@@ -222,3 +222,16 @@ export function precioMinimoContandoEnvio(costeTotal: number, t: TarifasRetador,
   }
   return Math.max(suelo, bajo / 100);
 }
+
+/**
+ * Cómo se fijó el precio de un producto publicado:
+ *  - 'producto' (productos nuevos, decisión del 9/11/2026): el precio es SOLO el del producto. El comprador paga además el envío en Retador
+ *    y Retador lo gestiona: no sale del bolsillo del vendedor. Rige el mínimo de Retador y la regla de margen se aplica al costo del producto.
+ *  - 'total' (los publicados antes): el precio ya cubría el envío estimado. Rige el mínimo prudente contando el envío.
+ */
+export type BasePrecio = 'producto' | 'total';
+
+/** Precio mínimo según cómo se fijó el precio del producto. */
+export function precioMinimoPorBase(base: BasePrecio, costeTotal: number, t: TarifasRetador, costeProducto: number): number {
+  return base === 'producto' ? precioMinimoSinPerdida(costeTotal, t, costeProducto) : precioMinimoContandoEnvio(costeTotal, t, costeProducto);
+}

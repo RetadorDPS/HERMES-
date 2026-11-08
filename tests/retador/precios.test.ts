@@ -1,6 +1,6 @@
 // Pruebas de las cuentas de Retador. Ejecutar: npx tsx tests/retador/precios.test.ts
 import assert from 'node:assert/strict';
-import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, netoContandoEnvio, precioMinimoContandoEnvio, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
+import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, netoContandoEnvio, precioMinimoContandoEnvio, precioMinimoPorBase, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
 
 const t = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3 };
 
@@ -112,3 +112,14 @@ console.log('✔ cuentas de Retador correctas');
   assert.equal(precioMinimoContandoEnvio(11.45, real13, 11.45), precioMinimoSinPerdida(11.45, real13, 11.45));
 }
 console.log('contando el envío: ok');
+
+// ── Base del precio: «producto» (nuevos: el envío lo paga el comprador aparte) frente a «total» (antiguos) ──
+{
+  const t13 = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3, pasarelaACargo: 'vendedor' as const, comisionBase: 'precio_venta_menos_costo_producto_menos_pasarela' as const, gananciaMinimaRetadorUsd: 1 };
+  assert.equal(precioMinimoPorBase('producto', 35.21, t13, 11.45), precioMinimoSinPerdida(35.21, t13, 11.45)); // 13,39: el de Retador
+  assert.equal(precioMinimoPorBase('total', 35.21, t13, 11.45), 40.4); // el prudente de los productos antiguos
+  // Zapatillas reales: precio solo del producto (16,99) → te quedan, y el comprador paga además el envío aparte
+  const l = liquidacion(16.99, 35.21, t13, 11.45);
+  assert.ok(l.neto > 0 && l.neto < 5);
+}
+console.log('base del precio: ok');

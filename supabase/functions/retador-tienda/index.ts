@@ -41,7 +41,7 @@ import {
   tarifasDeConfig,
   tokenConFormato,
 } from "./retador.ts";
-import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoContandoEnvio, type TarifasRetador } from "./retador-costes.ts";
+import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoPorBase, type BasePrecio, type TarifasRetador } from "./retador-costes.ts";
 import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
 import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-pedidos.ts";
 import { resenasParaRetador } from "./resenas.ts";
@@ -332,7 +332,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       origenesConStock: [...origenesConStock],
       coste,
       faltan,
-      precioMinimoUsd: coste && tarifas ? precioMinimoContandoEnvio(coste.total, tarifas, coste.producto) : null,
+      precioMinimoUsd: coste && tarifas ? precioMinimoPorBase("producto", coste.total, tarifas, coste.producto) : null,
     };
   });
   return { variantes, hub };
@@ -642,7 +642,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
     if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", `Pon un precio válido a «${v.nombre}»`, { sku: v.sku });
     if (!v.coste) throw new ErrorApp("faltan_datos", `«${v.nombre}» no se puede publicar: falta ${v.faltan.join(", ")}.`, { sku: v.sku, faltan: v.faltan });
     const liq = liquidacion(redondear(precio), v.coste.total, tarifas, v.coste.producto);
-    if (liq.neto < 0 || precio < precioMinimoContandoEnvio(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoContandoEnvio(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (mínimo de Retador y sin pérdida contando el envío).`, { sku: v.sku, minimoUsd: precioMinimoContandoEnvio(v.coste.total, tarifas, v.coste.producto) });
+    const minimoProducto = precioMinimoPorBase("producto", v.coste.total, tarifas, v.coste.producto);
+    if (liq.neto < 0 || precio < minimoProducto) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${minimoProducto.toFixed(2)} USD (mínimo de Retador y sin pérdida tras la pasarela y la comisión).`, { sku: v.sku, minimoUsd: minimoProducto });
     return { v, precio: redondear(precio), liq };
   });
 
@@ -717,6 +718,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
     rawPayload: {
       retador: {
         ref, moderacion: remoto.moderacion ?? null, publicadoEn: ahora(), origenUltimoCambio: "dropship",
+        // El precio es solo el del producto: el comprador paga el envío aparte (decisión del 9/11/2026). Los productos antiguos no llevan esta marca y siguen con la base «total».
+        precioBase: "producto",
         // Lo que ya se mandó a Retador, para que la sincronización automática solo mande lo que cambie
         stockProveedor: Object.fromEntries(lineas.map(({ v }) => [v.sku, v.stock])),
         ...(envioPublicar && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0 ? { envioHash: huellaEnvio(envioPublicar), envioEnviadoEn: ahora() } : {}),
@@ -778,7 +781,8 @@ async function accionActualizar(uid: string, cuerpo: any) {
           const hoy = vigentes.get(local.sku)?.coste;
           const coste = hoy ? hoy.total : Number(local.costPrice) + Number(local.shippingCost);
           const producto = hoy ? hoy.producto : Number(local.costPrice);
-          const minimo = precioMinimoContandoEnvio(coste, tarifas, producto);
+          const baseProducto: BasePrecio = p.rawPayload?.retador?.precioBase === "producto" ? "producto" : "total";
+          const minimo = precioMinimoPorBase(baseProducto, coste, tarifas, producto);
           if (precio < minimo) throw new ErrorApp("precio_bajo_minimo", `Con ${precio.toFixed(2)} USD queda por debajo del mínimo en «${local.sku}». Mínimo: ${minimo.toFixed(2)} USD.`, { sku: local.sku, minimoUsd: minimo });
         }
         salida.precio_venta_usd = precio;
@@ -1051,6 +1055,7 @@ async function accionSincronizar(uid: string, cuerpo: any) {
     estadoRemoto: String(fila.estado ?? "activo"),
     admiteEnvio, envio: envioHoy, huellaEnvioPrevia: previo.envioHash ?? null,
     admiteResenas, resenas: admiteResenas ? resenasParaRetador(cat.ficha, cat.proveedor) : null, huellaResenasPrevia: previo.resenasHash ?? null,
+    base: previo.precioBase === "producto" ? "producto" : "total",
     ...(auto && reglaAuto ? { auto: { regla: reglaAuto.regla, ultimoCambioMs: auto.ultimoCambio ? Date.parse(auto.ultimoCambio) : null, ahoraMs: Date.now() } } : {}),
   });
 
@@ -1209,7 +1214,7 @@ async function accionPrecioAuto(uid: string, cuerpo: any) {
     const actual = remotoPorSku.get(l.sku) ?? Number(l.sellingPrice);
     const c = hoyPorSku.get(l.sku)?.coste;
     if (!c) continue; // sin coste de hoy no se puede calcular: esa variante no cambia
-    const d = decidirPrecioAuto({ precioActual: actual, coste: c, tarifas, regla, ultimoCambioMs: null, ahoraMs: Date.now(), forzar: true });
+    const d = decidirPrecioAuto({ precioActual: actual, coste: c, tarifas, regla, base: previo.precioBase === "producto" ? "producto" : "total", ultimoCambioMs: null, ahoraMs: Date.now(), forzar: true });
     lista.push({ sku: l.sku, titulo: String(l.title ?? l.sku), precioActual: actual, precioNuevo: d.tipo === "cambiar" ? d.nuevo : actual, minimo: d.minimo });
   }
   const cambian = lista.filter((x) => Math.abs(x.precioNuevo - x.precioActual) > 0.005);

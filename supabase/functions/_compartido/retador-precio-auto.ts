@@ -8,7 +8,7 @@
  *  3. Como mucho un cambio de precio al día por producto (salvo que el precio actual ya no valga: eso se arregla al momento).
  *  4. Un cambio de más del 25 % no se hace solo: puede ser un error del proveedor. Se avisa y decide el vendedor.
  */
-import { precioMinimoContandoEnvio, type TarifasRetador } from "./retador-costes.ts";
+import { precioMinimoPorBase, type BasePrecio, type TarifasRetador } from "./retador-costes.ts";
 import { precioPorRegla, redondearConRegla, type ReglaPrecio } from "./reglas-precio.ts";
 
 export const UMBRAL_CAMBIO_PCT = 2;
@@ -22,6 +22,8 @@ export interface EntradaPrecioAuto {
   coste: { total: number; producto: number };
   tarifas: TarifasRetador | null;
   regla: ReglaPrecio;
+  /** Cómo se fijó el precio de este producto (si falta, 'total': los productos antiguos). */
+  base?: BasePrecio;
   /** Última vez que el sistema cambió este precio solo (null = nunca). */
   ultimoCambioMs: number | null;
   ahoraMs: number;
@@ -38,8 +40,10 @@ export type DecisionPrecio =
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export function decidirPrecioAuto(e: EntradaPrecioAuto): DecisionPrecio {
-  const minimo = e.tarifas ? precioMinimoContandoEnvio(e.coste.total, e.tarifas, e.coste.producto) : null;
-  const porRegla = precioPorRegla(e.coste.total, e.regla);
+  const base: BasePrecio = e.base ?? "total";
+  const minimo = e.tarifas ? precioMinimoPorBase(base, e.coste.total, e.tarifas, e.coste.producto) : null;
+  // 'producto': la regla de margen se aplica solo al costo del producto (el envío lo paga el comprador aparte); 'total': al coste con envío
+  const porRegla = precioPorRegla(base === "producto" ? e.coste.producto : e.coste.total, e.regla);
   // El suelo manda sobre la regla; si hay que subir hasta el suelo se redondea hacia arriba con el estilo de la regla (acabado en .99)
   const objetivo = minimo === null ? porRegla : Math.max(porRegla, redondearConRegla(minimo, e.regla));
   const dif = objetivo - e.precioActual;

@@ -8,7 +8,7 @@
  * tras la comisión de Retador y la pasarela. Si falta un dato real (peso, envío al hub), la variante no se puede publicar.
  */
 import { Foto } from './foto';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, Star, X } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -17,7 +17,7 @@ import { Input, Textarea } from '@/components/ui/input';
 import { DEFAULT_RULE } from '@/lib/pricing';
 import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
-import { esContratoV13, liquidacion, netoContandoEnvio, precioMinimoContandoEnvio, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
+import { esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
 import { sugerirCategoria } from '@/lib/retador/sugerir-categoria';
 import { cn } from '@/lib/utils';
 import { BloqueVincular } from './vincular-retador';
@@ -94,10 +94,10 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         const tope = p.maxVariantes && p.maxVariantes >= 1 ? p.maxVariantes : MAX_VARIANTES_POR_DEFECTO;
         for (const v of p.variantes) {
           if (v.coste) {
-            // Nunca se propone un precio con el que se pierda dinero contando el envío
-            const propuesto = precioPropuesto(v.coste, reglaUso);
-            const minimoSeguro = p.tarifas ? precioMinimoContandoEnvio(v.coste.total, p.tarifas, v.coste.producto) : 0;
-            iniciales[v.sku] = Math.max(propuesto, minimoSeguro).toFixed(2);
+            // El precio es solo el del producto (el comprador paga el envío aparte): la regla de margen se aplica al costo del producto y nunca baja del mínimo de Retador
+            const propuesto = precioPropuesto({ ...v.coste, total: v.coste.producto }, reglaUso);
+            const minimoRetador = p.tarifas ? precioMinimoSinPerdida(v.coste.total, p.tarifas, v.coste.producto) : 0;
+            iniciales[v.sku] = Math.max(propuesto, minimoRetador).toFixed(2);
             if (contador < tope && !p.yaPublicado) {
               marcadas[v.sku] = true;
               contador++;
@@ -127,11 +127,21 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   // Sugerencia (nunca se aplica sola): la categoría más cercana de Retador según la del proveedor y el título
   const sugerencia = useMemo(() => (prep ? sugerirCategoria(prep.categorias, tituloEdit || titulo, categoriaProveedor) : null), [prep, tituloEdit, titulo, categoriaProveedor]);
   const marcadas = prep?.variantes.filter((v) => elegidas[v.sku]) ?? [];
+  const [precioComun, setPrecioComun] = useState('');
+  const colorDe = (nombre: string) => (nombre.includes(' · ') ? nombre.split(' · ')[0] : '');
+  /** Variantes juntas por color (o la primera opción), en el orden en que aparecen. */
+  const ordenadas = useMemo(() => {
+    if (!prep) return [];
+    const orden: string[] = [];
+    for (const v of prep.variantes) if (!orden.includes(colorDe(v.nombre))) orden.push(colorDe(v.nombre));
+    return [...prep.variantes].sort((a, b) => orden.indexOf(colorDe(a.nombre)) - orden.indexOf(colorDe(b.nombre)));
+  }, [prep]);
+  const agrupado = Boolean(prep) && new Set(prep!.variantes.map((v) => colorDe(v.nombre))).size >= 2 && prep!.variantes.every((v) => colorDe(v.nombre) !== '');
   const maxVariantes = prep?.maxVariantes && prep.maxVariantes >= 1 ? prep.maxVariantes : MAX_VARIANTES_POR_DEFECTO;
 
   /** Cuentas por variante con lo que escribe el usuario. */
   const cuentas = useMemo(() => {
-    const m = new Map<string, { precio: number; neto: number; margen: number; minimo: number; costeProducto: number; pasarela: number; comision: number; envio: number; netoRetador: number; netoConEnvio: number; margenConEnvio: number; totalComprador: number } | null>();
+    const m = new Map<string, { precio: number; neto: number; margen: number; minimo: number; costeProducto: number; pasarela: number; comision: number; envio: number; totalComprador: number } | null>();
     if (!prep?.tarifas) return m;
     for (const v of prep.variantes) {
       const precio = Number(precios[v.sku]);
@@ -140,23 +150,18 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         continue;
       }
       const l = liquidacion(precio, v.coste.total, prep.tarifas, v.coste.producto);
-      // Envío estimado = coste puesto en Cuba − costo del producto (0 si no se pudo estimar)
+      // Envío estimado = coste puesto en destino − costo del producto (0 si no se pudo estimar). Lo paga el comprador aparte.
       const envio = v.coste.sinEnvio ? 0 : Math.max(0, Math.round((v.coste.total - v.coste.producto) * 100) / 100);
       m.set(v.sku, {
         precio,
         neto: l.neto,
         margen: l.margenNetoPct,
-        // Mínimo para NO perder dinero contando el envío (nunca baja del mínimo de Retador)
-        minimo: precioMinimoContandoEnvio(v.coste.total, prep.tarifas, v.coste.producto),
+        minimo: precioMinimoSinPerdida(v.coste.total, prep.tarifas, v.coste.producto),
         costeProducto: v.coste.producto,
         pasarela: l.pasarela,
         comision: l.comision,
         envio,
-        netoRetador: l.neto,
-        // Cifra prudente que enseña la pantalla: el neto de Retador (que no cuenta el envío) menos el envío estimado
-        netoConEnvio: netoContandoEnvio(l.neto, envio),
-        margenConEnvio: precio > 0 ? (netoContandoEnvio(l.neto, envio) / precio) * 100 : 0,
-        // Lo que paga el comprador en total: el precio y, aparte, el envío
+        // Lo que verá pagar el comprador en Retador: el precio y, aparte, el envío
         totalComprador: Math.round((precio + envio) * 100) / 100,
       });
     }
@@ -165,7 +170,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
 
   const perdidas = marcadas.filter((v) => {
     const c = cuentas.get(v.sku);
-    return !c || c.neto < 0 || c.netoConEnvio < 0 || c.precio < c.minimo;
+    return !c || c.neto < 0 || c.precio < c.minimo;
   });
   const sinPrecio = marcadas.filter((v) => !cuentas.get(v.sku));
 
@@ -173,12 +178,41 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   if (!marcadas.length) problemas.push('Elige al menos una variante.');
   if (marcadas.length > maxVariantes) problemas.push(`Has elegido ${marcadas.length} variantes y Retador admite ${maxVariantes} como máximo: quita ${marcadas.length - maxVariantes}.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
-  if (perdidas.length) problemas.push('Hay variantes con las que perderías dinero contando el envío, o por debajo del mínimo de Retador. Sube el precio al mínimo que se indica.');
+  if (perdidas.length) problemas.push('Hay variantes por debajo del precio mínimo o con las que perderías dinero. Sube el precio al mínimo que se indica.');
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
   if (tituloEdit.length > 150) problemas.push('El título pasa de 150 caracteres.');
   if (descripcion.length > 5000) problemas.push('La descripción pasa de 5000 caracteres.');
   if (!fotos.length) problemas.push('Deja al menos una foto.');
+
+  /** Marca o quita un grupo de variantes sin pasar del máximo que admite Retador. */
+  function alternarVarias(skus: string[], marcar: boolean) {
+    setElegidas((actual) => {
+      const nuevo = { ...actual };
+      let total = Object.values(nuevo).filter(Boolean).length;
+      for (const sku of skus) {
+        if (marcar) {
+          if (!nuevo[sku] && total < maxVariantes) {
+            nuevo[sku] = true;
+            total++;
+          }
+        } else if (nuevo[sku]) {
+          delete nuevo[sku];
+          total--;
+        }
+      }
+      return nuevo;
+    });
+  }
+  function elegirTodas() {
+    setElegidas({});
+    alternarVarias((prep?.variantes ?? []).filter((v) => v.coste).map((v) => v.sku), true);
+  }
+  function aplicarPrecioComun() {
+    const n = Number(precioComun);
+    if (!Number.isFinite(n) || n <= 0) return;
+    setPrecios((x) => ({ ...x, ...Object.fromEntries(marcadas.map((v) => [v.sku, n.toFixed(2)])) }));
+  }
 
   async function publicar() {
     if (!tienda || problemas.length) return;
@@ -275,113 +309,151 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
               {/* Variantes y precios */}
               <section className="space-y-2">
                 <h3 className="text-[13px] font-semibold">Variantes y precio de venta (en dólares)</h3>
-                <p className="text-[12px] text-muted-foreground">
-                  {esContratoV13(prep.tarifas)
-                    ? 'El comprador paga el producto y el envío; el envío lo cotiza Retador al comprar. Aquí se estima con las cotizaciones del proveedor para que veas lo que de verdad te queda.'
-                    : 'Coste estimado = producto + envío estimado.'}
-                </p>
+                <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.03] p-2.5 text-[12px]">
+                  <p className="font-medium">¿Cómo se cobra el envío?</p>
+                  <label className="flex items-start gap-2">
+                    <input type="radio" checked readOnly className="mt-0.5" />
+                    <span>
+                      <b>Lo paga el comprador, aparte del precio.</b> Tu precio es solo el del producto: en Retador tu comprador ve «producto + envío = total a pagar» y Retador gestiona el envío. Por eso lo que te queda no resta el envío: no sale de tu dinero.
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 opacity-60">
+                    <input type="radio" disabled className="mt-0.5" />
+                    <span>
+                      <b>Envío gratis para el comprador</b> (ya incluido en tu precio). <span className="text-amber-300">Muy pronto</span>: hace falta que Retador lo permita.
+                    </span>
+                  </label>
+                </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
                   <span className={cn(marcadas.length > maxVariantes ? 'font-medium text-rose-300' : 'text-muted-foreground')}>
-                    Elegidas: <b>{marcadas.length}</b> de {prep.variantes.length}{prep.variantes.length > maxVariantes ? ` · Retador admite ${maxVariantes} por producto` : ''}
+                    Elegidas: <b>{marcadas.length}</b> de {prep.variantes.length}
+                    {prep.variantes.length > maxVariantes ? ` · Retador admite ${maxVariantes} por producto` : ''}
                   </span>
-                  {marcadas.length > 0 && (
-                    <button type="button" className="rounded-md px-2 py-1 text-indigo-300 hover:bg-white/10" onClick={() => setElegidas({})}>
+                  <span className="flex gap-1">
+                    <button type="button" className="rounded-md px-2 py-1 text-indigo-300 hover:bg-white/10" onClick={elegirTodas}>
+                      Elegir todas
+                    </button>
+                    <button type="button" className="rounded-md px-2 py-1 text-indigo-300 hover:bg-white/10" onClick={() => setElegidas({})} disabled={!marcadas.length}>
                       Quitar todas
                     </button>
-                  )}
+                  </span>
                 </div>
+                {marcadas.length > 1 && (
+                  <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                    <span className="text-muted-foreground">Mismo precio para las {marcadas.length} elegidas:</span>
+                    <Input inputMode="decimal" className="h-8 w-24" value={precioComun} onChange={(e) => setPrecioComun(e.target.value.replace(',', '.'))} aria-label="Precio para todas las elegidas" />
+                    USD
+                    <Button size="sm" variant="outline" onClick={aplicarPrecioComun} disabled={!(Number(precioComun) > 0)}>
+                      Aplicar
+                    </Button>
+                  </div>
+                )}
                 <div className="space-y-2">
-                  {prep.variantes.map((v) => {
+                  {ordenadas.map((v, idx) => {
                     const c = cuentas.get(v.sku);
                     const activa = Boolean(elegidas[v.sku]);
                     const llenas = !activa && marcadas.length >= maxVariantes;
+                    const color = colorDe(v.nombre);
+                    const nuevoGrupo = agrupado && (idx === 0 || colorDe(ordenadas[idx - 1].nombre) !== color);
+                    const delGrupo = nuevoGrupo ? ordenadas.filter((x) => colorDe(x.nombre) === color && x.coste) : [];
+                    const elegidasDelGrupo = delGrupo.filter((x) => elegidas[x.sku]).length;
                     return (
-                      <div key={v.sku} className={cn('rounded-lg border p-2.5 text-[12px]', activa ? 'border-indigo-400/40 bg-indigo-500/[0.06]' : 'border-white/10 bg-white/[0.02]', !v.coste && 'opacity-70')}>
-                        <label className="flex items-start gap-2">
-                          <input
-                            type="checkbox"
-                            className="mt-0.5"
-                            checked={activa}
-                            disabled={!v.coste || llenas}
-                            onChange={(e) => setElegidas((x) => ({ ...x, [v.sku]: e.target.checked }))}
-                          />
-                          {v.imagen && (
-                            <Foto src={v.imagen} ancho={240} className="size-9 shrink-0 rounded object-cover" />
-                          )}
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium">{v.nombre}</span>
-                            {v.coste ? (
-                              <span className="block text-muted-foreground">
-                                {v.coste.sinEnvio ? (
-                                  <>
-                                    Producto <b className="text-foreground">{usd(v.coste.producto)}</b> · envío sin estimar (Retador lo cotiza al comprar): el neto se calcula sin envío
-                                  </>
-                                ) : (
-                                  <>
-                                    Producto {usd(v.coste.producto)} · envío estimado {usd(Math.round((v.coste.envioHub + v.coste.hubCuba) * 100) / 100)} = <b className="text-foreground">{usd(v.coste.total)}</b>
-                                  </>
-                                )}
-                              </span>
-                            ) : (
-                              <span className="flex items-start gap-1 text-amber-300">
-                                <AlertCircle className="mt-0.5 size-3.5 shrink-0" /> No se puede publicar: falta {v.faltan.join(', ')}.
-                              </span>
-                            )}
-                            <span className="block text-muted-foreground">
-                              Stock:{' '}
-                              {v.stock === null ? <span className="text-amber-300">sin dato del proveedor</span> : v.stock === 0 ? <span className="text-amber-300">sin stock (ni en almacén ni en fábrica)</span> : v.stockAlmacen !== null && v.stockAlmacen !== undefined && v.stockFabrica !== null && v.stockFabrica !== undefined ? `${v.stock.toLocaleString('es-ES')} (${v.stockAlmacen.toLocaleString('es-ES')} en almacén + ${v.stockFabrica.toLocaleString('es-ES')} en fábrica)` : `${v.stock.toLocaleString('es-ES')} verificados`}
-                            </span>
-                          </span>
-                        </label>
-                        {activa && v.coste && (
-                          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-6">
-                            <label className="flex items-center gap-1.5">
-                              Precio
-                              <Input
-                                inputMode="decimal"
-                                className="h-8 w-24"
-                                value={precios[v.sku] ?? ''}
-                                onChange={(e) => setPrecios((x) => ({ ...x, [v.sku]: e.target.value.replace(',', '.') }))}
-                                aria-label={`Precio de ${v.nombre}`}
+                      <Fragment key={v.sku}>
+                        {nuevoGrupo && (
+                          <div className="flex items-center gap-2 pt-1 text-[12px] font-semibold">
+                            {delGrupo[0]?.imagen && <Foto src={delGrupo[0].imagen} ancho={240} className="size-8 shrink-0 rounded object-cover" />}
+                            <label className="flex flex-1 items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={delGrupo.length > 0 && elegidasDelGrupo === delGrupo.length}
+                                disabled={delGrupo.length === 0}
+                                onChange={(e) => alternarVarias(delGrupo.map((x) => x.sku), e.target.checked)}
                               />
-                              USD
-                            </label>
-                            {c ? (
-                              <span className={cn('font-medium', c.netoConEnvio < 0 || c.precio < c.minimo ? 'text-rose-300' : 'text-emerald-300')}>
-                                Te quedan {usd(c.netoConEnvio)} netos{c.envio > 0 ? ', ya contando el envío' : ''} ({c.margenConEnvio.toFixed(0)} %)
-                                {c.precio < c.minimo && ` · precio mínimo para no perder: ${usd(c.minimo)}`}
+                              {color}
+                              <span className="font-normal text-muted-foreground">
+                                ({elegidasDelGrupo} de {delGrupo.length})
                               </span>
-                            ) : (
-                              <span className="text-amber-300">Pon un precio</span>
-                            )}
+                            </label>
                           </div>
                         )}
-                        {activa && v.coste && c && (
-                          <div className="mt-2 space-y-1.5 pl-6">
-                            {c.envio > 0 && (
-                              <p className="text-muted-foreground">
-                                Tu comprador verá en Retador: <b className="text-foreground">{usd(c.totalComprador)}</b> a pagar ({usd(c.precio)} del producto + {usd(c.envio)} de envío estimado).
-                              </p>
-                            )}
-                            <details className="text-muted-foreground">
-                              <summary className="cursor-pointer text-indigo-300">Ver la cuenta completa</summary>
-                              <ul className="mt-1 space-y-0.5">
-                                <li>Precio de venta: <b className="text-foreground">{usd(c.precio)}</b></li>
-                                <li>− Costo del producto en el proveedor: {usd(c.costeProducto)}</li>
-                                {c.envio > 0 && <li>− Envío estimado (proveedor → hub → destino): {usd(c.envio)}</li>}
-                                <li>− Pasarela de pago: {usd(c.pasarela)}</li>
-                                <li>− Comisión de Retador: {usd(c.comision)}</li>
-                                <li>= Te quedan{c.envio > 0 ? ', contando el envío' : ''}: <b className="text-foreground">{usd(c.netoConEnvio)}</b></li>
-                              </ul>
+                        <div className={cn('rounded-lg border p-2.5 text-[12px]', activa ? 'border-indigo-400/40 bg-indigo-500/[0.06]' : 'border-white/10 bg-white/[0.02]', !v.coste && 'opacity-70', agrupado && 'ml-3')}>
+                          <label className="flex items-start gap-2">
+                            <input type="checkbox" className="mt-0.5" checked={activa} disabled={!v.coste || llenas} onChange={(e) => setElegidas((x) => ({ ...x, [v.sku]: e.target.checked }))} />
+                            {v.imagen && <Foto src={v.imagen} ancho={240} className="size-9 shrink-0 rounded object-cover" />}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">{agrupado ? v.nombre.split(' · ').slice(1).join(' · ') : v.nombre}</span>
+                              {v.coste ? (
+                                <span className="block text-muted-foreground">
+                                  {v.coste.sinEnvio ? (
+                                    <>
+                                      Producto <b className="text-foreground">{usd(v.coste.producto)}</b> · envío sin estimar (Retador lo cotiza al comprar)
+                                    </>
+                                  ) : (
+                                    <>
+                                      Producto <b className="text-foreground">{usd(v.coste.producto)}</b> · envío estimado {usd(Math.round((v.coste.envioHub + v.coste.hubCuba) * 100) / 100)} (lo paga el comprador)
+                                    </>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="flex items-start gap-1 text-amber-300">
+                                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" /> No se puede publicar: falta {v.faltan.join(', ')}.
+                                </span>
+                              )}
+                              <span className="block text-muted-foreground">
+                                Stock:{' '}
+                                {v.stock === null ? <span className="text-amber-300">sin dato del proveedor</span> : v.stock === 0 ? <span className="text-amber-300">sin stock (ni en almacén ni en fábrica)</span> : v.stockAlmacen !== null && v.stockAlmacen !== undefined && v.stockFabrica !== null && v.stockFabrica !== undefined ? `${v.stock.toLocaleString('es-ES')} (${v.stockAlmacen.toLocaleString('es-ES')} en almacén + ${v.stockFabrica.toLocaleString('es-ES')} en fábrica)` : `${v.stock.toLocaleString('es-ES')} verificados`}
+                              </span>
+                            </span>
+                          </label>
+                          {activa && v.coste && (
+                            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-6">
+                              <label className="flex items-center gap-1.5">
+                                Precio
+                                <Input
+                                  inputMode="decimal"
+                                  className="h-8 w-24"
+                                  value={precios[v.sku] ?? ''}
+                                  onChange={(e) => setPrecios((x) => ({ ...x, [v.sku]: e.target.value.replace(',', '.') }))}
+                                  aria-label={`Precio de ${v.nombre}`}
+                                />
+                                USD
+                              </label>
+                              {c ? (
+                                <span className={cn('font-medium', c.neto < 0 || c.precio < c.minimo ? 'text-rose-300' : 'text-emerald-300')}>
+                                  Te quedan {usd(c.neto)} netos ({c.margen.toFixed(0)} %)
+                                  {c.precio < c.minimo && ` · precio mínimo: ${usd(c.minimo)}`}
+                                </span>
+                              ) : (
+                                <span className="text-amber-300">Pon un precio</span>
+                              )}
+                            </div>
+                          )}
+                          {activa && v.coste && c && (
+                            <div className="mt-2 space-y-1.5 pl-6">
                               {c.envio > 0 && (
-                                <p className="mt-1.5 text-[11px]">
-                                  Retador calcula {usd(c.netoRetador)} porque no descuenta el envío: se lo cobra al comprador aparte. Mientras Retador no confirme que ese dinero te llega entero, te enseñamos la cifra prudente (la de arriba).
+                                <p className="text-muted-foreground">
+                                  Tu comprador verá en Retador: <b className="text-foreground">{usd(c.totalComprador)}</b> a pagar ({usd(c.precio)} del producto + {usd(c.envio)} de envío estimado).
                                 </p>
                               )}
-                            </details>
-                          </div>
-                        )}
-                      </div>
+                              <details className="text-muted-foreground">
+                                <summary className="cursor-pointer text-indigo-300">Ver la cuenta completa</summary>
+                                <ul className="mt-1 space-y-0.5">
+                                  <li>Precio de venta: <b className="text-foreground">{usd(c.precio)}</b></li>
+                                  <li>− Costo del producto en el proveedor: {usd(c.costeProducto)}</li>
+                                  <li>− Pasarela de pago: {usd(c.pasarela)}</li>
+                                  <li>− Comisión de Retador: {usd(c.comision)}</li>
+                                  <li>= Te quedan: <b className="text-foreground">{usd(c.neto)}</b></li>
+                                </ul>
+                                {c.envio > 0 && (
+                                  <p className="mt-1.5 text-[11px]">
+                                    El envío ({usd(c.envio)} estimado con el proveedor) lo paga tu comprador y lo gestiona Retador: no sale de tu dinero. La pasarela ya incluye lo que se cobra por el envío.
+                                  </p>
+                                )}
+                              </details>
+                            </div>
+                          )}
+                        </div>
+                      </Fragment>
                     );
                   })}
                 </div>
