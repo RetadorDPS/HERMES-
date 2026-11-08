@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { llamarTienda, obtenerProductosRetador, type PrecioEnRiesgo, type ProductoRetador, type TiendaRetador, type VistaPrecioAuto } from '@/lib/real/retador';
-import { liquidacion } from '@/lib/retador/precios';
+import { liquidacion, netoContandoEnvio } from '@/lib/retador/precios';
 import { cn } from '@/lib/utils';
 
 const usd = (n: number) => `${n.toFixed(2)} USD`;
@@ -132,7 +132,7 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Productos en Retador</CardTitle>
         <CardDescription>
-          {productos.length ? `${productos.length} publicados desde DropshipPilot. El neto es una estimación con las tarifas de Retador.` : 'Todavía no has publicado ninguno. Ábrelos desde el catálogo con «Publicar en…» y elige Retador.'}
+          {productos.length ? `${productos.length} publicados desde DropshipPilot. Lo que te queda es una estimación con las tarifas de Retador y el envío estimado.` : 'Todavía no has publicado ninguno. Ábrelos desde el catálogo con «Publicar en…» y elige Retador.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -387,7 +387,12 @@ function EditorProducto({
                 Stock
                 <Input inputMode="numeric" className="h-8 w-20" value={stocks[v.sku]} onChange={(e) => setStocks((x) => ({ ...x, [v.sku]: e.target.value.replace(/\D/g, '') }))} aria-label={`Stock de ${v.title}`} />
               </label>
-              {liq && <span className={cn('font-medium', liq.neto < 0 ? 'text-rose-300' : 'text-emerald-300')}>Neto {usd(liq.neto)}</span>}
+              {liq && (() => {
+                // Contando el envío estimado (Retador calcula su neto sin él): la cifra prudente, igual que al publicar
+                const envio = Math.max(0, (riesgo ? riesgo.costeAhora - riesgo.costeProductoAhora : v.shippingCost) || 0);
+                const neto = netoContandoEnvio(liq.neto, envio);
+                return <span className={cn('font-medium', neto < 0 ? 'text-rose-300' : 'text-emerald-300')}>Te quedan {usd(neto)}{envio > 0 ? ', contando el envío' : ''}</span>;
+              })()}
             </div>
             {riesgo && <p className="text-[11px] text-amber-300">Mínimo con el coste de hoy: {usd(riesgo.minimoUsd)}. Te lo hemos puesto como punto de partida; puedes cobrar más.</p>}
             {v.stockVerificado === false && <p className="text-[11px] text-amber-300">El stock es una estimación de Retador, no un dato del proveedor.</p>}

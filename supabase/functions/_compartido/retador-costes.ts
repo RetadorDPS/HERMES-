@@ -191,3 +191,34 @@ export function precioMinimoSinPerdida(costeTotal: number, t: TarifasRetador, co
   const sinPerdida = denominador <= 0 ? Number.POSITIVE_INFINITY : Math.ceil(((base * (1 - k) + f) / denominador) * 100) / 100;
   return Math.max(sinPerdida, Math.ceil(costeTotal * 100) / 100);
 }
+
+/**
+ * Lo que queda al vendedor CONTANDO el envío: el neto de Retador menos el envío estimado (proveedor → hub → destino).
+ * Retador calcula su neto SIN el envío porque se lo cobra al comprador aparte; mientras Retador no confirme que ese dinero le llega
+ * íntegro al vendedor, esta es la cifra prudente (la que sigue siendo verdad aunque el envío saliera de su bolsillo).
+ * Sin envío estimado (0) coincide con el neto de Retador.
+ */
+export function netoContandoEnvio(netoRetador: number, envioEstimado: number): number {
+  return round2(netoRetador - Math.max(0, envioEstimado));
+}
+
+/**
+ * Precio mínimo con el que el vendedor NO pierde dinero contando el envío (neto contando el envío ≥ 0). Se busca el menor precio al
+ * céntimo con el que `liquidacion` menos el envío no es negativo (el neto crece con el precio, así que vale una búsqueda binaria).
+ * Nunca baja del mínimo de Retador.
+ */
+export function precioMinimoContandoEnvio(costeTotal: number, t: TarifasRetador, costeProducto: number): number {
+  const envio = Math.max(0, round2(costeTotal - costeProducto));
+  const suelo = precioMinimoSinPerdida(costeTotal, t, costeProducto);
+  if (envio === 0) return suelo;
+  const sirve = (precio: number) => liquidacion(precio, costeTotal, t, costeProducto).neto - envio >= 0;
+  let bajo = Math.round(suelo * 100);
+  let alto = Math.max(bajo, Math.round((costeTotal + envio + 5) * 100));
+  while (!sirve(alto / 100) && alto < 100_000_000) alto *= 2; // por si la comisión es muy alta
+  while (bajo < alto) {
+    const medio = Math.floor((bajo + alto) / 2);
+    if (sirve(medio / 100)) alto = medio;
+    else bajo = medio + 1;
+  }
+  return Math.max(suelo, bajo / 100);
+}

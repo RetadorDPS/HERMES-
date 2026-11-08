@@ -223,3 +223,22 @@ Lo que hace DropshipPilot (funciones `retador-tienda`, `retador-avisos`, `accion
 - **Plan conjunto:** `dropship-config → vendedor.plan_conjunto`. Si es `true`, el plan de Retador manda y aquí no se cobra: Gratis → Prueba, Pro → Starter, Premium → Pro (herramientas de cada plan de aquí; no se regala más). Si es `false` o se desvincula, vuelve al plan propio. Facturación dice «Tu plan viene de Retador».
 - **Elige tu plan:** paso obligatorio tras registrarse (`planElegidoEn` vacío → pantalla `/elige-plan/`). Hoy se puede elegir Gratis; Pro y Premium se contratan en Retador y llegan al vincular.
 - **Sin claves en pantalla:** la tarjeta de Retador solo tiene «Vincular con Retador» (con confirmación) y «Desvincular». Solo el administrador conserva la conexión con el Retador SIMULADO para pruebas.
+
+
+## Criterio de DropshipPilot sobre el envío y las cuentas del vendedor (9/11/2026)
+
+Problema: Retador calcula el neto del vendedor SIN el envío, porque se lo cobra al comprador aparte. El comprador paga producto + envío, pero el vendedor paga al proveedor producto + envío. Mientras no esté confirmado a quién llega el dinero del envío, enseñar solo el neto de Retador puede hacer creer al vendedor que gana mucho más de lo que recoge.
+
+Decisión de DropshipPilot (lado nuestro, ya aplicado en la pantalla y, tras desplegar, en el servidor):
+
+- La cifra principal que ve el vendedor es **«te quedan, contando el envío»** = neto de Retador − envío estimado (proveedor → hub → destino). Es la cifra prudente: sigue siendo cierta aunque el envío saliera de su bolsillo. `netoContandoEnvio` en `_compartido/retador-costes.ts`.
+- Se enseña también **lo que paga el comprador en total** (precio + envío estimado) y un aviso si es más de 3 veces el costo del producto.
+- **Precio mínimo para no perder contando el envío** (`precioMinimoContandoEnvio`): nunca baja del mínimo de Retador. Ejemplo real (zapatillas: producto 11,45, envío 23,76, tarifas del 8/11/2026): mínimo de Retador 13,39; mínimo contando el envío 40,40. La pantalla no deja publicar por debajo; el precio propuesto nunca baja de él.
+- El máximo de variantes por producto se lee de `limites.max_variantes` de `dropship-config` (si no viene, 12). Cuando Retador lo suba, la pantalla y `retador-tienda` lo respetan sin tocar nada más.
+
+Lo que debe confirmar Retador (sin esto no se puede bajar el precio con seguridad):
+
+1. A quién llega el dinero del envío que paga el comprador, y cuándo.
+2. Quién paga al proveedor el envío proveedor → hub y quién el tramo hub → destino.
+3. Si habrá un modo de «envío incluido» (el precio ya lo lleva y el comprador no paga envío aparte), que es como lo muestran las grandes tiendas.
+4. Subir el máximo de variantes por producto (hay productos con 40 y más) y publicarlo en `limites.max_variantes`.

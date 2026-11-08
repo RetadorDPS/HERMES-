@@ -11,7 +11,7 @@
  *    0 = Retador lo deja agotado solo; desconocido viaja como null (Retador marca «estimado», nunca inventamos nosotros);
  *  · envío y opiniones: solo si cambiaron desde la última vez que se mandaron.
  */
-import { liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
+import { liquidacion, precioMinimoContandoEnvio, type TarifasRetador } from "./retador-costes.ts";
 import { huellaEnvio, huellaTexto, type EnvioParaRetador } from "./retador-envio.ts";
 import type { OpinionesProveedor } from "./resenas.ts";
 import { decidirPrecioAuto, type DecisionPrecio } from "./retador-precio-auto.ts";
@@ -169,7 +169,7 @@ export function planificarSincronizacion(e: EntradaPlan): PlanSync {
     const subida = act.coste.total - l.costeAntes;
     const pct = l.costeAntes > 0 ? (subida / l.costeAntes) * 100 : 100;
     if (subida < SUBIDA_MIN_USD || pct < SUBIDA_MIN_PCT) continue; // oscilación de céntimos: no es una subida de coste
-    const minimo = precioMinimoSinPerdida(act.coste.total, e.tarifas, act.coste.producto);
+    const minimo = precioMinimoContandoEnvio(act.coste.total, e.tarifas, act.coste.producto);
     const liq = liquidacion(precio, act.coste.total, e.tarifas, act.coste.producto);
     if (precio + 0.004 < minimo || liq.neto < 0) {
       riesgos.push({ sku: l.sku, titulo: l.titulo, precioActual: precio, minimoUsd: minimo, costeAntes: l.costeAntes, costeAhora: act.coste.total, costeProductoAhora: act.coste.producto, pierde: liq.neto < 0 });

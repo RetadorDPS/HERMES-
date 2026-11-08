@@ -1,6 +1,6 @@
 // Pruebas de las cuentas de Retador. Ejecutar: npx tsx tests/retador/precios.test.ts
 import assert from 'node:assert/strict';
-import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
+import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, netoContandoEnvio, precioMinimoContandoEnvio, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
 
 const t = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3 };
 
@@ -95,3 +95,20 @@ assert.equal(liquidacion(9.48, sinEnv.total, v13, sinEnv.producto).neto > 0, tru
 assert.deepEqual(faltanParaPublicar({ costeUsd: 7.76, envioHubUsd: null, pesoGramos: null, tarifas: t }), ['envío del proveedor al hub de EE. UU.', 'peso real']);
 assert.equal(costeParaPublicar({ costeUsd: 7.76, envioHubUsd: null, pesoGramos: null, tarifas: t }), null);
 console.log('✔ cuentas de Retador correctas');
+
+// ── Contando el envío (caso real de las zapatillas, tarifas reales de Retador del 8/11/2026) ──
+{
+  const real13 = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3, pasarelaACargo: 'vendedor' as const, comisionBase: 'precio_venta_menos_costo_producto_menos_pasarela' as const, gananciaMinimaRetadorUsd: 1 };
+  const l13 = liquidacion(49.99, 35.21, real13, 11.45);
+  assert.equal(l13.neto, 32.19); // lo que enseñaba Retador: SIN envío
+  assert.equal(netoContandoEnvio(l13.neto, 23.76), 8.43); // contando el envío
+  assert.equal(netoContandoEnvio(l13.neto, 0), 32.19); // sin envío estimado coincide con el neto de Retador
+  const minimo = precioMinimoContandoEnvio(35.21, real13, 11.45);
+  assert.equal(minimo, 40.4); // con 40,40 el neto contando el envío es ≥ 0 y con 40,39 no
+  assert.ok(liquidacion(minimo, 35.21, real13, 11.45).neto - 23.76 >= 0);
+  assert.ok(liquidacion(minimo - 0.01, 35.21, real13, 11.45).neto - 23.76 < 0);
+  assert.ok(minimo > precioMinimoSinPerdida(35.21, real13, 11.45)); // 13,39: el de Retador no cuenta el envío
+  // Sin envío estimado el mínimo es el de siempre
+  assert.equal(precioMinimoContandoEnvio(11.45, real13, 11.45), precioMinimoSinPerdida(11.45, real13, 11.45));
+}
+console.log('contando el envío: ok');

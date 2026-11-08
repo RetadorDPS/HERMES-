@@ -41,7 +41,7 @@ import {
   tarifasDeConfig,
   tokenConFormato,
 } from "./retador.ts";
-import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoSinPerdida, type TarifasRetador } from "./retador-costes.ts";
+import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoContandoEnvio, type TarifasRetador } from "./retador-costes.ts";
 import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
 import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-pedidos.ts";
 import { resenasParaRetador } from "./resenas.ts";
@@ -265,6 +265,12 @@ async function guardarConfig(tienda: any, cfg: any) {
 
 /* ───────────────────────────── Datos del catálogo ───────────────────────────── */
 
+/** Máximo de variantes por producto: el que informe Retador en sus límites (`max_variantes`); si no lo dice, 12 (el valor del contrato). */
+function maxVariantesDe(cfg: any): number {
+  const n = Number(cfg?.limites?.max_variantes);
+  return Number.isInteger(n) && n >= 12 && n <= 1000 ? n : 12;
+}
+
 async function leerCatalogo(itemId: unknown) {
   if (typeof itemId !== "string" || !itemId) throw new ErrorApp("datos_invalidos", "Indica el producto del catálogo");
   const { data: item } = await servicio.from("CatalogItem").select("id,provider,externalId,title,description,imageUrl,images,sourceUrl").eq("id", itemId).maybeSingle();
@@ -326,7 +332,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       origenesConStock: [...origenesConStock],
       coste,
       faltan,
-      precioMinimoUsd: coste && tarifas ? precioMinimoSinPerdida(coste.total, tarifas, coste.producto) : null,
+      precioMinimoUsd: coste && tarifas ? precioMinimoContandoEnvio(coste.total, tarifas, coste.producto) : null,
     };
   });
   return { variantes, hub };
@@ -554,6 +560,7 @@ async function accionPreparar(uid: string, cuerpo: any) {
     tarifas,
     categorias: cfg.categorias ?? [],
     provincias: cfg.provincias ?? [],
+    maxVariantes: maxVariantesDe(cfg),
     vendedor: cfg.vendedor ?? null,
     proveedor,
     envioHub: hub,
@@ -621,7 +628,8 @@ async function accionPublicar(uid: string, cuerpo: any) {
 
   // Variantes elegidas: cada sku debe existir y tener beneficio calculable y positivo
   const elegidas: any[] = Array.isArray(cuerpo.variantes) ? cuerpo.variantes : [];
-  if (!elegidas.length || elegidas.length > 12) throw new ErrorApp("datos_invalidos", "Elige entre 1 y 12 variantes", { campo: "variantes" });
+  const maxVariantes = maxVariantesDe(cfg);
+  if (!elegidas.length || elegidas.length > maxVariantes) throw new ErrorApp("datos_invalidos", `Elige entre 1 y ${maxVariantes} variantes`, { campo: "variantes" });
   const { variantes } = prepararVariantes(ficha, proveedor, tarifas);
   const porSku = new Map(variantes.map((v) => [v.sku, v]));
   const vistos = new Set<string>();
@@ -634,7 +642,7 @@ async function accionPublicar(uid: string, cuerpo: any) {
     if (!Number.isFinite(precio) || precio <= 0) throw new ErrorApp("datos_invalidos", `Pon un precio válido a «${v.nombre}»`, { sku: v.sku });
     if (!v.coste) throw new ErrorApp("faltan_datos", `«${v.nombre}» no se puede publicar: falta ${v.faltan.join(", ")}.`, { sku: v.sku, faltan: v.faltan });
     const liq = liquidacion(redondear(precio), v.coste.total, tarifas, v.coste.producto);
-    if (liq.neto < 0 || precio < precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (mínimo de Retador y sin pérdida tras la comisión).`, { sku: v.sku, minimoUsd: precioMinimoSinPerdida(v.coste.total, tarifas, v.coste.producto) });
+    if (liq.neto < 0 || precio < precioMinimoContandoEnvio(v.coste.total, tarifas, v.coste.producto)) throw new ErrorApp("precio_bajo_minimo", `«${v.nombre}»: ese precio queda por debajo del mínimo. Mínimo: ${precioMinimoContandoEnvio(v.coste.total, tarifas, v.coste.producto).toFixed(2)} USD (mínimo de Retador y sin pérdida contando el envío).`, { sku: v.sku, minimoUsd: precioMinimoContandoEnvio(v.coste.total, tarifas, v.coste.producto) });
     return { v, precio: redondear(precio), liq };
   });
 
@@ -770,7 +778,7 @@ async function accionActualizar(uid: string, cuerpo: any) {
           const hoy = vigentes.get(local.sku)?.coste;
           const coste = hoy ? hoy.total : Number(local.costPrice) + Number(local.shippingCost);
           const producto = hoy ? hoy.producto : Number(local.costPrice);
-          const minimo = precioMinimoSinPerdida(coste, tarifas, producto);
+          const minimo = precioMinimoContandoEnvio(coste, tarifas, producto);
           if (precio < minimo) throw new ErrorApp("precio_bajo_minimo", `Con ${precio.toFixed(2)} USD queda por debajo del mínimo en «${local.sku}». Mínimo: ${minimo.toFixed(2)} USD.`, { sku: local.sku, minimoUsd: minimo });
         }
         salida.precio_venta_usd = precio;
