@@ -360,8 +360,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                           <div className="mt-2 space-y-1.5 pl-6">
                             {c.envio > 0 && (
                               <p className="text-muted-foreground">
-                                El comprador pagará <b className="text-foreground">{usd(c.totalComprador)}</b> en total: {usd(c.precio)} del producto + {usd(c.envio)} de envío estimado.
-                                {c.totalComprador > c.costeProducto * 3 && ` Es ${(c.totalComprador / c.costeProducto).toFixed(1)} veces lo que cuesta el producto: revisa que el precio sea competitivo.`}
+                                Tu comprador verá en Retador: <b className="text-foreground">{usd(c.totalComprador)}</b> a pagar ({usd(c.precio)} del producto + {usd(c.envio)} de envío estimado).
                               </p>
                             )}
                             <details className="text-muted-foreground">
