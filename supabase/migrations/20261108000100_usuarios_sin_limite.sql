@@ -9,7 +9,7 @@ alter table public."UsuarioSinLimite" enable row level security;
 revoke all on public."UsuarioSinLimite" from anon, authenticated;
 grant select, insert, update, delete on public."UsuarioSinLimite" to authenticated;
 drop policy if exists "sin_limite_solo_administrador" on public."UsuarioSinLimite";
-create policy "sin_limite_solo_administrador" on public."UsuarioSinLimite" for all to authenticated using (public.es_admin()) with check (public.es_admin());
+create policy "sin_limite_solo_administrador" on public."UsuarioSinLimite" for all to authenticated using (private.es_admin()) with check (private.es_admin());
 
 -- `consumir_cuota` respeta la marca: no cuenta nada para esa persona (misma función de antes, con una comprobación al principio).
 create or replace function public.consumir_cuota(p_user text, p_tipo text, p_cantidad integer default 1)
