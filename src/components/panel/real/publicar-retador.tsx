@@ -48,6 +48,10 @@ interface Preparacion {
 const usd = (n: number) => `${n.toFixed(2)} USD`;
 const MAX_VARIANTES = 12;
 
+/** Códigos de variante que Retador acepta hoy (sin espacios ni comillas, hasta 100 caracteres). Los de CJ suelen llevar espacios y Retador los rechaza con «Cada variante necesita su sku». */
+const SKU_ADMITIDO_POR_RETADOR = /^[^\s<>"']{1,100}$/;
+const MOTIVO_SKU = 'un código de variante que Retador admita (el de este producto lleva espacios y Retador todavía no los acepta; ya se le ha pedido que los admita)';
+
 export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string; titulo: string; onClose: () => void }) {
   const [tienda, setTienda] = useState<TiendaRetador | null | undefined>(undefined);
   const [prep, setPrep] = useState<Preparacion | null>(null);
@@ -76,6 +80,8 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         if (!t || t.status !== 'CONNECTED') return;
         const [p, regla] = await Promise.all([llamarTienda<Preparacion>({ accion: 'preparar', storeId: t.id, itemId }), reglaPredeterminada().catch(() => null)]);
         if (!vivo) return;
+        // Una variante cuyo código Retador va a rechazar no se deja elegir: así no se manda una publicación que ya sabemos que falla
+        p.variantes = p.variantes.map((v) => (SKU_ADMITIDO_POR_RETADOR.test(v.sku) ? v : { ...v, coste: null, faltan: [MOTIVO_SKU] }));
         setPrep(p);
         const reglaUso = regla ?? DEFAULT_RULE;
         const iniciales: Record<string, string> = {};
@@ -197,7 +203,13 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
             </Alert>
           )}
 
-          {error && <Alert variant="danger">{error}</Alert>}
+          {error && !prep && <Alert variant="danger">{error}</Alert>}
+
+          {prep && !hecho && !prep.yaPublicado && prep.variantes.length > 0 && prep.variantes.every((v) => v.faltan.includes(MOTIVO_SKU)) && (
+            <Alert variant="warning" title="Este producto todavía no se puede publicar en Retador">
+              Los códigos de todas sus variantes llevan espacios y Retador todavía no los acepta. Ya se le ha pedido que los admita; en cuanto lo haga podrás publicarlo desde aquí sin cambiar nada.
+            </Alert>
+          )}
 
           {hecho && hecho.estado === 'agotado' && (
             <Alert variant="warning" title="Publicado, pero AGOTADO: los compradores no lo ven">
@@ -409,6 +421,7 @@ export function PublicarEnRetador({ itemId, titulo, onClose }: { itemId: string;
         </div>
 
         <footer className="space-y-1.5 border-t border-white/[0.07] px-4 py-3">
+          {error && prep && <Alert variant="danger" title="No se pudo publicar">{error}</Alert>}
           {problemas.length > 0 && prep && !hecho && !prep.yaPublicado && <p className="text-[11px] text-amber-300">{problemas[0]}</p>}
           {prep && !hecho && !prep.yaPublicado && (
             <label className="flex items-start gap-2 text-[12px]">
