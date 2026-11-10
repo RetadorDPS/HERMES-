@@ -89,19 +89,20 @@ const DESTINOS_DEFECTO = 12;
 
 /* ───────── Descarga de CJ por páginas: recuerda por categoría la siguiente página para no repetir siempre las mismas ───────── */
 
-const claveCursor = (categoria: string) => `hermes-cj-descarga:${categoria || 'todas'}`;
-const leerCursor = (categoria: string): number | null => {
+/** Cada combinación de categoría, orden y palabra tiene su propia página por la que seguir. */
+const claveCursor = (categoria: string, orden = 1, palabra = '') => `hermes-cj-descarga:${categoria || 'todas'}:o${orden}${palabra ? `:${palabra.toLowerCase()}` : ''}`;
+const leerCursor = (categoria: string, orden = 1, palabra = ''): number | null => {
   try {
-    const v = Number(localStorage.getItem(claveCursor(categoria)));
+    const v = Number(localStorage.getItem(claveCursor(categoria, orden, palabra)));
     return Number.isInteger(v) && v >= 1 ? v : null;
   } catch {
     return null;
   }
 };
-const guardarCursor = (categoria: string, pagina: number | null) => {
+const guardarCursor = (categoria: string, pagina: number | null, orden = 1, palabra = '') => {
   try {
-    if (pagina === null) localStorage.removeItem(claveCursor(categoria));
-    else localStorage.setItem(claveCursor(categoria), String(pagina));
+    if (pagina === null) localStorage.removeItem(claveCursor(categoria, orden, palabra));
+    else localStorage.setItem(claveCursor(categoria, orden, palabra), String(pagina));
   } catch {
     /* sin almacenamiento: la siguiente vez se calcula con lo ya descargado */
   }
@@ -117,11 +118,21 @@ async function contarCj(categoria: string): Promise<number> {
 }
 
 /** Página por la que seguir: la recordada; si no hay, se calcula con lo ya descargado (así no se repiten las primeras páginas). */
-async function paginaSiguiente(categoria: string, tamano: number): Promise<number> {
-  const guardada = leerCursor(categoria);
+async function paginaSiguiente(categoria: string, tamano: number, orden = 1, palabra = ''): Promise<number> {
+  const guardada = leerCursor(categoria, orden, palabra);
   if (guardada) return guardada;
+  // Con otro orden o con una palabra, lo ya descargado no dice nada sobre esas páginas: se empieza por la primera
+  if (orden !== 1 || palabra) return 1;
   return Math.floor((await contarCj(categoria)) / tamano) + 1;
 }
+
+/** Órdenes que ofrece CJ para el listado (el número es el de su API). */
+const ORDENES_CJ = [
+  { valor: 1, texto: 'Más populares (los más listados)' },
+  { valor: 3, texto: 'Más nuevos (recién añadidos a CJ)' },
+  { valor: 4, texto: 'Con más existencias' },
+  { valor: 2, texto: 'Más caros primero' },
+];
 
 interface CategoriaCj {
   externalId: string;
@@ -257,6 +268,9 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
   const [categorias, setCategorias] = useState<CategoriaCj[]>([]);
   const [categoriaId, setCategoriaId] = useState('');
   const [seguira, setSeguira] = useState<number | null>(null);
+  const [ordenCj, setOrdenCj] = useState(1);
+  const [palabraCj, setPalabraCj] = useState('');
+  const palabraLimpia = palabraCj.trim().slice(0, 80);
   const LIMITES = { descargar: esCj ? 500 : 150, detalle: 30, envio: 10, almacen: 50 };
   const fijar = (clave: keyof typeof cantidades, valor: string) => {
     const n = Math.floor(Number(valor));
@@ -291,8 +305,8 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     };
   }, [esCj, resultado]);
   useEffect(() => {
-    if (esCj) setSeguira(leerCursor(categoriaId));
-  }, [esCj, categoriaId, resultado]);
+    if (esCj) setSeguira(leerCursor(categoriaId, ordenCj, palabraLimpia));
+  }, [esCj, categoriaId, ordenCj, palabraLimpia, resultado]);
 
   /** Repite una llamada de una en una (con progreso y botón «Detener») y junta el resultado en un mensaje claro. */
   const enSerie = async (total: number, unidad: string, paso: (i: number) => Promise<Respuesta | 'fin'>) => {
@@ -355,7 +369,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     const paginas = Math.ceil(n / 50);
     const tamano = Math.ceil(n / paginas);
     const antes = await contarCj('');
-    let pagina = await paginaSiguiente(categoriaId, tamano);
+    let pagina = await paginaSiguiente(categoriaId, tamano, ordenCj, palabraLimpia);
     const desdePagina = pagina;
     let guardados = 0;
     let recibidos = 0;
@@ -365,7 +379,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     for (let i = 0; i < paginas; i += 1) {
       if (detener.current) break;
       setProgreso(`Descargando de CJ, página ${pagina} (${i + 1} de ${paginas})…`);
-      const r = await invocar('CJ_DROPSHIPPING', { accion: 'descargar', paginas: 1, tamano, orden: 1, paginaInicial: pagina, ...(categoriaId ? { categoryId: categoriaId } : {}) });
+      const r = await invocar('CJ_DROPSHIPPING', { accion: 'descargar', paginas: 1, tamano, orden: ordenCj, paginaInicial: pagina, ...(palabraLimpia ? { palabra: palabraLimpia } : {}), ...(categoriaId ? { categoryId: categoriaId } : {}) });
       if (!r.ok) {
         fallo = r.error ?? 'Falló una llamada';
         break;
@@ -376,14 +390,14 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
       guardados += r.guardados ?? 0;
       if (hubo === 0) {
         fin = 'Ya descargaste todos los productos de esta categoría. La próxima vez empezará otra vez desde la página 1.';
-        guardarCursor(categoriaId, null);
+        guardarCursor(categoriaId, null, ordenCj, palabraLimpia);
         break;
       }
       pagina += 1;
-      guardarCursor(categoriaId, pagina);
+      guardarCursor(categoriaId, pagina, ordenCj, palabraLimpia);
       if (hubo < tamano) {
         fin = 'Era la última página de esta categoría. La próxima vez empezará otra vez desde la página 1.';
-        guardarCursor(categoriaId, null);
+        guardarCursor(categoriaId, null, ordenCj, palabraLimpia);
         break;
       }
     }
@@ -397,7 +411,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
       return;
     }
     const resumen = recibidos
-      ? `Páginas ${desdePagina} a ${Math.max(desdePagina, pagina - (fin ? 0 : 1))}: ${recibidos} recibidos de CJ · ${nuevos} NUEVOS · ${soloActualizados} que ya tenías y solo se actualizaron${parada}.`
+      ? `Páginas ${desdePagina} a ${Math.max(desdePagina, pagina - (fin ? 0 : 1))}: ${recibidos} recibidos de CJ · ${nuevos} NUEVOS · ${soloActualizados} que ya tenías y solo se actualizaron${parada}.${nuevos === 0 ? ' Todo lo que devolvió CJ ya estaba en tu catálogo: prueba otra categoría, otro orden (por ejemplo «Más nuevos») o una palabra.' : ''}`
       : '';
     setResultado({ ok: true, mensaje: `${resumen} ${fin ?? ''}`.trim() || `Sin productos nuevos${parada}.`, llamadasACj: llamadas });
   };
@@ -463,7 +477,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
           {esCj && (
             <div className="space-y-1.5 rounded-lg border border-white/[0.07] p-2">
               <label className="flex flex-wrap items-center gap-2 text-[12px]">
-                Categoría de CJ para «2. Descargar productos populares»
+                Categoría de CJ para «2. Descargar productos»
                 <select
                   value={categoriaId}
                   onChange={(e) => setCategoriaId(e.target.value)}
@@ -471,7 +485,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
                   className="h-9 min-w-0 max-w-full flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]"
                   aria-label="Categoría de CJ"
                 >
-                  <option value="">Todas las categorías (los más populares de CJ)</option>
+                  <option value="">Todas las categorías</option>
                   {categorias.map((c) => (
                     <option key={c.externalId} value={c.externalId}>
                       {c.parentName ? `${c.parentName} › ${c.name}` : c.name}
@@ -487,7 +501,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
                     className="text-indigo-300 underline-offset-2 hover:underline"
                     disabled={trabajando !== null}
                     onClick={() => {
-                      guardarCursor(categoriaId, 1);
+                      guardarCursor(categoriaId, 1, ordenCj, palabraLimpia);
                       setSeguira(1);
                     }}
                   >
@@ -496,10 +510,25 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
                 )}
                 {categorias.length === 0 && ' Pulsa «1. Descargar categorías» para ver la lista de categorías.'}
               </p>
+              <label className="flex flex-wrap items-center gap-2 text-[12px]">
+                Orden
+                <select value={ordenCj} onChange={(e) => setOrdenCj(Number(e.target.value))} disabled={trabajando !== null} className="h-9 min-w-0 flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]" aria-label="Orden de la descarga de CJ">
+                  {ORDENES_CJ.map((o) => (
+                    <option key={o.valor} value={o.valor}>
+                      {o.texto}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-wrap items-center gap-2 text-[12px]">
+                Buscar por palabra (en inglés, opcional)
+                <Input value={palabraCj} onChange={(e) => setPalabraCj(e.target.value)} placeholder="por ejemplo: sneakers, sofa, dress" disabled={trabajando !== null} className="h-9 min-w-0 flex-1" aria-label="Palabra para buscar en CJ" />
+              </label>
+              <p className="text-[11px] text-muted-foreground">Si descargas siempre «los más populares» CJ te devuelve casi siempre los mismos. Cambia el orden, la categoría o busca una palabra para traer productos distintos.</p>
             </div>
           )}
           <div className="grid gap-2 sm:grid-cols-3">
-            {cantidad('descargar', esCj ? '2. Descargar productos populares' : '2. Descargar productos más vendidos', 'productos', `Máx. ${LIMITES.descargar}. Una llamada por cada 50.`)}
+            {cantidad('descargar', esCj ? '2. Descargar productos de CJ' : '2. Descargar productos más vendidos', 'productos', `Máx. ${LIMITES.descargar}. Una llamada por cada 50.`)}
             {cantidad('detalle', '3. Completar fichas', 'fichas', `Máx. ${LIMITES.detalle}. Una llamada por ficha (la más popular primero).`)}
             {cantidad('envio', '4. Cotizar envío mundial', 'productos', `Máx. ${LIMITES.envio}. Cada producto hace hasta ${esCj ? '30 llamadas a CJ (1 por segundo)' : '12 llamadas a AliExpress'}.`, 'gradient')}
           </div>
