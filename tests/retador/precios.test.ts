@@ -1,6 +1,6 @@
 // Pruebas de las cuentas de Retador. Ejecutar: npx tsx tests/retador/precios.test.ts
 import assert from 'node:assert/strict';
-import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, netoContandoEnvio, precioMinimoContandoEnvio, precioMinimoPorBase, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
+import { costeParaPublicar, costePuestoEnCuba, datosQueFaltan, esContratoV13, faltanParaPublicar, liquidacion, motivoPesoDudoso, netoContandoEnvio, precioMinimoContandoEnvio, precioMinimoPorBase, precioMinimoSinPerdida, precioPropuesto } from '../../src/lib/retador/precios';
 
 const t = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3 };
 
@@ -123,3 +123,20 @@ console.log('contando el envío: ok');
   assert.ok(l.neto > 0 && l.neto < 5);
 }
 console.log('base del precio: ok');
+
+// ── Peso no fiable (caso real: sofá de CJ con 100 g y 525,26 USD → envío a Cuba de 0,44 USD) ──
+{
+  const t13 = { hubUsdPorLibra: 1.99, diasHubCuba: [8, 15] as [number, number], comisionPctGanancia: 8, pasarelaPct: 4.4, pasarelaFijaUsd: 0.3, pasarelaACargo: 'vendedor' as const, comisionBase: 'precio_venta_menos_costo_producto_menos_pasarela' as const, gananciaMinimaRetadorUsd: 1 };
+  assert.equal(motivoPesoDudoso(100, 525.26), '100 g para un producto que cuesta 525.26 USD');
+  assert.equal(motivoPesoDudoso(1101, 11.45), null); // zapatillas: peso creíble
+  assert.equal(motivoPesoDudoso(3, 11.14), null); // cubierta de cámara: pequeña y barata, creíble
+  assert.equal(motivoPesoDudoso(20, 1.45), null);
+  assert.equal(motivoPesoDudoso(null, 525), null); // sin dato no es «dudoso», es «falta»
+  const sofa = { costeUsd: 525.26, envioHubUsd: 0, pesoGramos: 100, tarifas: t13 };
+  assert.equal(costeParaPublicar(sofa), null); // no se calcula ni se publica
+  assert.ok(faltanParaPublicar(sofa)[0].startsWith('un peso creíble del proveedor'));
+  // Un producto normal sigue igual
+  assert.ok(costeParaPublicar({ costeUsd: 11.45, envioHubUsd: 18.93, pesoGramos: 1101, tarifas: t13 }));
+  assert.deepEqual(faltanParaPublicar({ costeUsd: 11.45, envioHubUsd: 18.93, pesoGramos: 1101, tarifas: t13 }), []);
+}
+console.log('peso no fiable: ok');

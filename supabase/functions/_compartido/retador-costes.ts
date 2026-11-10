@@ -57,6 +57,20 @@ export interface CostePuestoEnCuba {
 
 const esNumero = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
 
+/**
+ * Peso que no es creíble para lo que cuesta el producto: los proveedores a veces dejan un peso de relleno (CJ pone 100 g a un sofá de 525 USD).
+ * Con un peso así el envío por peso sale ridículamente barato y el vendedor o Retador pierden dinero. No se inventa un peso: se marca como NO FIABLE
+ * y quien publica debe confirmarlo. Umbral prudente: hasta 150 g y a partir de 100 USD de costo (un producto de ese precio no pesa tan poco).
+ * Devuelve el motivo en español, o null si el peso es creíble o no hay dato.
+ */
+export const PESO_DUDOSO_MAX_G = 150;
+export const PESO_DUDOSO_COSTE_MIN_USD = 100;
+export function motivoPesoDudoso(pesoGramos: number | null | undefined, costeUsd: number | null | undefined): string | null {
+  if (!esNumero(pesoGramos) || pesoGramos <= 0 || !esNumero(costeUsd)) return null;
+  if (pesoGramos <= PESO_DUDOSO_MAX_G && costeUsd >= PESO_DUDOSO_COSTE_MIN_USD) return `${pesoGramos} g para un producto que cuesta ${costeUsd.toFixed(2)} USD`;
+  return null;
+}
+
 /** Qué datos reales faltan para calcular el coste puesto en Cuba (lista vacía = se puede calcular). */
 export function datosQueFaltan(e: EntradaCoste): string[] {
   const falta: string[] = [];
@@ -81,12 +95,15 @@ export function costePuestoEnCuba(e: EntradaCoste): CostePuestoEnCuba | null {
  * así que publicar solo exige el coste de la variante; peso y envío al hub solo sirven para estimar el neto. Con la versión 1 del contrato siguen siendo obligatorios.
  */
 export function faltanParaPublicar(e: EntradaCoste): string[] {
+  const dudoso = motivoPesoDudoso(e.pesoGramos, e.costeUsd);
+  if (dudoso) return [`un peso creíble del proveedor (informa ${dudoso}); sin él el envío saldría mucho más barato de lo real`];
   if (esContratoV13(e.tarifas)) return esNumero(e.costeUsd) ? [] : ['coste de la variante'];
   return datosQueFaltan(e);
 }
 
 /** Coste con el que se publica: el completo si hay datos para estimarlo; con el contrato v1.3, solo el del producto marcado «sinEnvio». */
 export function costeParaPublicar(e: EntradaCoste): CostePuestoEnCuba | null {
+  if (motivoPesoDudoso(e.pesoGramos, e.costeUsd)) return null; // peso no fiable: no se calcula ningún envío ni se publica
   const completo = costePuestoEnCuba(e);
   if (completo) return completo;
   if (esContratoV13(e.tarifas) && esNumero(e.costeUsd)) {

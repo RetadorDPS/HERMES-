@@ -17,7 +17,7 @@ import { Input, Textarea } from '@/components/ui/input';
 import { DEFAULT_RULE } from '@/lib/pricing';
 import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
-import { esContratoV13, liquidacion, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
+import { esContratoV13, liquidacion, motivoPesoDudoso, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
 import { sugerirCategoria } from '@/lib/retador/sugerir-categoria';
 import { cn } from '@/lib/utils';
 import { BloqueVincular } from './vincular-retador';
@@ -85,7 +85,12 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         const [p, regla] = await Promise.all([llamarTienda<Preparacion>({ accion: 'preparar', storeId: t.id, itemId }), reglaPredeterminada().catch(() => null)]);
         if (!vivo) return;
         // Una variante cuyo código Retador va a rechazar no se deja elegir: así no se manda una publicación que ya sabemos que falla
-        p.variantes = p.variantes.map((v) => (SKU_ADMITIDO_POR_RETADOR.test(v.sku) ? v : { ...v, coste: null, faltan: [MOTIVO_SKU] }));
+        p.variantes = p.variantes.map((v) => {
+          if (!SKU_ADMITIDO_POR_RETADOR.test(v.sku)) return { ...v, coste: null, faltan: [MOTIVO_SKU] };
+          // Un peso de relleno del proveedor (p. ej. 100 g para un sofá de 525 USD) haría el envío ridículamente barato: no se publica sin un peso creíble
+          const dudoso = motivoPesoDudoso(v.pesoGramos, v.costeUsd);
+          return dudoso ? { ...v, coste: null, faltan: [`un peso creíble del proveedor (informa ${dudoso}); sin él el envío saldría mucho más barato de lo real`] } : v;
+        });
         setPrep(p);
         const reglaUso = regla ?? DEFAULT_RULE;
         const iniciales: Record<string, string> = {};

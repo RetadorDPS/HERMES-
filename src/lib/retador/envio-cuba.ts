@@ -6,6 +6,7 @@
  *   2) hub → Cuba: peso real de la variante × tarifa por libra que informa Retador (nunca copiada a mano).
  * Si falta un dato real (cotización, peso, tarifa) no se calcula y se dice qué falta. Nada se inventa.
  */
+import { motivoPesoDudoso } from '../../../supabase/functions/_compartido/retador-costes';
 import { envioAlHub, stockPorOrigen } from '../../../supabase/functions/_compartido/retador-stock';
 
 const GRAMOS_POR_LIBRA = 453.592;
@@ -38,6 +39,7 @@ export function envioACuba(ficha: any, proveedor: 'cj' | 'aliexpress', tarifa: T
   let hub: ReturnType<typeof envioAlHub> = null;
   const tramos2: number[] = [];
   let sinPeso = 0;
+  let pesoDudoso: string | null = null;
   for (const v of variantes) {
     const existencias = stockPorOrigen(v, proveedor);
     if (existencias.total === null || existencias.total <= 0) continue; // solo cuentan las variantes con stock
@@ -50,10 +52,21 @@ export function envioACuba(ficha: any, proveedor: 'cj' | 'aliexpress', tarifa: T
       sinPeso += 1;
       continue;
     }
+    // Un peso de relleno del proveedor (p. ej. 100 g para un sofá de 525 USD) no vale: el envío saldría ridículamente barato
+    const dudoso = motivoPesoDudoso(peso, typeof v.precio === 'number' ? v.precio : null);
+    if (dudoso) {
+      pesoDudoso = dudoso;
+      continue;
+    }
     tramos2.push(r2((peso / GRAMOS_POR_LIBRA) * tarifa.hubUsdPorLibra));
   }
   if (!hub) return { ok: false, falta: 'la cotización del proveedor hacia EE. UU. desde un almacén con stock' };
-  if (!tramos2.length) return { ok: false, falta: 'el peso real de las variantes con stock' };
+  if (!tramos2.length) {
+    return {
+      ok: false,
+      falta: pesoDudoso ? `un peso creíble del producto: el proveedor informa ${pesoDudoso}, así que no se puede calcular un envío fiable` : 'el peso real de las variantes con stock',
+    };
+  }
   const min2 = Math.min(...tramos2);
   const max2 = Math.max(...tramos2);
   const dias = hub.dias ? { min: hub.dias[0] + tarifa.diasHubCuba[0], max: hub.dias[1] + tarifa.diasHubCuba[1] } : { min: null, max: null };
