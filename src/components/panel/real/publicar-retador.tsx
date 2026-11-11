@@ -70,6 +70,8 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   const [subcat, setSubcat] = useState('');
   const [tituloEdit, setTituloEdit] = useState('');
   const [descripcion, setDescripcion] = useState('');
+  // El proveedor (sobre todo AliExpress) a veces no trae texto de descripción, solo imágenes: se parte del título y se avisa
+  const [descripcionDelTitulo, setDescripcionDelTitulo] = useState(false);
   const [fotos, setFotos] = useState<string[]>([]);
   // Por defecto el precio sigue la regla del vendedor cuando cambie el coste del proveedor (se puede quitar)
   const [precioAuto, setPrecioAuto] = useState(true);
@@ -112,7 +114,10 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         setPrecios(iniciales);
         setElegidas(marcadas);
         setTituloEdit(p.contenido.titulo);
-        setDescripcion(p.contenido.descripcion);
+        // Retador exige una descripción de texto de 1 a 5000 caracteres: si el proveedor no trae ninguna, se parte del título (dato real) y se avisa
+        const textoProveedor = (p.contenido.descripcion ?? '').trim();
+        setDescripcion(textoProveedor || p.contenido.titulo);
+        setDescripcionDelTitulo(!textoProveedor);
         setFotos(p.contenido.imagenes);
         // Sin categoría por defecto: la elige la persona (antes salía la primera de la lista y se podía publicar una depiladora como «Muebles»)
         setCat('');
@@ -187,7 +192,8 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
   if (tituloEdit.length > 150) problemas.push('El título pasa de 150 caracteres.');
-  if (descripcion.length > 5000) problemas.push('La descripción pasa de 5000 caracteres.');
+  if (!descripcion.trim()) problemas.push('Escribe una descripción (Retador exige al menos un carácter).');
+  if (descripcion.trim().length > 5000) problemas.push('La descripción pasa de 5000 caracteres.');
   if (!fotos.length) problemas.push('Deja al menos una foto.');
 
   /** Marca o quita un grupo de variantes sin pasar del máximo que admite Retador. */
@@ -550,7 +556,8 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                   <span className="flex justify-between text-muted-foreground">
                     Descripción (texto, sin formato) <span className={descripcion.length > 5000 ? 'text-rose-300' : ''}>{descripcion.length}/5000</span>
                   </span>
-                  <Textarea rows={6} value={descripcion} onChange={(e) => setDescripcion(e.target.value)} />
+                  <Textarea rows={6} value={descripcion} onChange={(e) => { setDescripcion(e.target.value); setDescripcionDelTitulo(false); }} />
+                  {descripcionDelTitulo && <span className="block text-[11px] text-amber-300">El proveedor no trae descripción de texto (solo imágenes): hemos puesto el título. Escríbela mejor si quieres.</span>}
                 </label>
                 <p className="text-[11px] text-muted-foreground">El título y la descripción vienen del proveedor tal cual (normalmente en inglés). Tradúcelos aquí si quieres.</p>
                 <div className="space-y-1">
