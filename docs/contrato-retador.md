@@ -241,3 +241,14 @@ Lo que debe resolver o confirmar Retador (ver el mensaje final):
 3. Permitir «envío gratis / incluido» por producto.
 4. Subir el máximo de variantes y publicarlo en `limites.max_variantes`.
 5. Al elegir una variante (color o talla) en la ficha del producto, cambiar la foto a la de esa variante.
+
+## Contratos 1.7 y 1.8 (respuesta de Retador del 18/11/2026, Retador v329; mismo `version_contrato: 1`)
+
+Comprobado el 19/11/2026 en `dropship-capacidades` real: `finanzas`, `envio_incluido` y `retador_paga_proveedor` en true; `planes_conjuntos` 0, 34/340 y 79/790 (Pro suelto 22/220).
+
+**1.7 — Retador siempre paga al proveedor.** DropshipPilot ya no compra ni pide confirmar pagos: fuera «Aprobar y comprar», «Simular compra» y «Ya lo pagué en CJ»; `compras-proveedor` se queda apagada. La pantalla Pedidos lee `POST dropship-finanzas` (cuerpo `{desde?, limite: 1..100}`, 120 llamadas por hora, `siguiente_desde` para seguir) con `quien_paga_proveedor`, `dias_liberacion`, `moneda`, `resumen{retenido, por_liberar, liberado_total, saldo_disponible}` y `ventas[]{pedido_id, numero, cobrado, producto, envio, envio_incluido, pasarela, comision, ganancia_vendedor, estado_dinero, libera_en, liberado_en, compra_proveedor{quien_paga, estado, etapa}, actualizado_en}`. La Billetera es de Retador: aquí solo se enseña `saldo_disponible` y el enlace a retadormarketplace.es (Perfil → Billetera); nada de datos bancarios ni retiros.
+
+**1.8 — Envío incluido por país.** Campo `envio_incluido` (lista de códigos de 2 letras, como mucho 20; `[]` lo quita) en publicar y actualizar, solo si `capacidades.envio_incluido`. Ganancia = (precio − costo − envío real − pasarela) × (1 − comisión); Retador protege cada compra. DropshipPilot lo ofrece al publicar (Cuba la primera y recomendada), calcula «te quedan» con el envío de cada país y no deja incluir un país sin envío cotizado o con pérdida (pantalla y servidor). Pendiente aquí: cambiarlo en un producto ya publicado.
+
+**Otros puntos de la respuesta:** envío de AliExpress corregido en Retador (zapatillas a Cuba 27,26 = 22,83 + 4,43; ningún pedido se cobró mal); un peso de 150 g o menos en un producto de 100 USD o más sale «no disponible» para Cuba (igual que aquí); campo opcional `variantes[].peso_gramos` (1..200000) con `capacidades.peso_variante` — aún no se manda desde aquí; el volumétrico depende de un dato de Daniel; el IVA de AliExpress lo paga el comprador; `limites.max_variantes = 100`; la foto por variante ya la hace Retador; 17 categorías, incluida «otros».
+

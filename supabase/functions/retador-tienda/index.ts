@@ -41,7 +41,7 @@ import {
   tarifasDeConfig,
   tokenConFormato,
 } from "./retador.ts";
-import { costeParaPublicar, faltanParaPublicar, liquidacion, precioMinimoPorBase, type BasePrecio, type TarifasRetador } from "./retador-costes.ts";
+import { costeParaPublicar, faltanParaPublicar, liquidacion, liquidacionEnvioIncluido, paisesEnvioIncluido, precioMinimoPorBase, type BasePrecio, type TarifasRetador } from "./retador-costes.ts";
 import { envioAlHub, stockPorOrigen } from "./retador-stock.ts";
 import { efectoDeCancelacion, normalizarPedido, parsearRef } from "./retador-pedidos.ts";
 import { resenasParaRetador } from "./resenas.ts";
@@ -300,6 +300,17 @@ interface VariantePreparada {
   coste: ReturnType<typeof costeParaPublicar>;
   faltan: string[];
   precioMinimoUsd: number | null;
+  /** Envío estimado por país (USD) con las cotizaciones reales del proveedor; Cuba = tramo al centro de EE. UU. + tramo a Cuba por peso. Solo países con cotización. */
+  enviosPais: Record<string, number>;
+}
+
+/** Envío estimado por país para una variante: la cotización real más barata desde el almacén que tiene el stock; Cuba sale del coste puesto en Cuba. */
+function enviosPorPais(ficha: any, proveedor: "cj" | "aliexpress", origenesConStock: Set<string>, coste: ReturnType<typeof costeParaPublicar>): Record<string, number> {
+  const salida: Record<string, number> = {};
+  const e = envioParaRetador(ficha, proveedor === "cj" ? origenesConStock : null);
+  for (const d of e?.destinos ?? []) if (typeof d.precio_usd === "number") salida[d.pais] = d.precio_usd;
+  if (coste && !coste.sinEnvio) salida.CU = redondear(coste.envioHub + coste.hubCuba);
+  return salida;
 }
 
 function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: TarifasRetador | null) {
@@ -333,6 +344,7 @@ function prepararVariantes(ficha: any, proveedor: "cj" | "aliexpress", tarifas: 
       coste,
       faltan,
       precioMinimoUsd: coste && tarifas ? precioMinimoPorBase("producto", coste.total, tarifas, coste.producto) : null,
+      enviosPais: enviosPorPais(ficha, proveedor, origenesConStock, coste),
     };
   });
   return { variantes, hub };
@@ -374,6 +386,40 @@ function contenidoFinal(entrada: any, base: ReturnType<typeof contenidoPorDefect
 }
 
 /* ───────────────────────────── Acciones ───────────────────────────── */
+
+/**
+ * Contrato 1.7: Retador SIEMPRE paga al proveedor. El dinero del vendedor (lo que gana en cada venta) lo cuenta Retador y vive en su
+ * Billetera de Retador. Aquí solo se lee (`dropship-finanzas`) para enseñarlo; nunca se piden datos bancarios ni se gestionan retiros.
+ */
+async function accionFinanzas(uid: string, cuerpo: any) {
+  const tienda = await tiendaPropia(uid, cuerpo.storeId);
+  const peticion: Record<string, unknown> = { limite: Math.min(100, Math.max(1, Math.floor(Number(cuerpo.limite) || 50))) };
+  if (typeof cuerpo.desde === "string" && cuerpo.desde && !Number.isNaN(Date.parse(cuerpo.desde))) peticion.desde = cuerpo.desde.slice(0, 40);
+  let r: any;
+  try {
+    r = await conRetador(tienda, "finanzas", peticion);
+  } catch (e) {
+    if (e instanceof ErrorRetador && (e.codigo === "http_404" || e.codigo === "accion_desconocida")) return { disponible: false };
+    throw e;
+  }
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  return {
+    disponible: true,
+    quienPagaProveedor: typeof r.quien_paga_proveedor === "string" ? r.quien_paga_proveedor : null,
+    diasLiberacion: num(r.dias_liberacion),
+    moneda: typeof r.moneda === "string" ? r.moneda : "USD",
+    resumen: r.resumen ? { retenido: num(r.resumen.retenido), porLiberar: num(r.resumen.por_liberar), liberadoTotal: num(r.resumen.liberado_total), saldoDisponible: num(r.resumen.saldo_disponible) } : null,
+    ventas: (Array.isArray(r.ventas) ? r.ventas : []).map((v: any) => ({
+      pedidoId: String(v.pedido_id ?? ""), numero: typeof v.numero === "string" ? v.numero : null,
+      cobrado: num(v.cobrado), producto: num(v.producto), envio: num(v.envio), envioIncluido: v.envio_incluido === true,
+      pasarela: num(v.pasarela), comision: num(v.comision), ganancia: num(v.ganancia_vendedor),
+      estadoDinero: typeof v.estado_dinero === "string" ? v.estado_dinero : null, liberaEn: v.libera_en ?? null, liberadoEn: v.liberado_en ?? null,
+      compraProveedor: v.compra_proveedor ? { quienPaga: v.compra_proveedor.quien_paga ?? null, estado: v.compra_proveedor.estado ?? null, etapa: v.compra_proveedor.etapa ?? null } : null,
+      actualizadoEn: v.actualizado_en ?? null,
+    })),
+    siguienteDesde: typeof r.siguiente_desde === "string" ? r.siguiente_desde : null,
+  };
+}
 
 /** Guarda la clave (cifrada), crea o actualiza la tienda de Retador del usuario y lee sus tarifas. La clave nunca vuelve al navegador. */
 async function guardarTienda(uid: string, token: string, extra: Record<string, unknown> = {}) {
@@ -561,6 +607,8 @@ async function accionPreparar(uid: string, cuerpo: any) {
     categorias: cfg.categorias ?? [],
     provincias: cfg.provincias ?? [],
     maxVariantes: maxVariantesDe(cfg),
+    // Lo que Retador anuncia que admite (envío incluido, finanzas, peso por variante…): la pantalla solo enseña lo que esté en true
+    capacidades: cfg.capacidades ?? {},
     vendedor: cfg.vendedor ?? null,
     proveedor,
     envioHub: hub,
@@ -647,6 +695,22 @@ async function accionPublicar(uid: string, cuerpo: any) {
     return { v, precio: redondear(precio), liq };
   });
 
+  // Contrato 1.8: envío incluido en el precio para los países elegidos (solo si Retador lo anuncia). Nunca con pérdida: con el envío
+  // estimado de cada país el vendedor no puede quedar por debajo de cero (Retador además lo comprueba con el envío real en cada compra).
+  const envioIncluido = paisesEnvioIncluido(cuerpo.envioIncluido);
+  if (envioIncluido === null) throw new ErrorApp("datos_invalidos", "Los países de «envío incluido» no son válidos (códigos de 2 letras, como mucho 20).", { campo: "envioIncluido" });
+  if (envioIncluido.length) {
+    if (cfg.capacidades?.envio_incluido !== true) throw new ErrorApp("envio_incluido_no_disponible", "Retador todavía no admite el envío incluido en el precio.");
+    for (const { v, precio } of lineas) {
+      for (const pais of envioIncluido) {
+        const envio = v.enviosPais[pais];
+        if (typeof envio !== "number") throw new ErrorApp("faltan_datos", `No hay envío cotizado a ${pais} para «${v.nombre}»: cotízalo en la ficha antes de incluirlo en el precio.`, { sku: v.sku, pais });
+        const l = liquidacionEnvioIncluido(precio, v.coste!.producto, envio, tarifas);
+        if (l.neto < 0) throw new ErrorApp("precio_bajo_minimo", `Con el envío a ${pais} incluido (${envio.toFixed(2)} USD) perderías dinero en «${v.nombre}». Sube el precio o quita ese país.`, { sku: v.sku, pais });
+      }
+    }
+  }
+
   const contenido = contenidoFinal(cuerpo.contenido, contenidoPorDefecto(item, ficha));
   const yaExiste = await publicadoVigente(tienda, item.externalId);
   if (yaExiste) throw new ErrorApp("ya_publicado", yaExiste.status === "PAUSED" ? "Este producto ya está en tu tienda de Retador, pausado. Reactívalo desde «Productos», o elimínalo allí para volver a importarlo." : "Este producto ya está publicado en tu tienda de Retador. Edítalo desde «Productos».", { productId: yaExiste.id });
@@ -692,6 +756,7 @@ async function accionPublicar(uid: string, cuerpo: any) {
       // Opiniones reales del proveedor (con su origen), solo si Retador dice que las acepta
       ...(opinionesPublicar ? { resenas_proveedor: opinionesPublicar } : {}),
       ...(envioPublicar ? { envio: envioPublicar } : {}),
+      ...(envioIncluido.length ? { envio_incluido: envioIncluido } : {}),
     });
   } catch (e) {
     await deshacer();
@@ -720,6 +785,7 @@ async function accionPublicar(uid: string, cuerpo: any) {
         ref, moderacion: remoto.moderacion ?? null, publicadoEn: ahora(), origenUltimoCambio: "dropship",
         // El precio es solo el del producto: el comprador paga el envío aparte (decisión del 9/11/2026). Los productos antiguos no llevan esta marca y siguen con la base «total».
         precioBase: "producto",
+        ...(envioIncluido.length ? { envioIncluido: Array.isArray(remoto.envio_incluido) ? remoto.envio_incluido : envioIncluido } : {}),
         // Lo que ya se mandó a Retador, para que la sincronización automática solo mande lo que cambie
         stockProveedor: Object.fromEntries(lineas.map(({ v }) => [v.sku, v.stock])),
         ...(envioPublicar && typeof remoto.envio_paises === "number" && remoto.envio_paises > 0 ? { envioHash: huellaEnvio(envioPublicar), envioEnviadoEn: ahora() } : {}),
@@ -1404,7 +1470,7 @@ Deno.serve(async (req) => {
     const acciones: Record<string, (uid: string, c: any) => Promise<unknown>> = {
       conectar: accionConectar, vinculo_info: accionVinculoInfo, vincular_iniciar: accionVincularIniciar, vincular_canjear: accionVincularCanjear, vincular_entrada: accionVincularEntrada, vincular_confirmar: accionVincularConfirmar, vincular_cancelar: accionVincularCancelar, desconectar: accionDesconectar, config: accionConfig, preparar: accionPreparar,
       publicar: accionPublicar, actualizar: accionActualizar, retirar: accionRetirar, estado: accionEstado,
-      sincronizar: accionSincronizar, precio_auto: accionPrecioAuto, eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido,
+      sincronizar: accionSincronizar, precio_auto: accionPrecioAuto, eliminar: accionEliminar, pedidos_sincronizar: accionPedidosSincronizar, pedido_informar: accionPedidoInformar, simular_pedido: accionSimularPedido, finanzas: accionFinanzas,
     };
     const f = acciones[accion];
     if (!f) return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });

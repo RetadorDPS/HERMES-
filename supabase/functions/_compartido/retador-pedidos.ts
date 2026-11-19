@@ -113,7 +113,7 @@ export function efectoDeCancelacion(estadoLocal: string): { estado: 'CANCELED' |
 export function etiquetaEstadoPedido(estado: string): { texto: string; tono: 'ok' | 'aviso' | 'error' | 'neutro' } {
   switch (estado) {
     case 'PAID':
-      return { texto: 'Pagado: falta comprarlo al proveedor', tono: 'aviso' };
+      return { texto: 'Pagado: Retador lo compra al proveedor', tono: 'aviso' };
     case 'SUPPLIER_PURCHASED':
       return { texto: 'Comprado al proveedor', tono: 'ok' };
     case 'SUPPLIER_ERROR':

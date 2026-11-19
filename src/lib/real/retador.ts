@@ -59,6 +59,8 @@ export interface TiendaRetador {
   resenasProveedor: boolean;
   /** El plan de Retador manda también aquí (plan conjunto): esta app no cobra a esta cuenta. */
   planConjunto: boolean;
+  /** Lo que Retador anuncia que admite (finanzas, retador_paga_proveedor, envio_incluido…). Solo se enseña lo que esté en true. */
+  capacidades: Record<string, boolean>;
 }
 
 /** Convierte las tarifas que guarda la tienda (formato del contrato) al formato de las cuentas. */
@@ -112,6 +114,7 @@ export async function obtenerTiendaRetador(): Promise<TiendaRetador | null> {
     publicados: publicados.count ?? 0,
     resenasProveedor: aj.capacidades?.resenas_proveedor === true,
     planConjunto: aj.planConjunto === true,
+    capacidades: aj.capacidades && typeof aj.capacidades === 'object' ? aj.capacidades : {},
   };
 }
 
@@ -268,3 +271,38 @@ export async function desvincularCuenta(storeId: string): Promise<{ productosEnR
   if (!data?.ok) throw new ErrorTiendaRetador(data?.error ?? 'No se pudo desvincular.', data?.codigo ?? 'desconocido');
   return data;
 }
+
+/** Dinero de una venta según Retador (contrato 1.7: Retador paga al proveedor y la ganancia va a la Billetera de Retador). */
+export interface VentaFinanzas {
+  pedidoId: string;
+  numero: string | null;
+  cobrado: number | null;
+  producto: number | null;
+  envio: number | null;
+  envioIncluido: boolean;
+  pasarela: number | null;
+  comision: number | null;
+  ganancia: number | null;
+  estadoDinero: string | null;
+  liberaEn: string | null;
+  liberadoEn: string | null;
+  compraProveedor: { quienPaga: string | null; estado: string | null; etapa: string | null } | null;
+  actualizadoEn: string | null;
+}
+export interface FinanzasRetador {
+  disponible: boolean;
+  quienPagaProveedor?: string | null;
+  diasLiberacion?: number | null;
+  moneda?: string;
+  resumen?: { retenido: number | null; porLiberar: number | null; liberadoTotal: number | null; saldoDisponible: number | null } | null;
+  ventas?: VentaFinanzas[];
+  siguienteDesde?: string | null;
+}
+
+/** Lo que gana el vendedor en cada venta y en qué punto está su dinero (lo cuenta Retador). Nunca trae el costo del proveedor. */
+export async function obtenerFinanzas(storeId: string): Promise<FinanzasRetador> {
+  return await llamarTienda<FinanzasRetador>({ accion: 'finanzas', storeId, limite: 50 });
+}
+
+/** Dirección de Retador donde el vendedor ve su Billetera (Perfil → Billetera). */
+export const URL_BILLETERA_RETADOR = 'https://retadormarketplace.es';

@@ -17,9 +17,10 @@ import { Input, Textarea } from '@/components/ui/input';
 import { DEFAULT_RULE } from '@/lib/pricing';
 import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
-import { esContratoV13, liquidacion, motivoPesoDudoso, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
+import { esContratoV13, liquidacion, liquidacionEnvioIncluido, motivoPesoDudoso, precioMinimoEnvioIncluido, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
 import { sugerirCategoria } from '@/lib/retador/sugerir-categoria';
 import { cn } from '@/lib/utils';
+import { nombrePais } from '@/lib/paises';
 import { BloqueVincular } from './vincular-retador';
 
 interface VarianteServidor {
@@ -33,6 +34,8 @@ interface VarianteServidor {
   stockFabrica?: number | null;
   coste: CostePuestoEnCuba | null;
   faltan: string[];
+  /** Envío estimado por país (USD) con las cotizaciones reales del proveedor (Cuba incluida si se pudo calcular). */
+  enviosPais?: Record<string, number>;
 }
 interface Preparacion {
   tarifas: TarifasRetador | null;
@@ -46,6 +49,8 @@ interface Preparacion {
   costeReferencia?: { pais: string | null; proveedor: 'cj' | 'aliexpress' };
   /** Máximo de variantes por producto que admite Retador (lo informa su configuración; si no lo dice, 12). */
   maxVariantes?: number;
+  /** Lo que Retador anuncia que admite (envío incluido, finanzas…). */
+  capacidades?: Record<string, boolean>;
 }
 
 const usd = (n: number) => `${n.toFixed(2)} USD`;
@@ -75,6 +80,8 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   const [fotos, setFotos] = useState<string[]>([]);
   // Por defecto el precio sigue la regla del vendedor cuando cambie el coste del proveedor (se puede quitar)
   const [precioAuto, setPrecioAuto] = useState(true);
+  // Contrato 1.8: países donde el envío va incluido en el precio (el comprador de ese país no paga envío aparte)
+  const [paisesIncluido, setPaisesIncluido] = useState<string[]>([]);
 
   useEffect(() => {
     let vivo = true;
@@ -178,6 +185,27 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
     return m;
   }, [prep, precios]);
 
+  const admiteEnvioIncluido = prep?.capacidades?.envio_incluido === true;
+  /** Países con envío cotizado en las variantes elegidas (Cuba primero). */
+  const paisesConEnvio = useMemo(() => {
+    const todos = new Set<string>();
+    for (const v of marcadas) for (const k of Object.keys(v.enviosPais ?? {})) todos.add(k);
+    return [...todos].sort((a, b) => (a === 'CU' ? -1 : b === 'CU' ? 1 : nombrePais(a).localeCompare(nombrePais(b), 'es')));
+  }, [marcadas]);
+  /** Con el envío incluido: lo que queda en cada variante y país elegidos (null = no hay envío cotizado a ese país). */
+  const conIncluido = (v: VarianteServidor, pais: string) => {
+    const precio = Number(precios[v.sku]);
+    const envio = v.enviosPais?.[pais];
+    if (!prep?.tarifas || !v.coste || typeof envio !== 'number' || !Number.isFinite(precio) || precio <= 0) return null;
+    const l = liquidacionEnvioIncluido(precio, v.coste.producto, envio, prep.tarifas);
+    return { ...l, minimo: precioMinimoEnvioIncluido(v.coste.producto, envio, prep.tarifas, precioMinimoSinPerdida(v.coste.total, prep.tarifas, v.coste.producto)) };
+  };
+  const paisesSinEnvio = paisesIncluido.filter((pais) => marcadas.some((v) => typeof v.enviosPais?.[pais] !== 'number'));
+  const paisesConPerdida = paisesIncluido.filter((pais) => marcadas.some((v) => {
+    const c = conIncluido(v, pais);
+    return c !== null && c.neto < 0;
+  }));
+
   const perdidas = marcadas.filter((v) => {
     const c = cuentas.get(v.sku);
     return !c || c.neto < 0 || c.precio < c.minimo;
@@ -189,6 +217,8 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
   if (marcadas.length > maxVariantes) problemas.push(`Has elegido ${marcadas.length} variantes y Retador admite ${maxVariantes} como máximo: quita ${marcadas.length - maxVariantes}.`);
   if (sinPrecio.length) problemas.push('Pon un precio válido a todas las variantes elegidas.');
   if (perdidas.length) problemas.push('Hay variantes por debajo del precio mínimo o con las que perderías dinero. Sube el precio al mínimo que se indica.');
+  if (paisesSinEnvio.length) problemas.push(`No hay envío cotizado a ${paisesSinEnvio.map(nombrePais).join(', ')} en alguna variante elegida: cotízalo en la ficha o quita ese país del envío incluido.`);
+  if (paisesConPerdida.length) problemas.push(`Con el envío incluido a ${paisesConPerdida.map(nombrePais).join(', ')} perderías dinero en alguna variante: sube el precio o quita ese país.`);
   if (!cat || !subcat) problemas.push('Elige categoría y subcategoría.');
   if (!tituloEdit.trim()) problemas.push('Escribe el título.');
   if (tituloEdit.length > 150) problemas.push('El título pasa de 150 caracteres.');
@@ -237,6 +267,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         cat,
         subcat,
         precioAuto,
+        ...(admiteEnvioIncluido && paisesIncluido.length ? { envioIncluido: paisesIncluido } : {}),
         variantes: marcadas.map((v) => ({ sku: v.sku, precioVentaUsd: Number(precios[v.sku]) })),
         contenido: { titulo: tituloEdit.trim(), descripcion: descripcion.trim(), imagenes: fotos },
       });
@@ -328,12 +359,37 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                       <b>Lo paga el comprador, aparte del precio.</b> Tu precio es solo el del producto: en Retador tu comprador ve «producto + envío = total a pagar» y Retador gestiona el envío. Por eso lo que te queda no resta el envío: no sale de tu dinero.
                     </span>
                   </label>
-                  <label className="flex items-start gap-2 opacity-60">
-                    <input type="radio" disabled className="mt-0.5" />
-                    <span>
-                      <b>Envío gratis para el comprador</b> (ya incluido en tu precio). <span className="text-amber-300">Muy pronto</span>: hace falta que Retador lo permita.
-                    </span>
-                  </label>
+                  {admiteEnvioIncluido ? (
+                    <div className="space-y-1.5 border-t border-white/[0.07] pt-2">
+                      <p>
+                        <b>Envío incluido en el precio</b> (opcional, por país). En los países que marques tu comprador ve «Envío incluido en el precio» y no paga envío aparte: el envío sale de tu ganancia.
+                        Recomendado: uno o pocos países, por ejemplo solo Cuba.
+                      </p>
+                      {paisesConEnvio.length === 0 ? (
+                        <p className="text-muted-foreground">Las variantes elegidas todavía no tienen envío cotizado. Cotízalo en la ficha para poder incluirlo.</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+                          {paisesConEnvio.map((pais) => (
+                            <label key={pais} className="inline-flex items-center gap-1.5">
+                              <input
+                                type="checkbox"
+                                checked={paisesIncluido.includes(pais)}
+                                onChange={(e) => setPaisesIncluido((x) => (e.target.checked ? [...x, pais].slice(0, 20) : x.filter((p) => p !== pais)))}
+                              />
+                              {nombrePais(pais)}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <label className="flex items-start gap-2 opacity-60">
+                      <input type="radio" disabled className="mt-0.5" />
+                      <span>
+                        <b>Envío gratis para el comprador</b> (ya incluido en tu precio). <span className="text-amber-300">Muy pronto</span>: hace falta que Retador lo permita.
+                      </span>
+                    </label>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
                   <span className={cn(marcadas.length > maxVariantes ? 'font-medium text-rose-300' : 'text-muted-foreground')}>
@@ -446,6 +502,21 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                                   Tu comprador verá en Retador: <b className="text-foreground">{usd(c.totalComprador)}</b> a pagar ({usd(c.precio)} del producto + {usd(c.envio)} de envío estimado).
                                 </p>
                               )}
+                              {admiteEnvioIncluido &&
+                                paisesIncluido.map((pais) => {
+                                  const ci = conIncluido(v, pais);
+                                  if (!ci) return (
+                                    <p key={pais} className="text-rose-300">
+                                      Sin envío cotizado a {nombrePais(pais)}: no se puede incluir.
+                                    </p>
+                                  );
+                                  return (
+                                    <p key={pais} className={ci.neto < 0 ? 'text-rose-300' : 'text-emerald-300'}>
+                                      Con envío incluido a {nombrePais(pais)} ({usd(ci.envio)}): te quedan <b>{usd(ci.neto)}</b>
+                                      {ci.neto < 0 ? ` · perderías dinero; precio mínimo ${usd(ci.minimo)}` : ` · precio mínimo ${usd(ci.minimo)}`}
+                                    </p>
+                                  );
+                                })}
                               <details className="text-muted-foreground">
                                 <summary className="cursor-pointer text-indigo-300">Ver la cuenta completa</summary>
                                 <ul className="mt-1 space-y-0.5">
@@ -497,7 +568,12 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-indigo-400/25 bg-indigo-400/[0.06] p-2.5 text-[12px]">
                   <span className="min-w-0 flex-1">
                     Categoría sugerida: <b>{sugerencia.nombreCat} › {sugerencia.subcat}</b>
-                    {categoriaProveedor ? <span className="text-muted-foreground"> (según «{categoriaProveedor}»)</span> : null}. Revísala antes de usarla.
+                    {sugerencia.porDefecto ? (
+                      <span className="text-muted-foreground"> (no encontramos una más parecida)</span>
+                    ) : categoriaProveedor ? (
+                      <span className="text-muted-foreground"> (según «{categoriaProveedor}»)</span>
+                    ) : null}
+                    . Revísala antes de usarla.
                   </span>
                   <Button
                     size="sm"

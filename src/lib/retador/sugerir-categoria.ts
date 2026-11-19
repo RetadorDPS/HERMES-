@@ -12,10 +12,14 @@ export interface SugerenciaCategoria {
   cat: string;
   nombreCat: string;
   subcat: string;
+  /** true si nada encajaba y se propone «Otros / Varios» (solo si Retador tiene esa categoría). */
+  porDefecto?: boolean;
 }
 
 /** Cada regla: palabras (en minúsculas, sin tildes) y el destino en Retador. Van de lo más concreto a lo más general. */
 const REGLAS: Array<{ palabras: string[]; cat: string; subcat: string }> = [
+  // Depilación y afeitado va primero: un «para mujer» o «para hombre» en el título no debe convertirla en ropa (solo si Retador tiene esa subcategoría)
+  { palabras: ['depilad', 'epilat', 'afeitad', 'shaver', 'razor', 'trimmer'], cat: 'belleza', subcat: 'Depilación y afeitado' },
   // Moda
   { palabras: ['zapat', 'sneaker', 'shoe', 'footwear', 'calzado', 'boot', 'bota', 'sandal', 'slipper', 'chancla', 'loafer', 'heels', 'tacon', 'tenis', 'zapatilla', 'insole', 'plantilla'], cat: 'moda', subcat: 'Zapatos' },
   { palabras: ['handbag', 'bolso', 'purse', 'backpack', 'mochila', 'wallet', 'cartera', 'tote', 'clutch', 'crossbody', 'luggage', 'maleta'], cat: 'moda', subcat: 'Bolsos' },
@@ -88,6 +92,27 @@ const REGLAS: Array<{ palabras: string[]; cat: string; subcat: string }> = [
   { palabras: ['instrument', 'guitar', 'guitarra', 'piano', 'ukulele', 'drum'], cat: 'arte', subcat: 'Instrumentos' },
   // Eventos
   { palabras: ['party', 'fiesta', 'event', 'evento', 'wedding', 'boda', 'balloon', 'globo', 'birthday', 'cumpleanos', 'christmas', 'navidad', 'halloween'], cat: 'eventos', subcat: 'Decoración' },
+  // Otros / Varios (categoría que Retador añadió el 18/11/2026)
+  { palabras: ['gadget'], cat: 'otros', subcat: 'Gadgets' },
+  { palabras: ['gift', 'regalo'], cat: 'otros', subcat: 'Regalos' },
+];
+
+/**
+ * Afinado: una vez elegida la categoría, si Retador tiene una subcategoría más concreta y el texto lo pide, se usa esa
+ * (por ejemplo Zapatos → Calzado deportivo). Solo se aplica si la subcategoría de destino existe en la lista de Retador.
+ */
+const AFINADOS: Array<{ desde: Array<[string, string]>; a: [string, string]; palabras: string[] }> = [
+  { desde: [['moda', 'Zapatos']], a: ['moda', 'Calzado deportivo'], palabras: ['sneaker', 'running', 'sport', 'deportiv', 'basketball', 'baloncesto', 'tenis', 'trainer', 'correr', 'athletic'] },
+  { desde: [['moda', 'Hombre'], ['moda', 'Mujer']], a: ['moda', 'Abrigos y chaquetas'], palabras: ['jacket', 'chaqueta', 'coat', 'abrigo', 'parka', 'windbreaker', 'cortavientos', 'chaleco', 'vest '] },
+  { desde: [['moda', 'Hombre'], ['moda', 'Mujer']], a: ['moda', 'Ropa de invierno'], palabras: ['winter', 'invierno', 'thermal', 'termic', 'fleece', 'polar', 'abrigad'] },
+  { desde: [['electronica', 'Accesorios tech']], a: ['electronica', 'Fundas y protectores'], palabras: ['case', 'funda', 'cover', 'protector', 'tempered glass', 'vidrio templado'] },
+  { desde: [['electronica', 'Accesorios tech']], a: ['electronica', 'Accesorios de movil'], palabras: ['phone', 'movil', 'telefono', 'smartphone', 'holder', 'soporte'] },
+  { desde: [['electronica', 'Cargadores']], a: ['electronica', 'Cables y adaptadores'], palabras: ['cable', 'adapter', 'adaptador', 'converter', 'conversor', 'hub'] },
+  { desde: [['belleza', 'Barbería'], ['belleza', 'Herramientas'], ['belleza', 'Cabello']], a: ['belleza', 'Depilación y afeitado'], palabras: ['depil', 'epilat', 'hair remov', 'shaver', 'afeitad', 'razor', 'trimmer', 'wax', 'cera'] },
+  { desde: [['belleza', 'Skincare'], ['belleza', 'Herramientas']], a: ['belleza', 'Aparatos de belleza'], palabras: ['device', 'aparato', 'machine', 'maquina', 'electric', 'electrico', 'massager', 'led mask'] },
+  { desde: [['belleza', 'Skincare']], a: ['belleza', 'Cuidado corporal'], palabras: ['body', 'corporal', 'lotion', 'locion'] },
+  { desde: [['hogar', 'Organización'], ['hogar', 'Decoración'], ['hogar', 'Electrodomésticos']], a: ['hogar', 'Baño'], palabras: ['bathroom', 'bano', 'shower', 'ducha', 'toilet', 'inodoro', 'towel', 'toalla'] },
+  { desde: [['herramientas', 'Manuales'], ['herramientas', 'Equipos trabajo']], a: ['herramientas', 'Medición'], palabras: ['measur', 'medicion', 'medir', 'tape measure', 'cinta metrica', 'caliper', 'calibrador', 'multimeter', 'multimetro'] },
 ];
 
 function normalizar(texto: string): string {
@@ -123,8 +148,27 @@ export function sugerirCategoria(categorias: CategoriaRetador[], titulo: string,
     if (puntos > 0 && (!mejor || puntos > mejor.puntos)) mejor = { puntos, indice };
   });
 
-  if (!mejor) return null;
+  const existe = (cat: string, subcat: string) => categorias.find((c) => c.cat === cat && c.subcategorias.includes(subcat));
+  if (!mejor) {
+    // Nada encaja: «Otros / Varios» si Retador la tiene; si no, no se sugiere nada
+    const otros = existe('otros', 'Varios');
+    return otros ? { cat: 'otros', nombreCat: otros.nombre, subcat: 'Varios', porDefecto: true } : null;
+  }
   const regla = REGLAS[(mejor as { puntos: number; indice: number }).indice];
-  const destino = categorias.find((c) => c.cat === regla.cat)!;
-  return { cat: regla.cat, nombreCat: destino.nombre, subcat: regla.subcat };
+  let cat = regla.cat;
+  let subcat = regla.subcat;
+  const texto = `${deCategoria} ${deTitulo}`;
+  for (const af of AFINADOS) {
+    if (!af.desde.some(([c, s]) => c === cat && s === subcat)) continue;
+    // La subcategoría de destino se busca tal cual la nombra Retador (con o sin tilde en «móvil»)
+    const destinoSub = categorias.find((c) => c.cat === af.a[0])?.subcategorias.find((x) => normalizar(x) === normalizar(af.a[1]));
+    if (!destinoSub) continue;
+    if (af.palabras.some((p) => texto.includes(normalizar(p).trimEnd()))) {
+      cat = af.a[0];
+      subcat = destinoSub;
+      break;
+    }
+  }
+  const destino = categorias.find((c) => c.cat === cat)!;
+  return { cat, nombreCat: destino.nombre, subcat };
 }

@@ -252,3 +252,31 @@ export type BasePrecio = 'producto' | 'total';
 export function precioMinimoPorBase(base: BasePrecio, costeTotal: number, t: TarifasRetador, costeProducto: number): number {
   return base === 'producto' ? precioMinimoSinPerdida(costeTotal, t, costeProducto) : precioMinimoContandoEnvio(costeTotal, t, costeProducto);
 }
+
+/**
+ * Contrato 1.8 de Retador, «envío incluido» en un país: el comprador de ese país NO paga envío aparte y Retador paga el envío con lo cobrado.
+ * Ganancia del vendedor = (precio − costo del producto − envío real − pasarela) × (1 − comisión), con la pasarela sobre lo cobrado (solo el precio)
+ * si la paga el vendedor. Se deja visible un neto negativo para no activarlo nunca con pérdida.
+ */
+export function liquidacionEnvioIncluido(precio: number, costeProducto: number, envio: number, t: TarifasRetador): { neto: number; pasarela: number; comision: number; envio: number } {
+  const pasarela = pasarelaLaPagaElVendedor(t) ? round2(precio * (t.pasarelaPct / 100) + t.pasarelaFijaUsd) : 0;
+  const base = round2(precio - costeProducto - Math.max(0, envio) - pasarela);
+  const comision = round2(Math.max(0, base) * (t.comisionPctGanancia / 100));
+  return { neto: round2(base - comision), pasarela, comision, envio: round2(Math.max(0, envio)) };
+}
+
+/** Países admitidos en `envio_incluido` (2 letras en mayúscula, sin repetir, como mucho 20). Devuelve null si la lista no es válida. */
+export function paisesEnvioIncluido(v: unknown): string[] | null {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || v.length > 20) return null;
+  const lista = [...new Set(v.map((x) => String(x ?? '').trim().toUpperCase()))];
+  return lista.every((p) => /^[A-Z]{2}$/.test(p)) ? lista : null;
+}
+
+/** Precio mínimo para no perder con el envío incluido a un país: (costo + envío + pasarela fija) ÷ (1 − pasarela %), y nunca bajo el mínimo de Retador. */
+export function precioMinimoEnvioIncluido(costeProducto: number, envio: number, t: TarifasRetador, minimoRetador = 0): number {
+  const g = pasarelaLaPagaElVendedor(t) ? t.pasarelaPct / 100 : 0;
+  const f = pasarelaLaPagaElVendedor(t) ? t.pasarelaFijaUsd : 0;
+  const sinPerdida = g >= 1 ? Number.POSITIVE_INFINITY : techoCentimo((costeProducto + Math.max(0, envio) + f) / (1 - g));
+  return Math.max(minimoRetador, sinPerdida);
+}
