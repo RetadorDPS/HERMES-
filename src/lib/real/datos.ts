@@ -523,16 +523,14 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   const pagina = Math.max(1, Number(q.page ?? 1));
   const tamano = Math.min(Math.max(Number(q.pageSize ?? 24), 4), 96);
 
+  // Los totales, categorías, almacenes y el umbral de «tendencia» se calculan en la base (función catalogo_resumen):
+  // descargar todas las filas no sirve porque la API corta en 1000 y los números salían mal.
   // «Tendencia» = estar entre el 20 % con más pedidos DE SU PROVEEDOR. Cada proveedor mide los pedidos a su manera
   // (CJ: tiendas que lo listan; AliExpress: ventas recientes), así que un número fijo no valía para los dos.
-  const { data: pedidos } = await c.from('CatalogItem').select('provider,ordersCount').not('ordersCount', 'is', null).limit(5000);
-  const umbralTendencia = new Map<string, number>();
-  const porProv = new Map<string, number[]>();
-  for (const f of (pedidos ?? []) as any[]) porProv.set(f.provider, [...(porProv.get(f.provider) ?? []), Number(f.ordersCount)]);
-  for (const [prov, lista] of porProv) {
-    const orden = lista.filter((n) => n > 0).sort((a, b) => b - a);
-    if (orden.length) umbralTendencia.set(prov, orden[Math.max(0, Math.ceil(orden.length * 0.2) - 1)]);
-  }
+  const rr = await c.rpc('catalogo_resumen');
+  if (rr.error) throw new Error(rr.error.message);
+  const resumen = (rr.data ?? {}) as any;
+  const umbralTendencia = new Map<string, number>(Object.entries(resumen.umbrales ?? {}).map(([k, v]) => [k, Number(v)]));
   const esTendencia = (provider: string, pedidosN: number | null | undefined) => {
     const u = umbralTendencia.get(provider);
     return u !== undefined && (pedidosN ?? 0) >= u && (pedidosN ?? 0) > 0;
@@ -576,41 +574,15 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   }
   consulta = consulta.range((pagina - 1) * tamano, pagina * tamano - 1);
 
-  const [pag, global] = await Promise.all([
-    consulta,
-    c.from('CatalogItem').select('provider,source,categoryName,freeShipping,isTrending,ordersCount,costPrice,lastSyncedAt,warehouses').limit(5000),
-  ]);
+  const pag = await consulta;
   if (pag.error) throw new Error(pag.error.message);
   const filas: CatalogRow[] = (pag.data as any[]).map(mapCatalogo).map((f) => ({ ...f, isTrending: esTendencia(f.provider, f.ordersCount) }));
-  const todos = comprobar<any[]>(global);
   const total = pag.count ?? filas.length;
 
-  const conteo = new Map<string, number>();
-  for (const f of todos) if (f.categoryName) conteo.set(f.categoryName, (conteo.get(f.categoryName) ?? 0) + 1);
-  const facets: CatalogFacet[] = [...conteo.entries()]
-    .map(([name, count]) => ({ name, slug: slugCat(name), count, imageUrl: null }))
-    .sort((a, b) => b.count - a.count);
-
-  const porProveedor = new Map<string, { count: number; hasReal: boolean }>();
-  let reales = 0;
-  let muestra = 0;
-  let ultima: Date | null = null;
-  for (const f of todos) {
-    const e = porProveedor.get(f.provider) ?? { count: 0, hasReal: false };
-    e.count += 1;
-    if (f.source === 'api') {
-      e.hasReal = true;
-      reales += 1;
-      const d = new Date(f.lastSyncedAt);
-      if (!ultima || d > ultima) ultima = d;
-    }
-    if (f.source === 'sample') muestra += 1;
-    porProveedor.set(f.provider, e);
-  }
-  const almacenes = new Map<string, number>();
-  for (const f of todos) for (const w of (f.warehouses ?? []) as string[]) almacenes.set(w, (almacenes.get(w) ?? 0) + 1);
-  const precios = todos.map((f) => num(f.costPrice));
+  const facets: CatalogFacet[] = ((resumen.categorias ?? []) as any[]).map((f) => ({ name: String(f.name), slug: slugCat(String(f.name)), count: Number(f.count), imageUrl: null }));
   const [regla, tasas] = await Promise.all([reglaPredeterminada(), tasasEnEuros()]);
+  const precioMin = resumen.precioMin === null || resumen.precioMin === undefined ? 0 : Number(resumen.precioMin);
+  const precioMax = resumen.precioMax === null || resumen.precioMax === undefined ? 0 : Number(resumen.precioMax);
 
   return {
     items: conPreciosEnEuros(filas, regla, tasas, q.shipTo ?? destinoGuardado()),
@@ -618,17 +590,17 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
     page: pagina,
     pages: Math.max(1, Math.ceil(total / tamano)),
     facets,
-    providers: [...porProveedor.entries()].map(([provider, v]) => ({ provider: provider as any, count: v.count, hasReal: v.hasReal })),
+    providers: ((resumen.proveedores ?? []) as any[]).map((v) => ({ provider: v.provider as any, count: Number(v.count), hasReal: Boolean(v.hasReal) })),
     stats: {
-      total: todos.length,
-      real: reales,
-      sample: muestra,
-      lastSyncedAt: ultima,
-      freeShipping: todos.filter((f) => f.freeShipping).length,
-      trending: todos.filter((f) => esTendencia(f.provider, f.ordersCount)).length,
+      total: Number(resumen.total ?? 0),
+      real: Number(resumen.real ?? 0),
+      sample: Number(resumen.muestra ?? 0),
+      lastSyncedAt: resumen.ultimaSincronizacion ? new Date(resumen.ultimaSincronizacion) : null,
+      freeShipping: Number(resumen.envioGratis ?? 0),
+      trending: Number(resumen.tendencia ?? 0),
     },
-    priceRange: { min: precios.length ? Math.min(...precios) : 0, max: precios.length ? Math.max(...precios) : 0 },
-    warehouses: [...almacenes.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),
+    priceRange: { min: precioMin, max: precioMax },
+    warehouses: ((resumen.almacenes ?? []) as any[]).map((w) => ({ code: String(w.code), count: Number(w.count) })),
   };
 }
 
