@@ -10,7 +10,8 @@
  *   · enlace de CJ o AliExpress (solo sus dominios oficiales; un enlace corto de AliExpress se resuelve con salto a salto
  *     y cada salto debe seguir siendo de AliExpress),
  *   · si el producto ya está en el catálogo común con la ficha completa y reciente, no se llama al proveedor,
- *   · límite diario por persona y global (las llamadas gastan la cuota de la plataforma),
+ *   · el cupo de su PLAN para añadir productos (tipo IMPORTACION de `PlanLimite`; si el proveedor falla se devuelve) y el
+ *     tope global por proveedor (las llamadas gastan la cuota de la plataforma),
  *   · nunca dos importaciones a la vez contra el mismo proveedor (CJ y AliExpress cortan si se les llama en paralelo).
  *
  * Cuerpo: { url: string, destino?: "ES", paisFicha?: "US" }  → con destino, cotiza también el envío a ese país (pocas llamadas).
@@ -23,11 +24,21 @@ import { analizarEnlace, hostEsEnlaceCortoAli, hostPermitidoAli, type ProveedorE
 
 const FUNCION: Record<ProveedorEnlace, string> = { CJ_DROPSHIPPING: "cj-catalogo", ALIEXPRESS: "ali-catalogo" };
 const NOMBRE: Record<ProveedorEnlace, string> = { CJ_DROPSHIPPING: "CJ Dropshipping", ALIEXPRESS: "AliExpress" };
-const LIMITE_USUARIO_DIA = 30; // productos AÑADIDOS por persona y día (los fallos no cuentan); sin tope para el administrador y quien esté en `UsuarioSinLimite`
 const LIMITE_GLOBAL_DIA = 300; // llamadas por proveedor y día (protege la cuota de CJ y AliExpress; aquí sí cuentan los fallos)
 const VENTANA_BLOQUEO_MS = 120_000;
 const FICHA_VIEJA_MS = 7 * 24 * 3_600_000; // una ficha de más de 7 días se vuelve a leer (el precio puede haber cambiado)
 const COTIZACION_FRESCA_MS = 24 * 3_600_000;
+
+/** Mensaje claro cuando el plan ya no deja añadir más productos (mismo estilo que acciones-usuario). */
+function mensajeDeCuota(c: any): string {
+  if (c?.motivo === "dia") return `Has llegado al límite de hoy para añadir productos (${c.usadoDia} de ${c.limiteDia}). Mañana se renueva; si necesitas más, sube de plan.`;
+  if (c?.motivo === "ventana") {
+    return c.ventana === "TOTAL"
+      ? `Has añadido todos los productos que incluye tu prueba (${c.usadoVentana} de ${c.limiteVentana}). Sube de plan para seguir.`
+      : `Has llegado al límite de este mes para añadir productos (${c.usadoVentana} de ${c.limiteVentana}). Se renueva el mes que viene; si necesitas más, sube de plan.`;
+  }
+  return "No se pudo comprobar tu límite. Inténtalo de nuevo en un momento.";
+}
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -119,18 +130,32 @@ Deno.serve(async (req) => {
 
   // ── Límites y exclusión mutua ──
   const desde24h = new Date(Date.now() - 24 * 3_600_000).toISOString();
-  // Al usuario solo le cuentan los productos que sí se añadieron (o que se están añadiendo): si el proveedor falla, no pierde cupo
-  const { count: delUsuario } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("userId", uid).gte("createdAt", desde24h).in("estado", ["ok", "en_curso"]);
-  // Quien está marcado «sin límite» (tabla privada que solo cambia el administrador) no tiene el tope diario PERSONAL; el tope por proveedor de más abajo sigue valiendo para no agotar la cuota de CJ y AliExpress
+  // Quien está marcado «sin límite» (tabla privada que solo cambia el administrador) y el administrador no gastan cupo; el tope por proveedor de más abajo sigue valiendo para no agotar la cuota de CJ y AliExpress
   const { data: marcaSinLimite } = await servicio.from("UsuarioSinLimite").select("userId").eq("userId", uid).maybeSingle();
   const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
   const sinTope = Boolean(marcaSinLimite) || yo?.role === "ADMIN";
-  if (!sinTope && (delUsuario ?? 0) >= LIMITE_USUARIO_DIA) return falla(`Has llegado al máximo de ${LIMITE_USUARIO_DIA} productos añadidos hoy. Mañana podrás añadir más; mientras tanto puedes usar los que ya tienes en el catálogo.`, { motivo: "limite_usuario" });
   const { count: globales } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("provider", proveedor).gte("createdAt", desde24h).neq("estado", "sin_llamada");
   if ((globales ?? 0) >= LIMITE_GLOBAL_DIA) return falla(`Hoy ya se han hecho muchas importaciones desde ${NOMBRE[proveedor]} y se pausa para no agotar su cuota. Vuelve a intentarlo mañana.`, { motivo: "limite_global" });
 
+  // Cupo del PLAN para añadir productos (lo cuenta la base; si algo falla más abajo se devuelve)
+  let cupoGastado = false;
+  if (!sinTope) {
+    const c = await servicio.rpc("consumir_cuota", { p_user: uid, p_tipo: "IMPORTACION", p_cantidad: 1 });
+    if (c.error) return falla("No se pudo comprobar tu límite. Inténtalo de nuevo en un momento.", { motivo: "cuota" });
+    if (!c.data?.permitido) return falla(mensajeDeCuota(c.data), { motivo: "limite_usuario", cuota: c.data });
+    cupoGastado = true;
+  }
+  const devolverCupo = async () => {
+    if (!cupoGastado) return;
+    cupoGastado = false;
+    await servicio.rpc("devolver_cuota", { p_user: uid, p_tipo: "IMPORTACION", p_cantidad: 1 });
+  };
+
   const { data: registro, error: eReg } = await servicio.from("ImportacionEnlace").insert({ userId: uid, provider: proveedor, externalId: pid, estado: "en_curso" }).select("id,createdAt").single();
-  if (eReg || !registro) return falla("No se pudo preparar la importación. Inténtalo de nuevo en unos segundos.");
+  if (eReg || !registro) {
+    await devolverCupo();
+    return falla("No se pudo preparar la importación. Inténtalo de nuevo en unos segundos.");
+  }
   const cerrar = async (estado: "ok" | "error" | "sin_llamada", mensaje: string | null) => {
     await servicio.from("ImportacionEnlace").update({ estado, mensaje: mensaje?.slice(0, 500) ?? null, updatedAt: ahoraIso() }).eq("id", registro.id);
   };
@@ -141,6 +166,7 @@ Deno.serve(async (req) => {
     .order("createdAt", { ascending: true }).order("id", { ascending: true }).limit(1);
   if (enCurso?.[0] && enCurso[0].id !== registro.id) {
     await cerrar("sin_llamada", "Había otra importación en curso");
+    await devolverCupo();
     return falla(`Hay otra importación en curso contra ${NOMBRE[proveedor]}. Espera unos segundos y vuelve a pulsar «Importar».`, { motivo: "ocupado" });
   }
 
@@ -169,6 +195,7 @@ Deno.serve(async (req) => {
       if (!res.ok || !json?.ok || !inf?.ok) {
         const motivo = String(inf?.error ?? json?.error ?? `${NOMBRE[proveedor]} no respondió (HTTP ${res.status})`);
         await cerrar("error", motivo);
+        await devolverCupo();
         return falla(motivo, { motivo: "proveedor", llamadas });
       }
       itemId = inf.id;
@@ -197,6 +224,7 @@ Deno.serve(async (req) => {
   } catch (e) {
     const mensaje = (e as Error).name === "TimeoutError" ? `${NOMBRE[proveedor]} tardó demasiado en responder. Inténtalo de nuevo en un momento.` : `Error inesperado: ${(e as Error).message}`;
     await cerrar("error", mensaje);
+    await devolverCupo();
     return falla(mensaje, { motivo: "interno" });
   }
 });

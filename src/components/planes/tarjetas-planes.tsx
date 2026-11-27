@@ -138,7 +138,10 @@ function TarjetaPlan({ plan, vista, ciclo, modo, esActual, alEmpezarGratis, ocup
         )}
         <div className="rounded-lg bg-white/[0.04] p-2.5">
           <p className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">En DropshipPilot{vista === 'conjunto' ? ` · herramientas ${plan.herramientas.plan}` : ''}</p>
-          <p className="mt-0.5 font-medium">{plan.herramientas.fichas}</p>
+          <p className="mt-0.5 font-medium">{plan.herramientas.busquedas}</p>
+          <p className="font-medium">{plan.herramientas.productos}</p>
+          <p className="font-medium">{plan.herramientas.aLaVez}</p>
+          <p className="font-medium">{plan.herramientas.fichas}</p>
           <p className="font-medium">{plan.herramientas.envios}</p>
         </div>
       </div>

@@ -6,7 +6,7 @@ Todo en USD (como Retador). Anual = 10 mensualidades («2 meses gratis»). La fu
 
 | Dato | Estado |
 |---|---|
-| Límites de herramientas por plan (fichas y cotizaciones) | **Real**: los cuenta el servidor (`PlanLimite`). Prueba 5 y 10 en total; Starter 20 y 60 al mes; Pro 80 y 300; A medida 250 y 1.000. |
+| Límites de herramientas por plan | **Real**: los cuenta el servidor (`PlanLimite` y `PlanCapacidad`, migración `20261128000100_limites_por_plan.sql`). Ver la tabla de abajo. |
 | Topes de productos de Retador: Gratis 10, Pro 50, Premium 500 | **Real** (los aplica Retador). |
 | Retador Premium = 45 USD/mes; conjunto Premium de partida = 55 USD | **Informado por el Claude de Retador** (3/11/2026); no verificado por mí. |
 | Precio de Retador Pro, y los anuales de Retador | **Desconocido**: lo fija Retador. Por eso el conjunto Pro se enseña «por confirmar». |
@@ -14,6 +14,19 @@ Todo en USD (como Retador). Anual = 10 mensualidades («2 meses gratis»). La fu
 | Coste de infraestructura por usuario activo | **SUPUESTO** de 2 USD/mes (DropshipPilot) y 4 USD/mes en un conjunto (las dos apps). **No está medido**; hay que medirlo con los primeros 50 usuarios reales. |
 | Coste de las llamadas a CJ y AliExpress | En dinero, **0** hoy (APIs sin cuota de pago conocida). Pero tienen **límites de capacidad** que NO conocemos (el freno de 3.000/día en CJ y 6.000/día en AliExpress lo puse yo). |
 | Precios de la competencia | AutoDS desde ≈26,90 USD/mes; DSers desde ≈15,90–19,90 USD/mes hasta 499 USD/mes (agregadores de terceros, cifras que no coinciden entre sí). |
+
+### Límites por plan (desde v80, 28/11/2026)
+
+| | Prueba (en total) | Starter (al mes) | Pro (al mes) | A medida (al mes) |
+|---|---|---|---|---|
+| Búsquedas en proveedores | 60 (15 al día) | 300 (30 al día) | 1.000 (80 al día) | 3.000 (200 al día) |
+| Productos añadidos al catálogo (con ficha y envío a EE. UU.) | 20 en total (10 al día) | 150 (25 al día) | 600 (60 al día) | 2.000 (150 al día) |
+| Productos a la vez (añadir y publicar varios) | 5 | 10 | 20 | 20 |
+| Páginas por búsqueda (bajar para ver más no gasta del plan) | 3 | 5 | 10 | 15 |
+| Fichas completas (actualizar una ficha) | 5 en total | 20 | 80 | 250 |
+| Cotizaciones de envío (un país de un producto) | 10 en total | 60 | 300 | 1.000 |
+
+Por qué: añadir un producto cuesta 2 o 3 llamadas al proveedor (ficha + envío) y una búsqueda, 1. Antes «añadir» tenía un tope fijo de 30 al día para todos, así que el plan Prueba podía añadir más productos en un día que fichas en todo su periodo; ahora cuenta con el plan como lo demás. Los conjuntos con Retador usan los límites de su plan equivalente (Gratis → Prueba, Pro → Starter, Premium → Pro) y caben de sobra en los topes de productos de Retador (10 / 50 / 500). El administrador y las cuentas marcadas «sin límite» no gastan cupo. Encima de todo sigue el tope prudente de 300 productos añadidos al día por proveedor para toda la plataforma (no es dato del proveedor).
 
 ## 2. Qué cuesta de verdad vender un plan
 

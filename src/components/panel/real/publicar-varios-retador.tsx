@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils';
 import { Foto } from './foto';
 import { BloqueVincular } from './vincular-retador';
 
-/** Retador no admite más de esto de golpe desde aquí: se publican de uno en uno y conviene revisar la lista. */
+/** Tope absoluto de la app (cada plan tiene el suyo, `productosPorTanda`): se publican de uno en uno y conviene revisar la lista. */
 export const MAX_PUBLICAR_VARIOS = 20;
 /** País del tramo que exige Retador para publicar (el envío al almacén de EE. UU.). */
 const PAIS_ENVIO_PUBLICAR = 'US';
@@ -42,9 +42,10 @@ type Fila = {
 const usd = (n: number) => `${n.toFixed(2)} USD`;
 const faltaEnvio = (f: Fila) => f.estado === 'no' && /envío cotizado/i.test(f.mensaje ?? '');
 
-export function PublicarVariosEnRetador({ items, onClose }: { items: CatalogRow[]; onClose: () => void }) {
+export function PublicarVariosEnRetador({ items, maximo = MAX_PUBLICAR_VARIOS, onClose }: { items: CatalogRow[]; maximo?: number; onClose: () => void }) {
+  const tope = Math.max(1, Math.min(maximo, MAX_PUBLICAR_VARIOS));
   const [tienda, setTienda] = useState<TiendaRetador | null | undefined>(undefined);
-  const [filas, setFilas] = useState<Fila[]>(() => items.slice(0, MAX_PUBLICAR_VARIOS).map((item) => ({ item, estado: 'esperando', categoria: '', incluir: false })));
+  const [filas, setFilas] = useState<Fila[]>(() => items.slice(0, tope).map((item) => ({ item, estado: 'esperando', categoria: '', incluir: false })));
   const [categorias, setCategorias] = useState<CategoriaRetador[]>([]);
   const [preparando, setPreparando] = useState(true);
   const [trabajando, setTrabajando] = useState<null | 'cotizando' | 'publicando'>(null);
@@ -81,7 +82,7 @@ export function PublicarVariosEnRetador({ items, onClose }: { items: CatalogRow[
         if (!t || t.status !== 'CONNECTED') return;
         const regla = await reglaPredeterminada().catch(() => null);
         // De uno en uno: cada producto pide sus datos a Retador
-        for (const item of items.slice(0, MAX_PUBLICAR_VARIOS)) {
+        for (const item of items.slice(0, tope)) {
           if (!vivo) return;
           await preparar(t, item, regla);
         }
@@ -161,6 +162,7 @@ export function PublicarVariosEnRetador({ items, onClose }: { items: CatalogRow[
             <h2 className="text-sm font-semibold">Publicar en Retador</h2>
             <p className="text-[12px] text-muted-foreground">
               {filas.length} {filas.length === 1 ? 'producto' : 'productos'} · revisa la lista y publícalos de una vez
+              {items.length > tope && ` (tu plan publica hasta ${tope} a la vez; los demás, en la siguiente tanda)`}
             </p>
           </div>
           <button onClick={onClose} disabled={trabajando === 'publicando'} aria-label="Cerrar" className="rounded-md p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground disabled:opacity-40">

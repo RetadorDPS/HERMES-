@@ -8,7 +8,8 @@ import { cn } from '@/lib/utils';
 import { BuscarProveedores } from './buscar-proveedores';
 import { PantallaReal, useCarga } from './comun';
 import { guardarRecienAnadidos, leerRecienAnadidos, RecienAnadidos } from './recien-anadidos';
-import { MAX_PUBLICAR_VARIOS, PublicarVariosEnRetador } from './publicar-varios-retador';
+import { PublicarVariosEnRetador } from './publicar-varios-retador';
+import { cupoBusqueda, TANDA_POR_DEFECTO } from '@/lib/real/buscar';
 import type { CatalogRow } from '@/lib/catalog';
 
 /**
@@ -25,6 +26,11 @@ export function CatalogoReal() {
   const [recien, setRecien] = useState<string[]>([]);
   // Productos elegidos para publicar en Retador de una vez (desde «Acabas de añadir» o desde «Elegir varios»)
   const [publicarVarios, setPublicarVarios] = useState<CatalogRow[] | null>(null);
+  // Cuántos productos se manejan a la vez: lo dice el plan
+  const [tanda, setTanda] = useState(TANDA_POR_DEFECTO);
+  useEffect(() => {
+    cupoBusqueda().then((c) => setTanda(c.tanda)).catch(() => undefined);
+  }, []);
   useEffect(() => setRecien(leerRecienAnadidos()), []);
   const irAlCatalogo = () => {
     setPestana('catalogo');
@@ -105,7 +111,7 @@ export function CatalogoReal() {
         <CatalogBrowser
           key={version}
           alPublicarVarios={setPublicarVarios}
-          maxElegir={MAX_PUBLICAR_VARIOS}
+          maxElegir={tanda}
           refrescarAlMontar={version > 0}
           initial={{
             items: c.items,
@@ -129,7 +135,7 @@ export function CatalogoReal() {
         />
         </div>
       )}
-      {publicarVarios && <PublicarVariosEnRetador items={publicarVarios} onClose={() => setPublicarVarios(null)} />}
+      {publicarVarios && <PublicarVariosEnRetador items={publicarVarios} maximo={tanda} onClose={() => setPublicarVarios(null)} />}
     </PantallaReal>
   );
 }

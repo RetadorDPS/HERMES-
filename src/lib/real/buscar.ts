@@ -41,7 +41,16 @@ export interface CupoBusqueda {
   ilimitado: boolean;
   restanteMes: number | null;
   restanteDia: number | null;
+  /** Productos que el plan deja elegir A LA VEZ (para añadir al catálogo y para publicar varios en Retador). */
+  tanda: number;
+  /** Páginas que muestra cada búsqueda en este plan (bajar para ver más no gasta del plan). */
+  paginas: number;
+  /** Productos que aún puede añadir al catálogo (null = el servidor no lo informó). `total` = el plan de prueba no se renueva. */
+  anadir: { restanteVentana: number; restanteDia: number; total: boolean } | null;
 }
+
+/** Lo más prudente mientras no se sabe el plan (lo del plan de prueba). */
+export const TANDA_POR_DEFECTO = 5;
 
 async function invocar<T>(cuerpo: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase().functions.invoke('acciones-usuario', { body: cuerpo });
@@ -87,10 +96,15 @@ export async function buscarEnProveedor(proveedor: ProveedorBusqueda, palabra: s
 export async function cupoBusqueda(): Promise<CupoBusqueda> {
   const d = await invocar<any>({ accion: 'uso' });
   const b = d?.limites?.BUSQUEDA;
+  const i = d?.limites?.IMPORTACION;
+  const cap = d?.capacidad ?? {};
   return {
     ilimitado: Boolean(d?.ilimitado),
     restanteMes: typeof b?.restanteVentana === 'number' ? b.restanteVentana : null,
     restanteDia: typeof b?.restanteDia === 'number' ? b.restanteDia : null,
+    tanda: Number.isInteger(cap.productosPorTanda) && cap.productosPorTanda > 0 ? cap.productosPorTanda : TANDA_POR_DEFECTO,
+    paginas: Number.isInteger(cap.paginasPorBusqueda) && cap.paginasPorBusqueda > 0 ? cap.paginasPorBusqueda : 3,
+    anadir: typeof i?.restanteVentana === 'number' && typeof i?.restanteDia === 'number' ? { restanteVentana: i.restanteVentana, restanteDia: i.restanteDia, total: i.ventana === 'TOTAL' } : null,
   };
 }
 

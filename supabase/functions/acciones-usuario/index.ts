@@ -35,9 +35,20 @@ const COTIZACION_VIGENTE_MS = 7 * 24 * 3_600_000; // una cotización de menos de
 const MAX_PAISES = 12;
 const TURNO_SEGUNDOS = 120;
 
-const NOMBRE_ACCION: Record<string, string> = { FICHA: "completar fichas", COTIZACION_ENVIO: "cotizar envíos", BUSQUEDA: "buscar en los proveedores" };
+const NOMBRE_ACCION: Record<string, string> = { FICHA: "completar fichas", COTIZACION_ENVIO: "cotizar envíos", BUSQUEDA: "buscar en los proveedores", IMPORTACION: "añadir productos" };
 const CACHE_BUSQUEDA_MS = 24 * 3_600_000;
-const PAGINAS_BUSQUEDA = 15; // páginas por búsqueda; solo la primera gasta cupo (las siguientes son «bajar para ver más»)
+const PAGINAS_BUSQUEDA = 15; // tope absoluto de páginas por búsqueda; cada plan tiene el suyo en `PlanCapacidad`. Solo la primera gasta cupo
+/** Lo que el plan deja hacer a la vez (tabla `PlanCapacidad`); sin límite = lo máximo de la app. */
+const CAPACIDAD_SIN_LIMITE = { productosPorTanda: 20, paginasPorBusqueda: PAGINAS_BUSQUEDA };
+async function capacidadDe(plan: string, sinLimite: boolean) {
+  if (sinLimite) return CAPACIDAD_SIN_LIMITE;
+  const { data } = await servicio.from("PlanCapacidad").select("productosPorTanda,paginasPorBusqueda").eq("plan", plan).maybeSingle();
+  // Sin fila para el plan: lo más prudente (lo del plan de prueba)
+  return {
+    productosPorTanda: Math.min(Number(data?.productosPorTanda ?? 5), CAPACIDAD_SIN_LIMITE.productosPorTanda),
+    paginasPorBusqueda: Math.min(Number(data?.paginasPorBusqueda ?? 3), PAGINAS_BUSQUEDA),
+  };
+}
 const normalizarBusqueda = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 
 function mensajeDeCuota(tipo: string, c: any): string {
@@ -132,7 +143,7 @@ Deno.serve(async (req) => {
       const usadoDia = (usos ?? []).find((u: any) => u.tipo === l.tipo && u.clave === dia)?.usado ?? 0;
       detalle[l.tipo as string] = { ventana: l.ventana, limiteVentana: l.limiteVentana, usadoVentana, limiteDia: l.limiteDia, usadoDia, restanteVentana: Math.max(0, l.limiteVentana - usadoVentana), restanteDia: Math.max(0, l.limiteDia - usadoDia) };
     }
-    return responder({ ok: true, plan: yo.plan, ilimitado: sinLimite, limites: detalle });
+    return responder({ ok: true, plan: yo.plan, ilimitado: sinLimite, limites: detalle, capacidad: await capacidadDe(yo.plan, sinLimite) });
   }
 
   /* ───────── elegir_plan: paso obligatorio al registrarse. Hoy solo se puede elegir el plan Gratis (Prueba); Pro y Premium se contratan en Retador (plan conjunto) ───────── */
@@ -148,7 +159,9 @@ Deno.serve(async (req) => {
     if (!FUNCION_DE_PROVEEDOR[proveedor]) return responder({ ok: false, codigo: "datos_invalidos", error: "Elige CJ o AliExpress" });
     const palabra = String(cuerpo?.palabra ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
     if (palabra.length < 2) return responder({ ok: false, codigo: "datos_invalidos", error: "Escribe al menos 2 letras para buscar" });
-    const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.pagina ?? 1)) || 1, PAGINAS_BUSQUEDA));
+    const paginasMax = (await capacidadDe(yo.plan, sinLimite)).paginasPorBusqueda;
+    const pagina = Math.max(1, Math.floor(Number(cuerpo?.pagina ?? 1)) || 1);
+    if (pagina > paginasMax) return responder({ ok: false, codigo: "cuota", error: `Tu plan muestra hasta ${paginasMax} páginas por búsqueda. Prueba con otras palabras o sube de plan para ver más resultados.` });
     // Orden común (cada proveedor lo traduce a su manera): relevancia · ventas · precio_mayor · precio_menor
     const orden = ["ventas", "precio_mayor", "precio_menor"].includes(String(cuerpo?.orden)) ? String(cuerpo.orden) : "relevancia";
     const clave = `${normalizarBusqueda(palabra)}|${pagina}${orden === "relevancia" ? "" : `|${orden}`}`;
@@ -165,7 +178,7 @@ Deno.serve(async (req) => {
     const hayMasDe = (r: any) => {
       const n = Array.isArray(r?.resultados) ? r.resultados.length : 0;
       const total = Number(r?.total);
-      if (pagina >= PAGINAS_BUSQUEDA) return false;
+      if (pagina >= paginasMax) return false;
       return Boolean(r?.hayMas) || (n > 0 && Number.isFinite(total) && total > pagina * n);
     };
     const publica = async (r: any, extra: Record<string, unknown>) =>

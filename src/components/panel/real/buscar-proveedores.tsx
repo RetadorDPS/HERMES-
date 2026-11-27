@@ -14,7 +14,7 @@ import { Check, CheckCircle2, Loader2, Plus, Search, Sparkles, Star, X } from 'l
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { cn, formatNumber } from '@/lib/utils';
-import { buscarEnProveedor, cupoBusqueda, type CupoBusqueda, type ProveedorBusqueda, type ResultadoBusqueda } from '@/lib/real/buscar';
+import { buscarEnProveedor, cupoBusqueda, TANDA_POR_DEFECTO, type CupoBusqueda, type ProveedorBusqueda, type ResultadoBusqueda } from '@/lib/real/buscar';
 import { importarPorEnlace } from '@/lib/real/importar';
 import { esAccesorio, palabrasClave, tieneTodas } from '@/lib/real/filtro-busqueda';
 import { Foto } from './foto';
@@ -43,7 +43,6 @@ const RAPIDAS = [
 
 
 /** Máximo de productos que se añaden de una vez (cada uno trae su ficha completa del proveedor, en serie). */
-const MAX_POR_TANDA = 20;
 /** País de la búsqueda (precio y disponibilidad): la ficha se pide para el mismo país, si no, un producto que no se vende a otro país llega sin variantes */
 const PAIS_BUSQUEDA = 'US';
 const CLAVE_RECIENTES = 'hermes-busquedas-recientes';
@@ -69,6 +68,8 @@ export function BuscarProveedores({ alAnadir, alVerAnadidos }: { alAnadir?: (ite
   const [buscando, setBuscando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cupo, setCupo] = useState<CupoBusqueda | null>(null);
+  // Cuántos se pueden elegir a la vez: lo dice el plan (lo más prudente mientras no se sabe)
+  const MAX_POR_TANDA = Math.max(0, Math.min(cupo?.tanda ?? TANDA_POR_DEFECTO, cupo && !cupo.ilimitado && cupo.anadir ? Math.min(cupo.anadir.restanteDia, cupo.anadir.restanteVentana) : Infinity));
   const [elegidos, setElegidos] = useState<Set<string>>(new Set());
   const [anadiendo, setAnadiendo] = useState(false);
   const [progreso, setProgreso] = useState<Record<string, EstadoAnadir>>({});
@@ -167,6 +168,8 @@ export function BuscarProveedores({ alAnadir, alVerAnadidos }: { alAnadir?: (ite
     setElegidos(new Set(sinIntentar));
     setContador(null);
     setAnadiendo(false);
+    // Lo que queda del plan para añadir cambió: se vuelve a leer
+    cupoBusqueda().then(setCupo).catch(() => undefined);
     if (nuevos.length) alAnadir?.(nuevos);
   }
 
@@ -288,10 +291,11 @@ export function BuscarProveedores({ alAnadir, alVerAnadidos }: { alAnadir?: (ite
 
         <p className="text-[11px] leading-snug text-muted-foreground">
           {cupo?.ilimitado
-            ? 'Búsquedas sin límite en tu cuenta.'
+            ? 'Búsquedas y productos sin límite en tu cuenta.'
             : cupo && cupo.restanteMes !== null
-              ? `Cada búsqueda nueva gasta 1 de tu plan (te quedan ${cupo.restanteMes} este mes, ${cupo.restanteDia ?? 0} hoy). Bajar para ver más resultados y repetir una búsqueda del mismo día no gastan.`
+              ? `Cada búsqueda nueva gasta 1 de tu plan (te quedan ${cupo.restanteMes} este mes, ${cupo.restanteDia ?? 0} hoy). Bajar para ver más resultados (hasta ${cupo.paginas} páginas) y repetir una búsqueda del mismo día no gastan.`
               : 'Cada búsqueda nueva gasta 1 de tu plan. Bajar para ver más resultados y repetir una búsqueda del mismo día no gastan.'}
+          {!cupo?.ilimitado && cupo?.anadir && ` Productos que puedes añadir: ${cupo.anadir.restanteDia} hoy${cupo.anadir.total ? ` (${cupo.anadir.restanteVentana} en total con tu prueba)` : ` (${cupo.anadir.restanteVentana} este mes)`}, hasta ${cupo.tanda} a la vez.`}
         </p>
       </div>
 
