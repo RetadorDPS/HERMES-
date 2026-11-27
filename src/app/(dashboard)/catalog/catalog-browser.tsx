@@ -31,7 +31,7 @@ import { Button } from '@/components/ui/button';
 import { Input, Select } from '@/components/ui/input';
 import { cn, formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import type { CatalogFacet, CatalogRow } from '@/lib/catalog';
-import { CatalogCard } from './catalog-card';
+import { CatalogCard, CatalogCardCompact } from './catalog-card';
 import { imageSrc } from './image';
 import { CatalogImportDrawer } from './import-dialog';
 import { useSesion } from '@/components/auth/sesion';
@@ -52,6 +52,8 @@ export interface CatalogBrowserProps {
     warehouses?: { code: string; count: number }[];
   };
   credentials: { provider: string; name: string; configured: boolean; source: string | null; catalogReady: boolean; status: string | null }[];
+  /** Pide los datos al montar (p. ej. tras añadir productos desde el buscador) en vez de usar solo los iniciales */
+  refrescarAlMontar?: boolean;
   isAdmin: boolean;
   ruleName: string;
   totalCatalog: number;
@@ -65,15 +67,17 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 const SORTS = [
+  { value: 'newest', label: 'Recién añadidos' },
   { value: 'relevance', label: 'Más populares' },
   { value: 'trending', label: 'Top ventas' },
   { value: 'price-asc', label: 'Precio: de menor a mayor' },
   { value: 'price-desc', label: 'Precio: de mayor a menor' },
   { value: 'rating', label: 'Mejor valorados' },
-  { value: 'newest', label: 'Novedades' },
 ];
+/** Orden por defecto: lo último que entra en el catálogo sale primero. */
+const ORDEN_INICIAL = 'newest';
 
-export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalCatalog }: CatalogBrowserProps) {
+export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalCatalog, refrescarAlMontar }: CatalogBrowserProps) {
   const [items, setItems] = useState<CatalogRow[]>(initial.items);
   const [meta, setMeta] = useState({ total: initial.total, page: initial.page, pages: initial.pages });
   const [facets, setFacets] = useState<CatalogFacet[]>(initial.facets);
@@ -108,7 +112,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   const [freeShipping, setFreeShipping] = useState(false);
   const [trending, setTrending] = useState(false);
   const [minRating, setMinRating] = useState('');
-  const [sort, setSort] = useState('relevance');
+  const [sort, setSort] = useState(ORDEN_INICIAL);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(24);
 
@@ -128,22 +132,27 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       if (freeShipping) p.set('freeShipping', '1');
       if (trending) p.set('trending', '1');
       if (minRating) p.set('minRating', minRating);
-      if (sort !== 'relevance') p.set('sort', sort);
-      p.set('page', String(over.page ?? page));
+      p.set('sort', sort);
+      p.set('page', String(over.page ?? 1));
       p.set('pageSize', String(pageSize));
       return p.toString();
     },
-    [q, category, provider, minPrice, maxPrice, shipFrom, destino, freeShipping, trending, minRating, sort, page, pageSize],
+    [q, category, provider, minPrice, maxPrice, shipFrom, destino, freeShipping, trending, minRating, sort, pageSize],
   );
 
+  // `anadir` = carga continua: se suman los de la página siguiente sin repetir ninguno
   const fetchItems = useCallback(
-    async (query: string) => {
+    async (query: string, anadir = false) => {
       setLoading(true);
       try {
         const res = await fetch(`/api/catalog?${query}`, { cache: 'no-store' });
         const json = await res.json();
         if (json.ok) {
-          setItems(json.items);
+          setItems((prev) => {
+            if (!anadir) return json.items;
+            const vistos = new Set(prev.map((i) => i.id));
+            return [...prev, ...json.items.filter((i: CatalogRow) => !vistos.has(i.id))];
+          });
           setMeta({ total: json.total, page: json.page, pages: json.pages });
           setFacets(json.facets);
           setStats(json.stats);
@@ -161,7 +170,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
   useEffect(() => {
     if (first.current) {
       first.current = false;
-      return;
+      if (!refrescarAlMontar) return;
     }
     const t = setTimeout(() => void fetchItems(buildQuery()), 220);
     return () => clearTimeout(t);
@@ -185,6 +194,22 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     return () => clearTimeout(t);
   }, [q]);
 
+  // Carga continua: cuando el final de la lista entra en pantalla se pide la página siguiente
+  const centinela = useRef<HTMLDivElement | null>(null);
+  const cargarMas = useCallback(() => {
+    if (loading || meta.page >= meta.pages) return;
+    void fetchItems(buildQuery({ page: meta.page + 1 }), true);
+  }, [loading, meta.page, meta.pages, fetchItems, buildQuery]);
+  useEffect(() => {
+    const el = centinela.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver((entradas) => {
+      if (entradas.some((e) => e.isIntersecting)) cargarMas();
+    }, { rootMargin: '600px 0px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [cargarMas, items.length]);
+
   const reset = () => {
     setQ('');
     setCategory('');
@@ -195,7 +220,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     setFreeShipping(false);
     setTrending(false);
     setMinRating('');
-    setSort('relevance');
+    setSort(ORDEN_INICIAL);
     setPage(1);
   };
 
@@ -490,7 +515,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       <div className="flex items-center justify-between text-[12px] text-muted-foreground">
         <span className="inline-flex items-center gap-2">
           {loading && <Loader2 className="size-3.5 animate-spin text-indigo-300" />}
-          {formatNumber(meta.total)} productos {category ? `en «${category}»` : ''} · página {meta.page} de {meta.pages}
+          {formatNumber(meta.total)} productos {category ? `en «${category}»` : ''}{meta.total > items.length ? ` · viendo ${formatNumber(items.length)}` : ''}
         </span>
         <span className="inline-flex items-center gap-2">
           <ArrowDownUp className="size-3.5" />
@@ -542,24 +567,19 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-2.5 sm:gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
           {items.map((item) => (
-            <CatalogCard key={item.id} item={{ ...item, imageUrl: imageSrc(item.imageUrl), images: (item.images ?? []).map(imageSrc) }} onOpen={(i) => setOpenId(i.id)} onImport={(i) => setOpenId(i.id)} />
+            <CatalogCardCompact key={item.id} item={{ ...item, imageUrl: imageSrc(item.imageUrl), images: (item.images ?? []).map(imageSrc) }} onOpen={(i) => setOpenId(i.id)} />
           ))}
         </div>
       )}
 
-      {/* Paginación */}
-      {meta.pages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <Button variant="outline" size="sm" disabled={meta.page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-            Anterior
-          </Button>
-          <span className="px-2 text-[12px] text-muted-foreground">
-            {meta.page} / {meta.pages}
-          </span>
-          <Button variant="outline" size="sm" disabled={meta.page >= meta.pages} onClick={() => setPage((p) => Math.min(meta.pages, p + 1))}>
-            Siguiente
+      {/* Carga continua: al acercarse al final se traen más, sin páginas */}
+      {meta.page < meta.pages && items.length > 0 && (
+        <div ref={centinela} className="flex justify-center py-3">
+          <Button variant="outline" size="sm" disabled={loading} onClick={cargarMas}>
+            {loading ? <Loader2 className="size-4 animate-spin" /> : null}
+            {loading ? 'Cargando más…' : 'Ver más productos'}
           </Button>
         </div>
       )}

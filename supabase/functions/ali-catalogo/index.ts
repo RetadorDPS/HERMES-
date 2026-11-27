@@ -7,6 +7,8 @@
  * `aliexpress.ds.freight.query`.
  *
  * Acciones (solo administrador): probar · autorizar · feeds · sondear · descargar · detalle · envio
+ * Acción `buscar` (también por la vía interna, la pide `acciones-usuario` con límite por plan): búsqueda en vivo por palabra con
+ * `aliexpress.ds.text.search` (UNA llamada); NO guarda nada en el catálogo.
  *
  * Autorización de la cuenta (OAuth): `ds.product.get` y `ds.freight.query` exigen un `access_token`. La acción `autorizar` da el enlace; el retorno llega a la página de Retador, que lo reparte a la función `ali-callback`, que guarda el token en la tabla privada PlatformCredential. Aquí se usa y se renueva solo.
  *
@@ -125,7 +127,7 @@ Deno.serve(async (req) => {
   const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   let uid = "";
   if (interna) {
-    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar" && accion !== "detalle") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar" && accion !== "detalle" && accion !== "buscar") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
   } else {
     const { data: auth } = await servicio.auth.getUser(jwt);
     uid = auth?.user?.id ?? "";
@@ -180,7 +182,7 @@ Deno.serve(async (req) => {
     const espera = ultimaLlamada + PAUSA_MS - Date.now();
     if (espera > 0) await pausa(espera);
     // El detalle y el envío exigen el access_token de la cuenta autorizada (el feed funciona solo con las claves)
-    if (/^aliexpress\.ds\.(product|freight)/.test(metodo) && !negocio.access_token) {
+    if (/^aliexpress\.ds\.(product|freight|text)/.test(metodo) && !negocio.access_token) {
       const tk = await tokenVigente();
       if (tk) negocio = { ...negocio, access_token: tk };
     }
@@ -404,6 +406,55 @@ Deno.serve(async (req) => {
       );
     }
     return await cerrarOk({ mensaje: `${recibidos} recibidos de AliExpress · ${guardados} guardados`, recibidos, guardados, avisos, forma: { claves: forma }, feed });
+  }
+
+  /* ───────────────────────── buscar (en vivo, una llamada, sin guardar) ───────────────────────── */
+  if (accion === "buscar") {
+    const palabra = String(cuerpo?.palabra ?? "").trim().slice(0, 80);
+    if (palabra.length < 2) return responder({ ok: false, error: "Escribe al menos 2 letras para buscar", ...diagnostico });
+    const pagina = Math.max(1, Math.min(Number(cuerpo?.pagina ?? 1) || 1, 50));
+    const tamano = Math.max(10, Math.min(Number(cuerpo?.tamano ?? 24) || 24, 40));
+    // Precio y disponibilidad para EE. UU. (es el precio que cobra Retador al comprar en AliExpress)
+    const r = await ali("aliexpress.ds.text.search", { keyWord: palabra, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina });
+    if (!r.ok) {
+      await marcarError(`AliExpress respondió con error al buscar: ${r.mensaje}`);
+      return responder({ ok: false, error: `AliExpress no pudo hacer la búsqueda: ${r.mensaje}`, codigoAli: r.codigo, llamadasAAliExpress: llamadas, ...diagnostico });
+    }
+    const raiz = r.datos?.aliexpress_ds_text_search_response ?? r.datos ?? {};
+    const datos = raiz?.data ?? raiz?.result ?? raiz;
+    const codigoNegocio = String(raiz?.code ?? "00");
+    if (codigoNegocio !== "00" && codigoNegocio !== "0" && !primerArray(datos?.products)) {
+      return responder({ ok: false, error: `AliExpress no pudo hacer la búsqueda: ${String(raiz?.msg ?? codigoNegocio)}`, forma: Object.keys(raiz ?? {}), llamadasAAliExpress: llamadas, ...diagnostico });
+    }
+    const items: any[] = primerArray(datos?.products) ?? [];
+    const resultados = items
+      .map((i: any) => {
+        const id = String(i.itemId ?? i.item_id ?? i.product_id ?? "");
+        const imagen = String(i.itemMainPic ?? i.item_main_pic ?? i.product_main_image_url ?? "");
+        const valoracion = numeroONulo(i.evaluateRate ?? i.evaluate_rate);
+        return {
+          externalId: id,
+          titulo: String(i.title ?? i.product_title ?? "Producto AliExpress").slice(0, 250),
+          imagen: imagen ? (imagen.startsWith("//") ? `https:${imagen}` : imagen) : null,
+          precioUsd: numeroONulo(i.targetSalePrice ?? i.salePrice ?? i.sale_price ?? i.targetOriginalPrice) ?? null,
+          popularidad: numeroONulo(i.orders ?? i.lastest_volume),
+          valoracion: valoracion !== null ? Math.round((valoracion / 20) * 10) / 10 : null,
+          categoria: null,
+          stock: null,
+          url: `https://www.aliexpress.com/item/${id}.html`,
+        };
+      })
+      .filter((x: any) => x.externalId);
+    const total = numeroONulo(datos?.totalCount ?? datos?.total_count);
+    return await cerrarOk({
+      mensaje: `${resultados.length} resultados`,
+      buscado: palabra,
+      pagina,
+      total,
+      hayMas: items.length >= tamano,
+      resultados,
+      forma: resultados.length ? undefined : { raiz: Object.keys(raiz ?? {}), datos: Object.keys(datos ?? {}) },
+    });
   }
 
   /* ───────────────────────── sondear (diagnóstico del feed: pocas llamadas, en serie) ───────────────────────── */

@@ -28,7 +28,7 @@ export default async function CatalogPage() {
     ]);
     const rule = rules.find((r: any) => r.isDefault) ?? rules[0] ?? null;
 
-    const catalog = await queryCatalog({ pageSize: 24, sort: 'relevance', pricingRule: rule as any });
+    const catalog = await queryCatalog({ pageSize: 24, sort: 'newest', pricingRule: rule as any });
 
     const providers = [
       { provider: 'CJ_DROPSHIPPING', count: catalog.providers.find((p) => p.provider === 'CJ_DROPSHIPPING')?.count ?? 0, hasReal: Boolean(catalog.providers.find((p) => p.provider === 'CJ_DROPSHIPPING')?.hasReal) },

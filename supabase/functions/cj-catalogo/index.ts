@@ -11,6 +11,7 @@
  *   categorias  → baja las categorías con nombre y las aplica a los artículos
  *   descargar   → baja páginas de productos (en serie, con pausa)
  *   detalle     → completa la ficha de varios artículos (detalle, variantes, stock, envío por país, reseñas)
+ *   buscar      → búsqueda en vivo por palabra (UNA llamada); NO guarda nada en el catálogo. La pide `acciones-usuario` con límite por plan.
  *
  * Límite de CJ: 1 petición por segundo. TODAS las llamadas pasan por `cj()`, que espera entre una y otra.
  * Las claves viven como secretos de la función (CJ_API_KEY): nunca se devuelven ni se guardan en tablas legibles.
@@ -114,6 +115,38 @@ function normalizarListado(item: any, pais: string | null, nombresCategoria: Map
   };
 }
 
+/* ───────────── Búsqueda: CJ solo entiende inglés, así que se traducen las palabras más comunes del español ───────────── */
+const DICCIONARIO_CJ: Record<string, string> = {
+  telefono: "phone", telefonos: "phone", movil: "phone", moviles: "phone", celular: "phone", celulares: "phone", smartphone: "smartphone",
+  funda: "case", fundas: "case", protector: "protector", cargador: "charger", cargadores: "charger", cable: "cable", cables: "cable",
+  auricular: "earphone", auriculares: "earphones", cascos: "headphones", altavoz: "speaker", altavoces: "speaker", bocina: "speaker", bocinas: "speaker",
+  reloj: "watch", relojes: "watch", inteligente: "smart", tableta: "tablet", portatil: "laptop", ordenador: "computer", computadora: "computer",
+  teclado: "keyboard", raton: "mouse", camara: "camera", camaras: "camera", luz: "light", luces: "lights", lampara: "lamp", lamparas: "lamp",
+  bateria: "battery", baterias: "battery", soporte: "holder", coche: "car", carro: "car", auto: "car", bicicleta: "bike", moto: "motorcycle",
+  zapato: "shoes", zapatos: "shoes", zapatilla: "sneakers", zapatillas: "sneakers", tenis: "sneakers", sandalias: "sandals", botas: "boots",
+  camiseta: "t-shirt", camisetas: "t-shirt", camisa: "shirt", pantalon: "pants", pantalones: "pants", vestido: "dress", vestidos: "dress",
+  chaqueta: "jacket", abrigo: "coat", sudadera: "hoodie", gorra: "cap", sombrero: "hat", bolso: "bag", bolsos: "bag", mochila: "backpack", cartera: "wallet",
+  gafas: "glasses", lentes: "glasses", joya: "jewelry", joyas: "jewelry", collar: "necklace", anillo: "ring", anillos: "ring", pulsera: "bracelet", pendientes: "earrings", aretes: "earrings",
+  maquillaje: "makeup", belleza: "beauty", pelo: "hair", cabello: "hair", unas: "nail", crema: "cream", perfume: "perfume", depiladora: "epilator", afeitadora: "shaver", masajeador: "massager",
+  cocina: "kitchen", hogar: "home", casa: "home", bano: "bathroom", dormitorio: "bedroom", mueble: "furniture", muebles: "furniture", cortina: "curtain", alfombra: "rug",
+  juguete: "toy", juguetes: "toys", bebe: "baby", bebes: "baby", nino: "kids", ninos: "kids", nina: "girls", ninas: "girls", mujer: "women", mujeres: "women", hombre: "men", hombres: "men",
+  mascota: "pet", mascotas: "pet", perro: "dog", perros: "dog", gato: "cat", gatos: "cat", deporte: "sports", deportes: "sports", gimnasio: "gym", yoga: "yoga",
+  herramienta: "tool", herramientas: "tools", jardin: "garden", fiesta: "party", regalo: "gift", regalos: "gift", ventilador: "fan", inalambrico: "wireless", inalambricos: "wireless",
+};
+const PALABRAS_VACIAS = new Set(["de", "del", "la", "el", "los", "las", "para", "con", "y", "en", "un", "una"]);
+/** Devuelve el texto que se manda a CJ: cada palabra conocida se traduce; las demás (marcas, modelos, inglés) se dejan igual. */
+function traducirParaCj(texto: string): string {
+  const palabras = texto
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ñ/g, "n")
+    .split(/\s+/)
+    .filter(Boolean);
+  const salida = palabras.filter((w) => !PALABRAS_VACIAS.has(w)).map((w) => DICCIONARIO_CJ[w] ?? w);
+  return sinRepetidos(salida).join(" ").slice(0, 80);
+}
+
 /** Aplana el árbol de categorías de CJ (3 niveles). Devuelve solo las hojas con identificador. */
 function aplanarCategorias(nodos: any[], ruta: string[] = []): { id: string; nombre: string; ruta: string }[] {
   const CLAVES_HIJOS = ["categoryFirstList", "categorySecondList", "categoryThirdList", "children", "categoryList", "childCategoryList", "subCategories", "list"];
@@ -193,7 +226,7 @@ Deno.serve(async (req) => {
   let accion: string = cuerpo?.accion ?? "probar";
   const interna = jwt !== "" && jwt === Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (interna) {
-    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar" && accion !== "detalle") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
+    if (accion !== "importar" && accion !== "envio" && accion !== "refrescar" && accion !== "detalle" && accion !== "buscar") return responder({ ok: false, error: "Esta acción no está permitida por la vía interna" }, 403);
   } else {
     const { data: auth } = await servicio.auth.getUser(jwt);
     const uid = auth?.user?.id;
@@ -399,6 +432,37 @@ Deno.serve(async (req) => {
       mensaje: `${recibidos} recibidos de CJ · ${guardados} guardados`,
       recibidos, guardados, totalEnCj: totalRegistros, avisos, forma: { claves: primeraForma },
     });
+  }
+
+  /* ───────────────────────────── buscar (en vivo, una llamada, sin guardar) ───────────────────────────── */
+  if (accion === "buscar") {
+    const original = String(cuerpo?.palabra ?? "").trim().slice(0, 80);
+    if (original.length < 2) return responder({ ok: false, error: "Escribe al menos 2 letras para buscar", ...diagnostico });
+    const palabra = traducirParaCj(original);
+    const pagina = Math.max(1, Math.min(Number(cuerpo?.pagina ?? 1) || 1, 50));
+    const tamano = Math.max(10, Math.min(Number(cuerpo?.tamano ?? 24) || 24, 40));
+    const r = await cj("/product/listV2", { consulta: { page: pagina, size: tamano, orderBy: 0, sort: "desc", keyWord: palabra } });
+    if (!r.ok) {
+      await marcarError(`CJ respondió con error al buscar: ${r.mensaje}`);
+      return responder({ ok: false, error: `CJ no pudo hacer la búsqueda: ${r.mensaje}`, llamadasACj: llamadas, ...diagnostico });
+    }
+    const nombres = await nombresDeCategorias();
+    const listaCj = extraerLista(r.datos);
+    const resultados = listaCj
+      .map((i) => normalizarListado(i, null, nombres))
+      .filter((f) => f.externalId)
+      .map((f) => ({
+        externalId: f.externalId,
+        titulo: f.title,
+        imagen: f.imageUrl,
+        precioUsd: f.costPrice > 0 ? f.costPrice : null,
+        popularidad: f.ordersCount,
+        categoria: f.categoryName,
+        stock: f.stock > 0 ? f.stock : null,
+        url: f.sourceUrl,
+      }));
+    const total = numeroONulo((r.datos as any)?.totalRecords ?? (r.datos as any)?.total);
+    return await cerrarOk({ mensaje: `${resultados.length} resultados`, buscado: palabra, pagina, total, hayMas: listaCj.length >= tamano, resultados });
   }
 
   /* ───────────────────────────── refrescar (monitor: precio y existencias actuales; solo vía interna) ───────────────────────────── */

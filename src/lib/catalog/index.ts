@@ -96,6 +96,8 @@ export interface CatalogRow {
   isTrending: boolean;
   source: string;
   lastSyncedAt: Date;
+  /** Cuándo entró en el catálogo (para marcar «Nuevo» y ordenar por recién añadidos) */
+  createdAt?: Date | null;
   importedCount?: number;
   /** Coste convertido a euros (la divisa de la tienda) */
   costPriceEur?: number;

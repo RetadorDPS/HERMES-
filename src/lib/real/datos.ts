@@ -20,7 +20,7 @@ const COL_USUARIO = 'id,email,name,image,role,plan,timezone,lastLoginAt,emailVer
 const COL_TIENDA = 'id,userId,platform,name,domain,apiVersion,scopes,status,lastPingAt,lastError,settings,createdAt';
 const COL_PROVEEDOR = 'id,type,name,baseUrl,logoUrl,isEnabled,rateLimitRpm';
 const COL_CATALOGO =
-  'id,provider,externalId,title,description,categoryId,categoryName,imageUrl,images,currency,costPrice,suggestedPrice,stock,rating,ordersCount,shippingCost,shippingMinDays,shippingMaxDays,shipFrom,freeShipping,isTrending,tags,sourceUrl,source,lastSyncedAt,views,importedCount,warehouses,envioResumen';
+  'id,provider,externalId,title,description,categoryId,categoryName,imageUrl,images,currency,costPrice,suggestedPrice,stock,rating,ordersCount,shippingCost,shippingMinDays,shippingMaxDays,shipFrom,freeShipping,isTrending,tags,sourceUrl,source,lastSyncedAt,createdAt,views,importedCount,warehouses,envioResumen';
 
 const num = (v: unknown, defecto = 0) => (v === null || v === undefined || v === '' ? defecto : Number(v));
 const fecha = (v: unknown) => (v ? new Date(v as string) : null);
@@ -406,6 +406,7 @@ const mapCatalogo = (i: any): CatalogRow => ({
   isTrending: i.isTrending,
   source: i.source,
   lastSyncedAt: new Date(i.lastSyncedAt),
+  createdAt: i.createdAt ? new Date(i.createdAt) : null,
   importedCount: i.importedCount ?? 0,
   envioResumen: i.envioResumen ?? null,
 });
@@ -561,7 +562,8 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
       consulta = consulta.order('costPrice', { ascending: false });
       break;
     case 'newest':
-      consulta = consulta.order('createdAt', { ascending: false });
+      // Desempate estable por id: con la carga continua ningún producto se repite ni se salta entre páginas
+      consulta = consulta.order('createdAt', { ascending: false }).order('id', { ascending: true });
       break;
     case 'trending':
       consulta = consulta.order('ordersCount', { ascending: false, nullsFirst: false });

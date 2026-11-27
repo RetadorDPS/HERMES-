@@ -4,6 +4,7 @@
  *
  *   completar_ficha {itemId}                 Descarga la ficha completa del producto (variantes, stock, peso, reseñas).
  *   cotizar_envio  {itemId, paises?}         Cotiza el envío del producto a uno o varios países (hasta 12).
+ *   buscar_proveedor {proveedor, palabra, pagina?}  Búsqueda en vivo en CJ o AliExpress (una página = 1 del cupo BUSQUEDA; repetida en 24 h no gasta).
  *   uso                                      Plan del usuario, límites y lo que lleva gastado (para enseñarlo en pantalla).
  *   elegir_plan {plan}                       Paso obligatorio «Elige tu plan» al registrarse (hoy solo el Gratis; Pro y Premium se contratan en Retador).
  *
@@ -33,7 +34,9 @@ const COTIZACION_VIGENTE_MS = 7 * 24 * 3_600_000; // una cotización de menos de
 const MAX_PAISES = 12;
 const TURNO_SEGUNDOS = 120;
 
-const NOMBRE_ACCION: Record<string, string> = { FICHA: "completar fichas", COTIZACION_ENVIO: "cotizar envíos" };
+const NOMBRE_ACCION: Record<string, string> = { FICHA: "completar fichas", COTIZACION_ENVIO: "cotizar envíos", BUSQUEDA: "buscar en los proveedores" };
+const CACHE_BUSQUEDA_MS = 24 * 3_600_000;
+const normalizarBusqueda = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 
 function mensajeDeCuota(tipo: string, c: any): string {
   const que = NOMBRE_ACCION[tipo] ?? "esta acción";
@@ -135,6 +138,67 @@ Deno.serve(async (req) => {
     if (String(cuerpo?.plan ?? "") !== "TRIAL") return responder({ ok: false, codigo: "plan_no_disponible", error: "Ese plan se contrata en Retador y se aplica aquí al vincular tu cuenta. Elige el plan Gratis para entrar ahora." });
     await servicio.from("User").update({ planElegidoEn: new Date().toISOString() }).eq("id", uid).is("planElegidoEn", null);
     return responder({ ok: true, plan: yo.plan });
+  }
+
+  /* ───────── buscar_proveedor: búsqueda en vivo en CJ o AliExpress; no guarda nada en el catálogo ───────── */
+  if (accion === "buscar_proveedor") {
+    const proveedor = String(cuerpo?.proveedor ?? "");
+    if (!FUNCION_DE_PROVEEDOR[proveedor]) return responder({ ok: false, codigo: "datos_invalidos", error: "Elige CJ o AliExpress" });
+    const palabra = String(cuerpo?.palabra ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (palabra.length < 2) return responder({ ok: false, codigo: "datos_invalidos", error: "Escribe al menos 2 letras para buscar" });
+    const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.pagina ?? 1)) || 1, 50));
+    const clave = `${normalizarBusqueda(palabra)}|${pagina}`;
+
+    // Marca qué resultados ya están en el catálogo común (así el botón dice «Ya en el catálogo» y abre la ficha)
+    const marcar = async (r: any) => {
+      const lista: any[] = Array.isArray(r?.resultados) ? r.resultados : [];
+      const ids = lista.map((x) => String(x.externalId)).filter(Boolean);
+      const { data: ya } = ids.length ? await servicio.from("CatalogItem").select("id,externalId").eq("provider", proveedor).in("externalId", ids) : { data: [] };
+      const mapa = new Map((ya ?? []).map((x: any) => [String(x.externalId), String(x.id)]));
+      return lista.map((x) => ({ ...x, itemId: mapa.get(String(x.externalId)) ?? null }));
+    };
+    // «Hay más» también cuando el proveedor da menos por página de lo pedido (AliExpress devuelve unos 20) pero su total dice que quedan
+    const hayMasDe = (r: any) => {
+      const n = Array.isArray(r?.resultados) ? r.resultados.length : 0;
+      const total = Number(r?.total);
+      return Boolean(r?.hayMas) || (n > 0 && Number.isFinite(total) && total > pagina * n);
+    };
+    const publica = async (r: any, extra: Record<string, unknown>) =>
+      responder({ ok: true, proveedor, buscado: r?.buscado ?? palabra, pagina, total: r?.total ?? null, hayMas: hayMasDe(r), resultados: await marcar(r), ...extra });
+
+    const { data: guardada } = await servicio.from("BusquedaProveedor").select("respuesta,creadoEn").eq("proveedor", proveedor).eq("clave", clave).maybeSingle();
+    if (guardada && Date.now() - Date.parse(String(guardada.creadoEn)) < CACHE_BUSQUEDA_MS) return await publica(guardada.respuesta, { gastado: 0, desdeCache: true });
+
+    const turno = await servicio.rpc("tomar_turno_proveedor", { p_proveedor: proveedor, p_segundos: 60 });
+    if (turno.error || turno.data !== true) return responder({ ok: false, codigo: "ocupado", error: "Hay otra consulta a ese proveedor en curso. Espera unos segundos y vuelve a intentarlo (no se ha gastado nada de tu cupo)." });
+    let gastado = false;
+    try {
+      if (!sinLimite) {
+        const c = await servicio.rpc("consumir_cuota", { p_user: uid, p_tipo: "BUSQUEDA", p_cantidad: 1 });
+        if (c.error) return responder({ ok: false, codigo: "cuota", error: "No se pudo comprobar tu límite. Inténtalo de nuevo en un momento." });
+        if (!(c.data as any)?.permitido) return responder({ ok: false, codigo: "cuota", error: mensajeDeCuota("BUSQUEDA", c.data), cuota: c.data });
+        gastado = true;
+      }
+      const r: any = await llamarProveedor(proveedor, { accion: "buscar", palabra, pagina, tamano: 24 });
+      const llamadasReales = Number(r?.llamadasACj ?? r?.llamadasAAliExpress ?? 0);
+      if (llamadasReales > 0) await servicio.rpc("sumar_llamadas_proveedor", { p_proveedor: proveedor, p_llamadas: llamadasReales, p_rechazos: r?.ok ? 0 : 1 });
+      if (!r?.ok) {
+        if (gastado) await servicio.rpc("devolver_cuota", { p_user: uid, p_tipo: "BUSQUEDA", p_cantidad: 1 });
+        gastado = false;
+        return responder({ ...respuestaPublica(r, esAdmin), ok: false, codigo: "proveedor", devuelto: true, ...(esAdmin && r?.forma ? { forma: r.forma } : {}) });
+      }
+      const guardar = { buscado: r.buscado ?? palabra, total: r.total ?? null, hayMas: Boolean(r.hayMas), resultados: Array.isArray(r.resultados) ? r.resultados : [] };
+      await servicio.from("BusquedaProveedor").upsert({ proveedor, clave, respuesta: guardar, creadoEn: new Date().toISOString() }, { onConflict: "proveedor,clave" });
+      // Limpieza barata: las búsquedas de hace más de 2 días ya no sirven
+      await servicio.from("BusquedaProveedor").delete().lt("creadoEn", new Date(Date.now() - 2 * 86_400_000).toISOString());
+      return await publica(guardar, { gastado: gastado ? 1 : 0, desdeCache: false, ...(esAdmin && !guardar.resultados.length && r?.forma ? { forma: r.forma } : {}) });
+    } catch (e) {
+      if (gastado) await servicio.rpc("devolver_cuota", { p_user: uid, p_tipo: "BUSQUEDA", p_cantidad: 1 });
+      console.error("acciones-usuario", accion, (e as Error)?.message);
+      return responder({ ok: false, codigo: "error_interno", error: "El proveedor no respondió a tiempo. No se ha gastado nada de tu cupo; inténtalo de nuevo más tarde." });
+    } finally {
+      await servicio.rpc("soltar_turno_proveedor", { p_proveedor: proveedor });
+    }
   }
 
   if (accion !== "completar_ficha" && accion !== "cotizar_envio") return responder({ ok: false, codigo: "accion_desconocida", error: `Acción desconocida: ${accion}` });
