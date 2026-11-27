@@ -90,7 +90,9 @@ function variantesDeAli(skus: any[], paquete: any) {
       vid: s.sku_id ? String(s.sku_id) : null,
       nombre,
       nombreCompleto: nombre,
-      sku: s.sku_code ?? s.id ?? null,
+      // Código de la variante: el que da AliExpress; muchos productos de una sola variante lo traen VACÍO y Retador exige uno,
+      // así que entonces se usa el identificador real de la variante en AliExpress («AE-» + sku_id). No se inventa nada.
+      sku: String(s.sku_code ?? "").trim() || String(s.id ?? "").trim() || (s.sku_id ? `AE-${s.sku_id}` : null),
       clave: s.sku_attr ?? null,
       precio: numeroONulo(s.offer_sale_price ?? s.sku_price),
       pesoGramos: peso !== null ? Math.round(peso * 1000) : null,

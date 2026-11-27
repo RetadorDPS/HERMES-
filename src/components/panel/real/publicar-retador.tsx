@@ -60,6 +60,8 @@ const MAX_VARIANTES_POR_DEFECTO = 12;
 /** Códigos de variante que Retador acepta (9/11/2026): con espacios normales, sin comillas, < >, saltos de línea ni caracteres de control, hasta 100 caracteres. */
 const SKU_ADMITIDO_POR_RETADOR = /^[^<>"'\u0000-\u001f\u007f]{1,100}$/;
 const MOTIVO_SKU = 'un código de variante que Retador admita (lleva comillas, signos de mayor o menor, o más de 100 caracteres)';
+/** El proveedor no dio ningún código para la variante (ni identificador): Retador exige uno */
+const MOTIVO_SIN_SKU = 'el código de la variante (el proveedor no lo informa)';
 
 export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose }: { itemId: string; titulo: string; categoriaProveedor?: string | null; onClose: () => void }) {
   const [tienda, setTienda] = useState<TiendaRetador | null | undefined>(undefined);
@@ -95,6 +97,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         if (!vivo) return;
         // Una variante cuyo código Retador va a rechazar no se deja elegir: así no se manda una publicación que ya sabemos que falla
         p.variantes = p.variantes.map((v) => {
+          if (!v.sku.trim()) return { ...v, coste: null, faltan: [MOTIVO_SIN_SKU] };
           if (!SKU_ADMITIDO_POR_RETADOR.test(v.sku)) return { ...v, coste: null, faltan: [MOTIVO_SKU] };
           // Un peso de relleno del proveedor (p. ej. 100 g para un sofá de 525 USD) haría el envío ridículamente barato: no se publica sin un peso creíble
           const dudoso = motivoPesoDudoso(v.pesoGramos, v.costeUsd);
@@ -311,9 +314,11 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
 
           {error && !prep && <Alert variant="danger">{error}</Alert>}
 
-          {prep && !hecho && !prep.yaPublicado && prep.variantes.length > 0 && prep.variantes.every((v) => v.faltan.includes(MOTIVO_SKU)) && (
+          {prep && !hecho && !prep.yaPublicado && prep.variantes.length > 0 && prep.variantes.every((v) => v.faltan.includes(MOTIVO_SKU) || v.faltan.includes(MOTIVO_SIN_SKU)) && (
             <Alert variant="warning" title="Este producto todavía no se puede publicar en Retador">
-              Los códigos de todas sus variantes llevan comillas, signos de mayor o menor, o pasan de 100 caracteres, y Retador no los acepta.
+              {prep.variantes.every((v) => v.faltan.includes(MOTIVO_SIN_SKU))
+                ? 'El proveedor no informa ningún código ni identificador de sus variantes, y Retador exige uno por variante, así que este producto no se puede publicar.'
+                : 'Los códigos de sus variantes llevan comillas, signos de mayor o menor, o pasan de 100 caracteres, y Retador no los acepta.'}
             </Alert>
           )}
 
