@@ -112,6 +112,9 @@ const CATEGORIA_MOVILES = "5090301"; // «Teléfonos móviles» en AliExpress
 const PALABRAS_ACCESORIO = /\b(fundas?|carcasas?|protector(es)?|templado|mica|case|cover|holster|soporte|holder|cables?|cargador(es)?|charger|correas?|strap|pegatinas?|repuestos?|placa|flex|bater[ií]as?|battery|lentes?|auriculares|cascos|earbuds?|buds|reloj|watch|band|pulsera|tablet|pad|tv|altavoz|speaker)\b/i;
 const PALABRAS_MOVIL = /\b(tel[eé]fonos?|m[oó]vil(es)?|celular(es)?|smartphones?)\b/i;
 const MARCAS_MOVIL = /\b(iphone|samsung|galaxy|xiaomi|redmi|poco|huawei|honor|oppo|vivo|realme|oneplus|motorola|moto|nokia|pixel|tecno|infinix|zte|nothing|oukitel|doogee|ulefone|blackview|umidigi|cubot|meizu|nubia|asus|sony|xperia|lg)\b/i;
+/** Búsqueda genérica de móvil («teléfonos», «móvil barato»): dentro de la categoría se busca «smartphone», que es como titula AliExpress */
+const SOLO_PALABRAS_MOVIL = /^\s*((tel[eé]fonos?|m[oó]vil(es)?|celular(es)?|smartphones?|inteligentes?|android|5g|4g|baratos?|nuevos?|buenos?|de|para|y)\s*)+$/i;
+const MINIMO_EN_CATEGORIA = 8;
 /** ¿Busca un teléfono? «teléfono…», o marca + algo con número («Poco F7», «iPhone 16»), y ninguna palabra de accesorio u otro aparato. */
 function buscaUnMovil(texto: string): boolean {
   if (PALABRAS_ACCESORIO.test(texto)) return false;
@@ -435,18 +438,22 @@ Deno.serve(async (req) => {
     const ORDEN_ALI: Record<string, string> = { ventas: "orders,desc", precio_mayor: "min_price,desc", precio_menor: "min_price,asc" };
     const sortBy = ORDEN_ALI[String(cuerpo?.orden ?? "")];
     const categoria = buscaUnMovil(palabra) ? CATEGORIA_MOVILES : undefined;
+    const palabraEnCategoria = categoria && SOLO_PALABRAS_MOVIL.test(palabra) ? "smartphone" : palabra;
     const pedirBusqueda = (conOrden: boolean, conCategoria: boolean) =>
-      ali("aliexpress.ds.text.search", { keyWord: palabra, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina, ...(conOrden && sortBy ? { sortBy } : {}), ...(conCategoria && categoria ? { categoryId: categoria } : {}) });
+      ali("aliexpress.ds.text.search", { keyWord: conCategoria && categoria ? palabraEnCategoria : palabra, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina, ...(conOrden && sortBy ? { sortBy } : {}), ...(conCategoria && categoria ? { categoryId: categoria } : {}) });
     const itemsDe = (x: any) => primerArray((x?.datos?.aliexpress_ds_text_search_response ?? x?.datos ?? {})?.data?.products) ?? [];
     let r = await pedirBusqueda(true, true);
     let ordenAplicado = Boolean(sortBy);
     let categoriaAplicada = Boolean(categoria);
-    // Si AliExpress no admite el orden, o dentro de la categoría no hay nada, se repite UNA vez la búsqueda normal
-    if ((sortBy && !r.ok) || (categoria && (!r.ok || !itemsDe(r).length))) {
+    let deCategoria: any[] = [];
+    // Si AliExpress no admite el orden, o dentro de la categoría hay muy poco, se hace UNA búsqueda normal más:
+    // lo de la categoría va primero y la búsqueda normal completa la lista (sin repetir)
+    if ((sortBy && !r.ok) || (categoria && (!r.ok || itemsDe(r).length < MINIMO_EN_CATEGORIA))) {
+      if (categoria && r.ok) deCategoria = itemsDe(r);
       const quitarOrden = Boolean(sortBy) && !r.ok;
       r = await pedirBusqueda(!quitarOrden, false);
       if (quitarOrden) ordenAplicado = false;
-      categoriaAplicada = false;
+      categoriaAplicada = deCategoria.length > 0;
     }
     if (!r.ok) {
       await marcarError(`AliExpress respondió con error al buscar: ${r.mensaje}`);
@@ -458,7 +465,10 @@ Deno.serve(async (req) => {
     if (codigoNegocio !== "00" && codigoNegocio !== "0" && !primerArray(datos?.products)) {
       return responder({ ok: false, error: `AliExpress no pudo hacer la búsqueda: ${String(raiz?.msg ?? codigoNegocio)}`, forma: Object.keys(raiz ?? {}), llamadasAAliExpress: llamadas, ...diagnostico });
     }
-    const items: any[] = primerArray(datos?.products) ?? [];
+    const normales: any[] = primerArray(datos?.products) ?? [];
+    const idDe = (i: any) => String(i.itemId ?? i.item_id ?? i.product_id ?? "");
+    const vistos = new Set(deCategoria.map(idDe));
+    const items: any[] = [...deCategoria, ...normales.filter((i) => !vistos.has(idDe(i)))];
     const resultados = items
       .map((i: any) => {
         const id = String(i.itemId ?? i.item_id ?? i.product_id ?? "");
@@ -483,7 +493,7 @@ Deno.serve(async (req) => {
       buscado: palabra,
       pagina,
       total,
-      hayMas: items.length >= tamano,
+      hayMas: normales.length >= tamano || items.length >= tamano,
       resultados,
       ordenAplicado,
       categoria: categoriaAplicada ? "moviles" : null,

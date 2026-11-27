@@ -22,8 +22,8 @@ export class ErrorImportacion extends Error {
 }
 
 /** Pide la importación de un producto por su enlace. Los errores llegan ya en español (enlace no válido, límite diario, proveedor caído…). */
-export async function importarPorEnlace(url: string, destino: string): Promise<ResultadoImportacion> {
-  const { data, error } = await supabase().functions.invoke('importar-enlace', { body: { url, destino } });
+export async function importarPorEnlace(url: string, destino: string, paisFicha?: string): Promise<ResultadoImportacion> {
+  const { data, error } = await supabase().functions.invoke('importar-enlace', { body: { url, destino, ...(paisFicha ? { paisFicha } : {}) } });
   if (error) {
     // Si la función contestó con un estado de error, el cuerpo trae el mensaje en español
     const respuesta = (error as { context?: Response }).context;

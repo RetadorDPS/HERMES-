@@ -518,6 +518,18 @@ export async function consultarItemCatalogo(id: string, destino?: string): Promi
   return conPreciosEnEuros([mapCatalogo(data)], regla, tasas, destino ?? destinoGuardado())[0] ?? null;
 }
 
+/** Varios productos del catálogo por su id, en el mismo orden pedido (p. ej. los que el usuario acaba de añadir desde el buscador). */
+export async function consultarItemsCatalogo(ids: string[], destino?: string): Promise<CatalogRow[]> {
+  const unicos = [...new Set(ids)].slice(0, 100);
+  if (!unicos.length) return [];
+  const { data, error } = await supabase().from('CatalogItem').select(COL_CATALOGO).in('id', unicos);
+  if (error) throw new Error(error.message);
+  const [regla, tasas] = await Promise.all([reglaPredeterminada(), tasasEnEuros()]);
+  const filas = conPreciosEnEuros(((data ?? []) as any[]).map(mapCatalogo), regla, tasas, destino ?? destinoGuardado());
+  const porId = new Map(filas.map((f) => [f.id, f]));
+  return unicos.map((id) => porId.get(id)).filter((f): f is CatalogRow => Boolean(f));
+}
+
 /** Consulta el catálogo común (CatalogItem) con filtros, orden, facetas y precio final con la regla del cliente. */
 export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<CatalogResult> {
   const c = supabase();

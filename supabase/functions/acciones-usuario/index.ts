@@ -4,7 +4,8 @@
  *
  *   completar_ficha {itemId}                 Descarga la ficha completa del producto (variantes, stock, peso, reseñas).
  *   cotizar_envio  {itemId, paises?}         Cotiza el envío del producto a uno o varios países (hasta 12).
- *   buscar_proveedor {proveedor, palabra, pagina?, orden?}  Búsqueda en vivo en CJ o AliExpress (una página = 1 del cupo BUSQUEDA; repetida en 24 h no gasta).
+ *   buscar_proveedor {proveedor, palabra, pagina?, orden?}  Búsqueda en vivo en CJ o AliExpress: cada búsqueda nueva = 1 del cupo BUSQUEDA (solo la
+ *                                            primera página; bajar para ver más, hasta la página 15, no gasta); repetida en 24 h no gasta.
  *   uso                                      Plan del usuario, límites y lo que lleva gastado (para enseñarlo en pantalla).
  *   elegir_plan {plan}                       Paso obligatorio «Elige tu plan» al registrarse (hoy solo el Gratis; Pro y Premium se contratan en Retador).
  *
@@ -36,6 +37,7 @@ const TURNO_SEGUNDOS = 120;
 
 const NOMBRE_ACCION: Record<string, string> = { FICHA: "completar fichas", COTIZACION_ENVIO: "cotizar envíos", BUSQUEDA: "buscar en los proveedores" };
 const CACHE_BUSQUEDA_MS = 24 * 3_600_000;
+const PAGINAS_BUSQUEDA = 15; // páginas por búsqueda; solo la primera gasta cupo (las siguientes son «bajar para ver más»)
 const normalizarBusqueda = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 
 function mensajeDeCuota(tipo: string, c: any): string {
@@ -146,7 +148,7 @@ Deno.serve(async (req) => {
     if (!FUNCION_DE_PROVEEDOR[proveedor]) return responder({ ok: false, codigo: "datos_invalidos", error: "Elige CJ o AliExpress" });
     const palabra = String(cuerpo?.palabra ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
     if (palabra.length < 2) return responder({ ok: false, codigo: "datos_invalidos", error: "Escribe al menos 2 letras para buscar" });
-    const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.pagina ?? 1)) || 1, 50));
+    const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.pagina ?? 1)) || 1, PAGINAS_BUSQUEDA));
     // Orden común (cada proveedor lo traduce a su manera): relevancia · ventas · precio_mayor · precio_menor
     const orden = ["ventas", "precio_mayor", "precio_menor"].includes(String(cuerpo?.orden)) ? String(cuerpo.orden) : "relevancia";
     const clave = `${normalizarBusqueda(palabra)}|${pagina}${orden === "relevancia" ? "" : `|${orden}`}`;
@@ -163,6 +165,7 @@ Deno.serve(async (req) => {
     const hayMasDe = (r: any) => {
       const n = Array.isArray(r?.resultados) ? r.resultados.length : 0;
       const total = Number(r?.total);
+      if (pagina >= PAGINAS_BUSQUEDA) return false;
       return Boolean(r?.hayMas) || (n > 0 && Number.isFinite(total) && total > pagina * n);
     };
     const publica = async (r: any, extra: Record<string, unknown>) =>
@@ -175,7 +178,7 @@ Deno.serve(async (req) => {
     if (turno.error || turno.data !== true) return responder({ ok: false, codigo: "ocupado", error: "Hay otra consulta a ese proveedor en curso. Espera unos segundos y vuelve a intentarlo (no se ha gastado nada de tu cupo)." });
     let gastado = false;
     try {
-      if (!sinLimite) {
+      if (!sinLimite && pagina === 1) {
         const c = await servicio.rpc("consumir_cuota", { p_user: uid, p_tipo: "BUSQUEDA", p_cantidad: 1 });
         if (c.error) return responder({ ok: false, codigo: "cuota", error: "No se pudo comprobar tu límite. Inténtalo de nuevo en un momento." });
         if (!(c.data as any)?.permitido) return responder({ ok: false, codigo: "cuota", error: mensajeDeCuota("BUSQUEDA", c.data), cuota: c.data });

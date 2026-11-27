@@ -13,7 +13,9 @@
  *   · límite diario por persona y global (las llamadas gastan la cuota de la plataforma),
  *   · nunca dos importaciones a la vez contra el mismo proveedor (CJ y AliExpress cortan si se les llama en paralelo).
  *
- * Cuerpo: { url: string, destino?: "ES" }  → con destino, cotiza también el envío a ese país (pocas llamadas).
+ * Cuerpo: { url: string, destino?: "ES", paisFicha?: "US" }  → con destino, cotiza también el envío a ese país (pocas llamadas).
+ *   paisFicha: país para el que se pide la ficha (precio y variantes). El buscador manda el mismo país con el que buscó
+ *   (si no, un producto que no se vende a España llegaba sin variantes y fallaba).
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
@@ -21,8 +23,8 @@ import { analizarEnlace, hostEsEnlaceCortoAli, hostPermitidoAli, type ProveedorE
 
 const FUNCION: Record<ProveedorEnlace, string> = { CJ_DROPSHIPPING: "cj-catalogo", ALIEXPRESS: "ali-catalogo" };
 const NOMBRE: Record<ProveedorEnlace, string> = { CJ_DROPSHIPPING: "CJ Dropshipping", ALIEXPRESS: "AliExpress" };
-const LIMITE_USUARIO_DIA = 15; // por persona y día (salvo quien esté en `UsuarioSinLimite`)
-const LIMITE_GLOBAL_DIA = 120;
+const LIMITE_USUARIO_DIA = 30; // productos AÑADIDOS por persona y día (los fallos no cuentan); sin tope para el administrador y quien esté en `UsuarioSinLimite`
+const LIMITE_GLOBAL_DIA = 300; // llamadas por proveedor y día (protege la cuota de CJ y AliExpress; aquí sí cuentan los fallos)
 const VENTANA_BLOQUEO_MS = 120_000;
 const FICHA_VIEJA_MS = 7 * 24 * 3_600_000; // una ficha de más de 7 días se vuelve a leer (el precio puede haber cambiado)
 const COTIZACION_FRESCA_MS = 24 * 3_600_000;
@@ -87,6 +89,7 @@ Deno.serve(async (req) => {
 
   const cuerpo = await req.json().catch(() => ({}));
   const destino: string | null = /^[a-z]{2}$/i.test(String(cuerpo?.destino ?? "")) ? String(cuerpo.destino).toUpperCase() : null;
+  const paisFicha: string | null = /^[a-z]{2}$/i.test(String(cuerpo?.paisFicha ?? "")) ? String(cuerpo.paisFicha).toUpperCase() : null;
 
   // ── Enlace ──
   let lectura = analizarEnlace(String(cuerpo?.url ?? ""));
@@ -116,10 +119,13 @@ Deno.serve(async (req) => {
 
   // ── Límites y exclusión mutua ──
   const desde24h = new Date(Date.now() - 24 * 3_600_000).toISOString();
-  const { count: delUsuario } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("userId", uid).gte("createdAt", desde24h).neq("estado", "sin_llamada");
+  // Al usuario solo le cuentan los productos que sí se añadieron (o que se están añadiendo): si el proveedor falla, no pierde cupo
+  const { count: delUsuario } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("userId", uid).gte("createdAt", desde24h).in("estado", ["ok", "en_curso"]);
   // Quien está marcado «sin límite» (tabla privada que solo cambia el administrador) no tiene el tope diario PERSONAL; el tope por proveedor de más abajo sigue valiendo para no agotar la cuota de CJ y AliExpress
   const { data: marcaSinLimite } = await servicio.from("UsuarioSinLimite").select("userId").eq("userId", uid).maybeSingle();
-  if (!marcaSinLimite && (delUsuario ?? 0) >= LIMITE_USUARIO_DIA) return falla(`Has llegado al máximo de ${LIMITE_USUARIO_DIA} importaciones por enlace al día. Vuelve a intentarlo mañana; mientras tanto puedes usar el catálogo.`, { motivo: "limite_usuario" });
+  const { data: yo } = await servicio.from("User").select("role").eq("id", uid).maybeSingle();
+  const sinTope = Boolean(marcaSinLimite) || yo?.role === "ADMIN";
+  if (!sinTope && (delUsuario ?? 0) >= LIMITE_USUARIO_DIA) return falla(`Has llegado al máximo de ${LIMITE_USUARIO_DIA} productos añadidos hoy. Mañana podrás añadir más; mientras tanto puedes usar los que ya tienes en el catálogo.`, { motivo: "limite_usuario" });
   const { count: globales } = await servicio.from("ImportacionEnlace").select("id", { count: "exact", head: true }).eq("provider", proveedor).gte("createdAt", desde24h).neq("estado", "sin_llamada");
   if ((globales ?? 0) >= LIMITE_GLOBAL_DIA) return falla(`Hoy ya se han hecho muchas importaciones desde ${NOMBRE[proveedor]} y se pausa para no agotar su cuota. Vuelve a intentarlo mañana.`, { motivo: "limite_global" });
 
@@ -157,7 +163,7 @@ Deno.serve(async (req) => {
 
     // 1) Producto y ficha completa
     if (haceFaltaFicha) {
-      const { res, json } = await llamarProveedor({ accion: "importar", pid, pais: destino ?? "ES" });
+      const { res, json } = await llamarProveedor({ accion: "importar", pid, pais: paisFicha ?? destino ?? "ES" });
       llamadas += Number(json?.llamadasACj ?? json?.llamadasAAliExpress ?? 0);
       const inf = json?.informe?.[0];
       if (!res.ok || !json?.ok || !inf?.ok) {

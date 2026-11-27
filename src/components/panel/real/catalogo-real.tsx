@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LayoutGrid, Search } from 'lucide-react';
 import { CatalogBrowser } from '@/app/(dashboard)/catalog/catalog-browser';
 import { consultarCatalogoSupabase, obtenerPerfil, reglaPredeterminada } from '@/lib/real/datos';
 import { cn } from '@/lib/utils';
 import { BuscarProveedores } from './buscar-proveedores';
 import { PantallaReal, useCarga } from './comun';
+import { guardarRecienAnadidos, leerRecienAnadidos, RecienAnadidos } from './recien-anadidos';
 
 /**
  * Catálogo con dos pestañas:
@@ -18,6 +19,16 @@ export function CatalogoReal() {
   // Al añadir productos desde el buscador, «Mi catálogo» se recarga al volver a él (así el buscador no pierde sus resultados)
   const [pendiente, setPendiente] = useState(false);
   const [version, setVersion] = useState(0);
+  // Lo que se acaba de añadir desde el buscador: se enseña junto y arriba en «Mi catálogo» hasta que el usuario lo oculte
+  const [recien, setRecien] = useState<string[]>([]);
+  useEffect(() => setRecien(leerRecienAnadidos()), []);
+  const irAlCatalogo = () => {
+    setPestana('catalogo');
+    if (pendiente) {
+      setPendiente(false);
+      setVersion((v) => v + 1);
+    }
+  };
   const { datos, error, cargando, recargar } = useCarga(async () => {
     const [catalogo, regla, cuenta] = await Promise.all([consultarCatalogoSupabase({ pageSize: 24, sort: 'newest' }), reglaPredeterminada(), obtenerPerfil()]);
     return { catalogo, regla, esAdmin: cuenta.perfil?.role === 'ADMIN' };
@@ -44,13 +55,7 @@ export function CatalogoReal() {
             type="button"
             role="tab"
             aria-selected={pestana === id}
-            onClick={() => {
-              setPestana(id);
-              if (id === 'catalogo' && pendiente) {
-                setPendiente(false);
-                setVersion((v) => v + 1);
-              }
-            }}
+            onClick={() => (id === 'catalogo' ? irAlCatalogo() : setPestana(id))}
             className={cn(
               'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12.5px] font-medium transition',
               pestana === id ? 'bg-indigo-500/80 text-white shadow' : 'text-muted-foreground hover:text-foreground',
@@ -64,11 +69,34 @@ export function CatalogoReal() {
 
       {/* Las dos pestañas siguen montadas: cambiar de una a otra no pierde la búsqueda ni lo que ya se cargó */}
       <div className={pestana === 'buscar' ? '' : 'hidden'}>
-        <BuscarProveedores alAnadir={() => setPendiente(true)} />
+        <BuscarProveedores
+          alAnadir={(ids) => {
+            setPendiente(true);
+            setRecien((prev) => {
+              const lista = [...ids, ...prev.filter((x) => !ids.includes(x))];
+              guardarRecienAnadidos(lista);
+              return lista;
+            });
+          }}
+          alVerAnadidos={() => {
+            irAlCatalogo();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
       </div>
 
       {datos && c && (
-        <div className={pestana === 'catalogo' ? '' : 'hidden'}>
+        <div className={pestana === 'catalogo' ? 'space-y-3' : 'hidden'}>
+        {recien.length > 0 && (
+          <RecienAnadidos
+            key={`${version}-${recien.length}`}
+            ids={recien}
+            alOcultar={() => {
+              setRecien([]);
+              guardarRecienAnadidos([]);
+            }}
+          />
+        )}
         <CatalogBrowser
           key={version}
           refrescarAlMontar={version > 0}

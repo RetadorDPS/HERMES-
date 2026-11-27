@@ -9,7 +9,7 @@
  * Control: cada búsqueda nueva gasta 1 del cupo del plan; repetir una búsqueda en 24 horas no gasta; «Ver más» es
  * una búsqueda más y se pide a mano (nunca se gastan búsquedas solas al desplazarse).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, CheckCircle2, Loader2, Plus, Search, Sparkles, Star, X } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -43,11 +43,22 @@ const RAPIDAS = [
 
 
 /** Máximo de productos que se añaden de una vez (cada uno trae su ficha completa del proveedor, en serie). */
-const MAX_POR_TANDA = 10;
+const MAX_POR_TANDA = 20;
+/** País de la búsqueda (precio y disponibilidad): la ficha se pide para el mismo país, si no, un producto que no se vende a otro país llega sin variantes */
+const PAIS_BUSQUEDA = 'US';
+const CLAVE_RECIENTES = 'hermes-busquedas-recientes';
+function leerRecientes(): string[] {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(CLAVE_RECIENTES) ?? '[]');
+    return Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
 
 type EstadoAnadir = { estado: 'esperando' | 'trabajando' | 'ok' | 'error'; mensaje?: string; itemId?: string };
 
-export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
+export function BuscarProveedores({ alAnadir, alVerAnadidos }: { alAnadir?: (itemIds: string[]) => void; alVerAnadidos?: () => void }) {
   const [proveedor, setProveedor] = useState<ProveedorBusqueda>('ALIEXPRESS');
   const [texto, setTexto] = useState('');
   const [buscado, setBuscado] = useState<{ proveedor: ProveedorBusqueda; palabra: string; enviado: string } | null>(null);
@@ -62,10 +73,24 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
   const [anadiendo, setAnadiendo] = useState(false);
   const [progreso, setProgreso] = useState<Record<string, EstadoAnadir>>({});
   const [abierta, setAbierta] = useState<string | null>(null);
+  const [recientes, setRecientes] = useState<string[]>([]);
+  const [contador, setContador] = useState<{ hecho: number; total: number } | null>(null);
+  const centinela = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     cupoBusqueda().then(setCupo).catch(() => setCupo(null));
+    setRecientes(leerRecientes());
   }, []);
+
+  function recordar(palabra: string) {
+    const lista = [palabra, ...leerRecientes().filter((x) => x.toLowerCase() !== palabra.toLowerCase())].slice(0, 8);
+    setRecientes(lista);
+    try {
+      window.localStorage.setItem(CLAVE_RECIENTES, JSON.stringify(lista));
+    } catch {
+      /* sin almacenamiento: solo en esta visita */
+    }
+  }
 
   async function buscar(palabra: string, prov: ProveedorBusqueda = proveedor, pag = 1) {
     const limpia = palabra.trim();
@@ -79,6 +104,7 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
     }
     try {
       const r = await buscarEnProveedor(prov, limpia, pag);
+      if (pag === 1) recordar(limpia);
       setBuscado({ proveedor: prov, palabra: limpia, enviado: r.buscado });
       setResultados((prev) => {
         const vistos = new Set(prev.map((x) => x.externalId));
@@ -113,24 +139,34 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
     if (!lista.length || anadiendo) return;
     setAnadiendo(true);
     setProgreso((p) => ({ ...p, ...Object.fromEntries(lista.map((r) => [r.externalId, { estado: 'esperando' as const }])) }));
-    let bien = 0;
+    const nuevos: string[] = [];
+    const sinIntentar = new Set(lista.map((r) => r.externalId));
+    setContador({ hecho: 0, total: lista.length });
     // De uno en uno: el proveedor corta si se le llama a la vez
     for (const r of lista) {
+      sinIntentar.delete(r.externalId);
       setProgreso((p) => ({ ...p, [r.externalId]: { estado: 'trabajando' } }));
       try {
-        const hecho = await importarPorEnlace(r.url, '');
-        bien += 1;
+        const hecho = await importarPorEnlace(r.url, '', PAIS_BUSQUEDA);
+        nuevos.push(hecho.itemId);
         setProgreso((p) => ({ ...p, [r.externalId]: { estado: 'ok', itemId: hecho.itemId } }));
         setResultados((prev) => prev.map((x) => (x.externalId === r.externalId ? { ...x, itemId: hecho.itemId } : x)));
       } catch (e) {
         setProgreso((p) => ({ ...p, [r.externalId]: { estado: 'error', mensaje: (e as Error).message } }));
-        // Si es el límite del día, no tiene sentido seguir con los demás
+        // Si es el límite del día, no tiene sentido seguir: los que faltan se quedan elegidos para otro momento (nunca girando)
         if (/máximo|límite|mañana/i.test((e as Error).message)) break;
       }
+      setContador((c) => (c ? { ...c, hecho: c.hecho + 1 } : c));
     }
-    setElegidos(new Set());
+    setProgreso((p) => {
+      const copia = { ...p };
+      for (const id of sinIntentar) delete copia[id];
+      return copia;
+    });
+    setElegidos(new Set(sinIntentar));
+    setContador(null);
     setAnadiendo(false);
-    if (bien > 0) alAnadir?.();
+    if (nuevos.length) alAnadir?.(nuevos);
   }
 
   // Filtros sobre lo que devolvió el proveedor (no gastan búsquedas)
@@ -144,6 +180,17 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
     return resultados.map((r, i) => ({ r, i, p: puntos(r) })).sort((a, b) => b.p - a.p || a.i - b.i).map((x) => x.r);
   }, [resultados, claves, buscaAccesorio]);
   const ningunoEncaja = resultados.length > 0 && !resultados.some(encaja);
+
+  // Al bajar se cargan más resultados solos (la página 2 en adelante no gasta cupo)
+  useEffect(() => {
+    const el = centinela.current;
+    if (!el || !hayMas || !buscado || typeof IntersectionObserver === 'undefined') return;
+    const obs = new IntersectionObserver((e) => {
+      if (e.some((x) => x.isIntersecting) && !buscando) void buscar(buscado.palabra, buscado.proveedor, pagina + 1);
+    }, { rootMargin: '500px 0px' });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const errores = useMemo(() => Object.entries(progreso).filter(([, v]) => v.estado === 'error'), [progreso]);
   const anadidos = useMemo(() => Object.values(progreso).filter((v) => v.estado === 'ok').length, [progreso]);
@@ -201,6 +248,26 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
           </Button>
         </form>
 
+        {recientes.length > 0 && (
+          <div className="-mx-1 flex items-center gap-1.5 overflow-x-auto px-1 pb-0.5">
+            <span className="shrink-0 text-[10.5px] text-muted-foreground">Recientes</span>
+            {recientes.map((r) => (
+              <button
+                key={`r-${r}`}
+                type="button"
+                disabled={buscando}
+                onClick={() => {
+                  setTexto(r);
+                  void buscar(r);
+                }}
+                className="shrink-0 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-2.5 py-1 text-[11px] text-indigo-100/90 hover:border-indigo-400/60"
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
           {RAPIDAS.map((r) => (
             <button
@@ -222,8 +289,8 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
           {cupo?.ilimitado
             ? 'Búsquedas sin límite en tu cuenta.'
             : cupo && cupo.restanteMes !== null
-              ? `Cada búsqueda nueva gasta 1 de tu plan: te quedan ${cupo.restanteMes} este mes (${cupo.restanteDia ?? 0} hoy). Repetir una búsqueda en 24 horas no gasta.`
-              : 'Cada búsqueda nueva gasta 1 de tu plan. Repetir una búsqueda en 24 horas no gasta.'}
+              ? `Cada búsqueda nueva gasta 1 de tu plan (te quedan ${cupo.restanteMes} este mes, ${cupo.restanteDia ?? 0} hoy). Bajar para ver más resultados y repetir una búsqueda del mismo día no gastan.`
+              : 'Cada búsqueda nueva gasta 1 de tu plan. Bajar para ver más resultados y repetir una búsqueda del mismo día no gastan.'}
         </p>
       </div>
 
@@ -238,7 +305,7 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
           {resultados.length ? (
             <>
               {total !== null ? `${formatNumber(total)} resultados` : `${resultados.length} resultados`} en {nombreProv(buscado.proveedor)} para «{buscado.palabra}»
-              {buscado.proveedor === 'CJ_DROPSHIPPING' && buscado.enviado.toLowerCase() !== buscado.palabra.toLowerCase() ? ` (CJ busca en inglés: «${buscado.enviado}»)` : ''}. Toca los que quieras y pulsa «Añadir».
+              {buscado.proveedor === 'CJ_DROPSHIPPING' && buscado.enviado.toLowerCase() !== buscado.palabra.toLowerCase() ? ` (CJ busca en inglés: «${buscado.enviado}»)` : ''}. Toca los que quieras (hasta {MAX_POR_TANDA}) y pulsa «Añadir al catálogo».
             </>
           ) : (
             <>No hay resultados en {nombreProv(buscado.proveedor)} para «{buscado.palabra}». Prueba con otra palabra o con el otro proveedor.</>
@@ -248,7 +315,7 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
 
       {buscado && !buscando && ningunoEncaja && (
         <p className="rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[11.5px] text-amber-100/90">
-          {nombreProv(buscado.proveedor)} no tiene «{buscado.palabra}» a la venta para dropshipping en estos resultados: lo que devuelve son productos relacionados (fundas, accesorios u otros modelos). Puedes probar con «Ver más resultados» o con el otro proveedor.
+          {nombreProv(buscado.proveedor)} no tiene «{buscado.palabra}» a la venta para dropshipping en estos resultados: lo que devuelve son productos relacionados (fundas, accesorios u otros modelos). Baja para ver más resultados o prueba con el otro proveedor.
         </p>
       )}
 
@@ -297,7 +364,11 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
                       </span>
                     ) : null}
                   </p>
-                  {estado?.estado === 'error' && <p className="text-[9.5px] leading-tight text-red-300">No se pudo añadir</p>}
+                  {estado?.estado === 'error' && (
+                    <p className="text-[9.5px] leading-tight text-red-300" title={estado.mensaje}>
+                      {/máximo|límite|mañana/i.test(estado.mensaje ?? '') ? 'Límite de hoy' : 'El proveedor no lo deja añadir'}
+                    </p>
+                  )}
                 </div>
               </button>
             );
@@ -306,29 +377,36 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
       )}
 
       {hayMas && resultados.length > 0 && (
-        <div className="flex justify-center">
+        <div ref={centinela} className="flex justify-center py-2">
           <Button variant="outline" size="sm" disabled={buscando} onClick={() => buscado && void buscar(buscado.palabra, buscado.proveedor, pagina + 1)}>
             {buscando ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-            Ver más resultados (1 búsqueda)
+            {buscando ? 'Cargando más…' : 'Ver más resultados'}
           </Button>
         </div>
       )}
 
       {anadidos > 0 && !anadiendo && (
         <Alert variant="success" title={`${anadidos} ${anadidos === 1 ? 'producto añadido' : 'productos añadidos'} a tu catálogo`}>
-          Ya los tienes en «Mi catálogo», los primeros de la lista y con su ficha completa. Toca uno con la marca «En catálogo» para ver la ficha y publicarlo.
+          <p>Ya están en «Mi catálogo» con su ficha completa, marcados como «Recién añadidos».</p>
+          {alVerAnadidos && (
+            <Button size="sm" className="mt-2" onClick={alVerAnadidos}>
+              Verlos en Mi catálogo
+            </Button>
+          )}
         </Alert>
       )}
       {errores.length > 0 && !anadiendo && (
         <Alert variant="warning" title={`${errores.length} no se ${errores.length === 1 ? 'pudo' : 'pudieron'} añadir`}>
-          {errores[0][1].mensaje}
+          {/máximo|límite|mañana/i.test(errores[errores.length - 1][1].mensaje ?? '')
+            ? errores[errores.length - 1][1].mensaje
+            : 'El proveedor no deja revender esos productos ahora mismo (sin variantes disponibles para dropshipping). No se ha gastado nada de tu cupo: elige otros parecidos.'}
         </Alert>
       )}
 
       {(elegidos.size > 0 || anadiendo) && (
         <div className="sticky bottom-3 z-20 flex items-center justify-between gap-2 rounded-xl border border-indigo-400/40 bg-[#14162a]/95 p-2.5 shadow-lg backdrop-blur">
           <p className="min-w-0 text-[12px]">
-            {anadiendo ? 'Añadiendo con su ficha completa, uno a uno…' : `${elegidos.size} ${elegidos.size === 1 ? 'elegido' : 'elegidos'}${elegidos.size >= MAX_POR_TANDA ? ` (máximo ${MAX_POR_TANDA} cada vez)` : ''}`}
+            {anadiendo ? `Añadiendo con su ficha completa${contador ? ` (${contador.hecho} de ${contador.total})` : ''}…` : `${elegidos.size} ${elegidos.size === 1 ? 'elegido' : 'elegidos'}${elegidos.size >= MAX_POR_TANDA ? ` (máximo ${MAX_POR_TANDA} cada vez)` : ''}`}
           </p>
           <div className="flex shrink-0 gap-1.5">
             {!anadiendo && (
