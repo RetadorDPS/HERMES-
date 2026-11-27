@@ -54,18 +54,30 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
     }
   }, [tienda.id]);
 
+  // Comprobando con Retador en segundo plano (la lista ya se ve con lo guardado)
+  const [comprobando, setComprobando] = useState(false);
   useEffect(() => {
-    // Primero se pregunta a Retador qué sigue existiendo (si lo eliminaste allí, aquí se limpia solo) y luego se lee la lista
+    let vivo = true;
     void (async () => {
+      // 1) Lo guardado sale AL MOMENTO (antes se esperaba a Retador y la pantalla tardaba hasta medio minuto en blanco)
+      await cargar();
+      if (!vivo) return;
+      // 2) Después se pregunta a Retador qué sigue existiendo (si lo eliminaste allí, aquí se limpia solo) y se vuelve a leer
+      setComprobando(true);
       try {
         // La configuración de Retador se relee para saber qué admite (por ejemplo las opiniones del proveedor)
         if (!tienda.resenasProveedor) await llamarTienda({ accion: 'config', storeId: tienda.id }).catch(() => undefined);
         await llamarTienda({ accion: 'estado', storeId: tienda.id });
+        if (vivo) await cargar();
       } catch {
-        /* sin respuesta de Retador: se enseña lo último que se sabe */
+        /* sin respuesta de Retador: se queda lo último que se sabe */
+      } finally {
+        if (vivo) setComprobando(false);
       }
-      await cargar();
     })();
+    return () => {
+      vivo = false;
+    };
   }, [cargar, tienda.id, tienda.publicados]);
 
   // Desde el Monitor, «Ajustar precio» llega con ?ajustar=<producto>: se abre el editor de ese producto y se baja hasta él
@@ -124,7 +136,13 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
   }
 
   if (!productos) {
-    return error ? <Alert variant="danger">{error}</Alert> : null;
+    return error ? (
+      <Alert variant="danger">{error}</Alert>
+    ) : (
+      <p className="flex items-center gap-2 py-6 text-[13px] text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> Cargando tus productos…
+      </p>
+    );
   }
 
   return (
@@ -136,6 +154,11 @@ export function ProductosRetador({ tienda }: { tienda: TiendaRetador }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        {comprobando && (
+          <p className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" /> Comprobando con Retador que siguen publicados…
+          </p>
+        )}
         {error && <Alert variant="danger">{error}</Alert>}
         {aviso && <Alert variant="success">{aviso}</Alert>}
         {productos.map((p) => {
