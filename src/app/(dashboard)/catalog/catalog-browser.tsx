@@ -58,6 +58,10 @@ export interface CatalogBrowserProps {
   isAdmin: boolean;
   ruleName: string;
   totalCatalog: number;
+  /** Si se pasa (app real), aparece «Elegir varios para publicar» y se llama con los productos elegidos. */
+  alPublicarVarios?: (items: CatalogRow[]) => void;
+  /** Máximo de productos que se pueden elegir de una vez. */
+  maxElegir?: number;
 }
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -78,7 +82,12 @@ const SORTS = [
 /** Orden por defecto: lo último que entra en el catálogo sale primero. */
 const ORDEN_INICIAL = 'newest';
 
-export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalCatalog, refrescarAlMontar }: CatalogBrowserProps) {
+export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalCatalog, refrescarAlMontar, alPublicarVarios, maxElegir = 20 }: CatalogBrowserProps) {
+  // Modo «elegir varios para publicar»: el toque en una tarjeta la elige en vez de abrir la ficha
+  const [eligiendo, setEligiendo] = useState(false);
+  const [elegidos, setElegidos] = useState<CatalogRow[]>([]);
+  const alternarElegido = (item: CatalogRow) =>
+    setElegidos((xs) => (xs.some((x) => x.id === item.id) ? xs.filter((x) => x.id !== item.id) : xs.length >= maxElegir ? xs : [...xs, item]));
   const [items, setItems] = useState<CatalogRow[]>(initial.items);
   const [meta, setMeta] = useState({ total: initial.total, page: initial.page, pages: initial.pages });
   const [facets, setFacets] = useState<CatalogFacet[]>(initial.facets);
@@ -524,6 +533,25 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
         </span>
       </div>
 
+      {alPublicarVarios && (
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 text-[11.5px] text-muted-foreground">
+            {eligiendo ? `Toca los productos que quieras publicar (hasta ${maxElegir}).` : 'Publica varios productos en Retador de una vez.'}
+          </p>
+          <Button
+            size="sm"
+            variant={eligiendo ? 'outline' : 'default'}
+            className="h-8 shrink-0 px-2.5 text-[12px]"
+            onClick={() => {
+              setEligiendo((x) => !x);
+              setElegidos([]);
+            }}
+          >
+            {eligiendo ? 'Cancelar' : 'Elegir varios'}
+          </Button>
+        </div>
+      )}
+
       {/* Destino del envío: los plazos y el beneficio con envío salen de cotizaciones reales a ese país */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-[12px]">
         <label className="inline-flex items-center gap-2">
@@ -570,8 +598,25 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       ) : (
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
           {items.map((item) => (
-            <CatalogCardCompact key={item.id} item={{ ...item, imageUrl: imageSrc(item.imageUrl), images: (item.images ?? []).map(imageSrc) }} onOpen={(i) => setOpenId(i.id)} />
+            <CatalogCardCompact
+              key={item.id}
+              item={{ ...item, imageUrl: imageSrc(item.imageUrl), images: (item.images ?? []).map(imageSrc) }}
+              elegida={eligiendo ? elegidos.some((x) => x.id === item.id) : undefined}
+              onOpen={(i) => (eligiendo ? alternarElegido(item) : setOpenId(i.id))}
+            />
           ))}
+        </div>
+      )}
+
+      {eligiendo && alPublicarVarios && (
+        <div className="sticky bottom-2 z-30 flex items-center justify-between gap-2 rounded-xl border border-indigo-400/40 bg-[#111633]/95 px-3 py-2 shadow-xl backdrop-blur">
+          <span className="text-[12px]">
+            <span className="font-semibold">{elegidos.length}</span> {elegidos.length === 1 ? 'elegido' : 'elegidos'}
+            {elegidos.length >= maxElegir && <span className="text-muted-foreground"> · máximo {maxElegir}</span>}
+          </span>
+          <Button size="sm" className="h-8 px-3 text-[12px]" disabled={!elegidos.length} onClick={() => alPublicarVarios(elegidos)}>
+            Publicar en Retador
+          </Button>
         </div>
       )}
 

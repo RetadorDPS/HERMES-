@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils';
 import { BuscarProveedores } from './buscar-proveedores';
 import { PantallaReal, useCarga } from './comun';
 import { guardarRecienAnadidos, leerRecienAnadidos, RecienAnadidos } from './recien-anadidos';
+import { MAX_PUBLICAR_VARIOS, PublicarVariosEnRetador } from './publicar-varios-retador';
+import type { CatalogRow } from '@/lib/catalog';
 
 /**
  * Catálogo con dos pestañas:
@@ -21,6 +23,8 @@ export function CatalogoReal() {
   const [version, setVersion] = useState(0);
   // Lo que se acaba de añadir desde el buscador: se enseña junto y arriba en «Mi catálogo» hasta que el usuario lo oculte
   const [recien, setRecien] = useState<string[]>([]);
+  // Productos elegidos para publicar en Retador de una vez (desde «Acabas de añadir» o desde «Elegir varios»)
+  const [publicarVarios, setPublicarVarios] = useState<CatalogRow[] | null>(null);
   useEffect(() => setRecien(leerRecienAnadidos()), []);
   const irAlCatalogo = () => {
     setPestana('catalogo');
@@ -91,6 +95,7 @@ export function CatalogoReal() {
           <RecienAnadidos
             key={`${version}-${recien.length}`}
             ids={recien}
+            alPublicar={setPublicarVarios}
             alOcultar={() => {
               setRecien([]);
               guardarRecienAnadidos([]);
@@ -99,6 +104,8 @@ export function CatalogoReal() {
         )}
         <CatalogBrowser
           key={version}
+          alPublicarVarios={setPublicarVarios}
+          maxElegir={MAX_PUBLICAR_VARIOS}
           refrescarAlMontar={version > 0}
           initial={{
             items: c.items,
@@ -122,6 +129,7 @@ export function CatalogoReal() {
         />
         </div>
       )}
+      {publicarVarios && <PublicarVariosEnRetador items={publicarVarios} onClose={() => setPublicarVarios(null)} />}
     </PantallaReal>
   );
 }

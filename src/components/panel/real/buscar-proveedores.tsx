@@ -147,7 +147,8 @@ export function BuscarProveedores({ alAnadir, alVerAnadidos }: { alAnadir?: (ite
       sinIntentar.delete(r.externalId);
       setProgreso((p) => ({ ...p, [r.externalId]: { estado: 'trabajando' } }));
       try {
-        const hecho = await importarPorEnlace(r.url, '', PAIS_BUSQUEDA);
+        // Con el envío a EE. UU. cotizado al añadir (una llamada más, en serie): sin él Retador no deja publicar el producto
+        const hecho = await importarPorEnlace(r.url, PAIS_BUSQUEDA, PAIS_BUSQUEDA);
         nuevos.push(hecho.itemId);
         setProgreso((p) => ({ ...p, [r.externalId]: { estado: 'ok', itemId: hecho.itemId } }));
         setResultados((prev) => prev.map((x) => (x.externalId === r.externalId ? { ...x, itemId: hecho.itemId } : x)));

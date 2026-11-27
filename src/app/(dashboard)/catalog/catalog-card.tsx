@@ -183,7 +183,8 @@ const DIAS_NUEVO = 7;
  * Tarjeta COMPACTA del catálogo: tres por fila en el móvil sin perder datos. Toda la tarjeta abre la ficha.
  * Enseña lo mismo que la grande en letra pequeña: precio de venta con tu regla, coste, beneficio, envío al destino y stock.
  */
-export function CatalogCardCompact({ item, onOpen }: { item: CatalogRow; onOpen: (item: CatalogRow) => void }) {
+/** `elegida` (opcional): modo «elegir varios»; la tarjeta se marca y el toque elige en vez de abrir la ficha. */
+export function CatalogCardCompact({ item, onOpen, elegida }: { item: CatalogRow; onOpen: (item: CatalogRow) => void; elegida?: boolean }) {
   const sigla = SIGLA[item.provider] ?? { texto: item.provider, className: 'border-white/30 text-foreground' };
   const creado = item.createdAt ? new Date(item.createdAt).getTime() : null;
   const nuevo = creado !== null && Number.isFinite(creado) && Date.now() - creado < DIAS_NUEVO * 86_400_000;
@@ -202,8 +203,17 @@ export function CatalogCardCompact({ item, onOpen }: { item: CatalogRow; onOpen:
       type="button"
       data-tour="catalog:card"
       onClick={() => onOpen(item)}
-      className="group relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-white/[0.07] bg-white/[0.02] text-left transition hover:border-indigo-400/40 hover:bg-white/[0.04]"
+      aria-pressed={elegida === undefined ? undefined : elegida}
+      className={cn(
+        'group relative flex min-w-0 flex-col overflow-hidden rounded-lg border text-left transition',
+        elegida ? 'border-indigo-400 bg-indigo-500/[0.10] ring-2 ring-indigo-400/60' : 'border-white/[0.07] bg-white/[0.02] hover:border-indigo-400/40 hover:bg-white/[0.04]',
+      )}
     >
+      {elegida !== undefined && (
+        <span className={cn('absolute bottom-1 right-1 z-10 grid size-5 place-items-center rounded-full border text-[11px] font-bold', elegida ? 'border-indigo-300 bg-indigo-500 text-white' : 'border-white/40 bg-black/60 text-transparent')} aria-hidden>
+          ✓
+        </span>
+      )}
       <span className="relative block aspect-square w-full overflow-hidden bg-black/30">
         <Foto src={item.imageUrl} alt={item.title} ancho={240} perezosa className="size-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
         <span className={cn('absolute left-1 top-1 rounded border bg-black/75 px-1 py-px text-[8.5px] font-semibold leading-tight', sigla.className)}>{sigla.texto}</span>

@@ -93,3 +93,12 @@ export async function cupoBusqueda(): Promise<CupoBusqueda> {
     restanteDia: typeof b?.restanteDia === 'number' ? b.restanteDia : null,
   };
 }
+
+/**
+ * Cotiza el envío de un producto del catálogo a esos países por la puerta central (con el cupo del plan; lo que ya está
+ * cotizado y al día no gasta nada). Devuelve el mensaje del servidor.
+ */
+export async function cotizarEnvio(itemId: string, paises: string[]): Promise<string> {
+  const d = await invocar<any>({ accion: 'cotizar_envio', itemId, paises });
+  return String(d?.mensaje ?? 'Envío cotizado');
+}

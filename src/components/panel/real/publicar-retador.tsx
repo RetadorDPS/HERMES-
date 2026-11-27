@@ -17,52 +17,14 @@ import { Input, Textarea } from '@/components/ui/input';
 import { DEFAULT_RULE } from '@/lib/pricing';
 import { reglaPredeterminada } from '@/lib/real/datos';
 import { ErrorTiendaRetador, llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
-import { esContratoV13, liquidacion, liquidacionEnvioIncluido, motivoPesoDudoso, precioMinimoEnvioIncluido, precioMinimoSinPerdida, precioPropuesto, type CostePuestoEnCuba, type TarifasRetador } from '@/lib/retador/precios';
+import { esContratoV13, liquidacion, liquidacionEnvioIncluido, precioMinimoEnvioIncluido, precioMinimoSinPerdida } from '@/lib/retador/precios';
 import { sugerirCategoria } from '@/lib/retador/sugerir-categoria';
+import { descripcionInicial, maximoVariantes, MOTIVO_SIN_SKU, MOTIVO_SKU, preciosIniciales, revisarVariantes, type Preparacion, type VarianteServidor } from '@/lib/retador/plan-publicacion';
 import { cn } from '@/lib/utils';
 import { nombrePais } from '@/lib/paises';
 import { BloqueVincular } from './vincular-retador';
 
-interface VarianteServidor {
-  sku: string;
-  nombre: string;
-  imagen: string | null;
-  costeUsd: number | null;
-  pesoGramos: number | null;
-  stock: number | null;
-  stockAlmacen?: number | null;
-  stockFabrica?: number | null;
-  coste: CostePuestoEnCuba | null;
-  faltan: string[];
-  /** Envío estimado por país (USD) con las cotizaciones reales del proveedor (Cuba incluida si se pudo calcular). */
-  enviosPais?: Record<string, number>;
-}
-interface Preparacion {
-  tarifas: TarifasRetador | null;
-  categorias: CategoriaRetador[];
-  provincias: string[];
-  proveedor: 'cj' | 'aliexpress';
-  envioHub: { precio: number; origen: string; dias: [number, number] | null } | null;
-  contenido: { titulo: string; descripcion: string; imagenes: string[] };
-  variantes: VarianteServidor[];
-  yaPublicado: { productId: string; estado: string } | null;
-  costeReferencia?: { pais: string | null; proveedor: 'cj' | 'aliexpress' };
-  /** Máximo de variantes por producto que admite Retador (lo informa su configuración; si no lo dice, 12). */
-  maxVariantes?: number;
-  /** Lo que Retador anuncia que admite (envío incluido, finanzas…). */
-  capacidades?: Record<string, boolean>;
-}
-
 const usd = (n: number) => `${n.toFixed(2)} USD`;
-/** Límite de variantes por producto mientras Retador no informe otro. */
-const MAX_VARIANTES_POR_DEFECTO = 12;
-
-/** Códigos de variante que Retador acepta (9/11/2026): con espacios normales, sin comillas, < >, saltos de línea ni caracteres de control, hasta 100 caracteres. */
-const SKU_ADMITIDO_POR_RETADOR = /^[^<>"'\u0000-\u001f\u007f]{1,100}$/;
-const MOTIVO_SKU = 'un código de variante que Retador admita (lleva comillas, signos de mayor o menor, o más de 100 caracteres)';
-/** El proveedor no dio ningún código para la variante (ni identificador): Retador exige uno */
-const MOTIVO_SIN_SKU = 'el código de la variante (el proveedor no lo informa)';
-
 export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose }: { itemId: string; titulo: string; categoriaProveedor?: string | null; onClose: () => void }) {
   const [tienda, setTienda] = useState<TiendaRetador | null | undefined>(undefined);
   const [prep, setPrep] = useState<Preparacion | null>(null);
@@ -95,39 +57,17 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
         if (!t || t.status !== 'CONNECTED') return;
         const [p, regla] = await Promise.all([llamarTienda<Preparacion>({ accion: 'preparar', storeId: t.id, itemId }), reglaPredeterminada().catch(() => null)]);
         if (!vivo) return;
-        // Una variante cuyo código Retador va a rechazar no se deja elegir: así no se manda una publicación que ya sabemos que falla
-        p.variantes = p.variantes.map((v) => {
-          if (!v.sku.trim()) return { ...v, coste: null, faltan: [MOTIVO_SIN_SKU] };
-          if (!SKU_ADMITIDO_POR_RETADOR.test(v.sku)) return { ...v, coste: null, faltan: [MOTIVO_SKU] };
-          // Un peso de relleno del proveedor (p. ej. 100 g para un sofá de 525 USD) haría el envío ridículamente barato: no se publica sin un peso creíble
-          const dudoso = motivoPesoDudoso(v.pesoGramos, v.costeUsd);
-          return dudoso ? { ...v, coste: null, faltan: [`un peso creíble del proveedor (informa ${dudoso}); sin él el envío saldría mucho más barato de lo real`] } : v;
-        });
+        // Variantes que Retador va a rechazar (código) o con peso de relleno: no se dejan elegir. Mismas reglas que «publicar varios».
+        p.variantes = revisarVariantes(p.variantes);
         setPrep(p);
-        const reglaUso = regla ?? DEFAULT_RULE;
-        const iniciales: Record<string, string> = {};
-        const marcadas: Record<string, boolean> = {};
-        let contador = 0;
-        const tope = p.maxVariantes && p.maxVariantes >= 1 ? p.maxVariantes : MAX_VARIANTES_POR_DEFECTO;
-        for (const v of p.variantes) {
-          if (v.coste) {
-            // El precio es solo el del producto (el comprador paga el envío aparte): la regla de margen se aplica al costo del producto y nunca baja del mínimo de Retador
-            const propuesto = precioPropuesto({ ...v.coste, total: v.coste.producto }, reglaUso);
-            const minimoRetador = p.tarifas ? precioMinimoSinPerdida(v.coste.total, p.tarifas, v.coste.producto) : 0;
-            iniciales[v.sku] = Math.max(propuesto, minimoRetador).toFixed(2);
-            if (contador < tope && !p.yaPublicado) {
-              marcadas[v.sku] = true;
-              contador++;
-            }
-          }
-        }
+        const { precios: iniciales, elegidas: marcadas } = preciosIniciales(p, regla ?? DEFAULT_RULE);
         setPrecios(iniciales);
         setElegidas(marcadas);
         setTituloEdit(p.contenido.titulo);
         // Retador exige una descripción de texto de 1 a 5000 caracteres: si el proveedor no trae ninguna, se parte del título (dato real) y se avisa
-        const textoProveedor = (p.contenido.descripcion ?? '').trim();
-        setDescripcion(textoProveedor || p.contenido.titulo);
-        setDescripcionDelTitulo(!textoProveedor);
+        const desc = descripcionInicial(p.contenido);
+        setDescripcion(desc.texto);
+        setDescripcionDelTitulo(desc.delTitulo);
         setFotos(p.contenido.imagenes);
         // Sin categoría por defecto: la elige la persona (antes salía la primera de la lista y se podía publicar una depiladora como «Muebles»)
         setCat('');
@@ -157,7 +97,7 @@ export function PublicarEnRetador({ itemId, titulo, categoriaProveedor, onClose 
     return [...prep.variantes].sort((a, b) => orden.indexOf(colorDe(a.nombre)) - orden.indexOf(colorDe(b.nombre)));
   }, [prep]);
   const agrupado = Boolean(prep) && new Set(prep!.variantes.map((v) => colorDe(v.nombre))).size >= 2 && prep!.variantes.every((v) => colorDe(v.nombre) !== '');
-  const maxVariantes = prep?.maxVariantes && prep.maxVariantes >= 1 ? prep.maxVariantes : MAX_VARIANTES_POR_DEFECTO;
+  const maxVariantes = prep ? maximoVariantes(prep) : 12;
 
   /** Cuentas por variante con lo que escribe el usuario. */
   const cuentas = useMemo(() => {
