@@ -770,6 +770,8 @@ model CatalogItem {
   description     String?
   categoryId      String?
   categoryName    String?
+  /// Categoría SENCILLA (hogar, moda, electrónica…): la calcula la base con un disparador (`grupo_catalogo`)
+  grupo           String?
   imageUrl        String?
   images          String[]
   currency        String       @default("EUR")

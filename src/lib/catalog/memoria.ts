@@ -8,23 +8,15 @@
  * Mismas reglas que el catálogo real: filtros, orden, facetas, estadísticas y
  * precio final con la regla de margen del usuario.
  */
-import { SAMPLE_CATEGORIES, sampleCatalogItems } from './sample';
+import { sampleCatalogItems } from './sample';
 import { computeSellingPrice } from '../pricing';
 import { supplierProductToScraped } from '../supplier-apis/mapper';
 import type { SupplierProduct } from '../supplier-apis/types';
 import type { PricingRuleLike, ScrapedProduct } from '../types';
 import type { CatalogFacet, CatalogQuery, CatalogResult, CatalogRow } from './index';
+import { facetasDeGrupos, grupoDeProducto } from '../catalogo/grupos';
 
 const redondear = (n: number) => Math.round(n * 100) / 100;
-
-const slug = (s: string) =>
-  s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 60);
 
 const FECHA_BASE = new Date('2026-10-01T09:00:00.000Z');
 
@@ -64,7 +56,8 @@ function coincide(f: CatalogRow, q: CatalogQuery, etiquetas: string[]): boolean 
     const texto = `${f.title} ${f.categoryName ?? ''}`.toLowerCase();
     if (!texto.includes(s) && !etiquetas.includes(s)) return false;
   }
-  if (q.category && q.category !== 'ALL' && f.categoryName !== q.category) return false;
+  // Categoría SENCILLA (grupo), igual que en el catálogo real
+  if (q.category && q.category !== 'ALL' && grupoDeProducto(f.title, f.categoryName) !== q.category) return false;
   if (q.minPrice !== undefined && f.costPrice < q.minPrice) return false;
   if (q.maxPrice !== undefined && f.costPrice > q.maxPrice) return false;
   if (q.shipFrom && !String(q.shipFrom).split(',').includes(f.shipFrom ?? '')) return false;
@@ -132,14 +125,15 @@ export function consultarCatalogoMemoria(q: CatalogQuery = {}): CatalogResult {
   const tamano = Math.min(Math.max(Number(q.pageSize ?? 24), 4), 96);
   const trozo = ordenadas.slice((pagina - 1) * tamano, pagina * tamano);
 
-  const conteo = new Map<string, number>();
-  for (const f of filtradas) if (f.categoryName) conteo.set(f.categoryName, (conteo.get(f.categoryName) ?? 0) + 1);
-  const facetas: CatalogFacet[] = SAMPLE_CATEGORIES.map((c) => ({
-    name: c.name,
-    slug: slug(c.name),
-    count: conteo.get(c.name) ?? 0,
-    imageUrl: c.imageUrl,
-  })).sort((a, b) => b.count - a.count);
+  // Tarjetas por categoría sencilla (grupo), con la foto del producto más pedido de cada una
+  const grupos = new Map<string, { count: number; imagen: string | null; pedidos: number }>();
+  for (const f of todas) {
+    const g = grupoDeProducto(f.title, f.categoryName);
+    const previo = grupos.get(g) ?? { count: 0, imagen: null, pedidos: -1 };
+    const pedidos = f.ordersCount ?? 0;
+    grupos.set(g, { count: previo.count + 1, ...(f.imageUrl && pedidos > previo.pedidos ? { imagen: f.imageUrl, pedidos } : { imagen: previo.imagen, pedidos: previo.pedidos }) });
+  }
+  const facetas: CatalogFacet[] = facetasDeGrupos([...grupos.entries()].map(([id, g]) => ({ id, count: g.count, imagen: g.imagen })));
 
   const porProveedor = new Map<string, number>();
   for (const f of todas) porProveedor.set(f.provider, (porProveedor.get(f.provider) ?? 0) + 1);

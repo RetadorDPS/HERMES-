@@ -22,6 +22,7 @@ import { withSystem } from '../tenant-context';
 import { resolveProviderClient, consumePlatformQuota } from './platform-credentials';
 import { SAMPLE_CATEGORIES, sampleCatalogItems } from './sample';
 import { consultarCatalogoMemoria, detalleMuestra, sugerenciasMemoria } from './memoria';
+import { facetasDeGrupos } from '../catalogo/grupos';
 import { supplierProductToScraped } from '../supplier-apis/mapper';
 import { computeSellingPrice } from '../pricing';
 import { fxInfo, toEur } from '../fx';
@@ -120,8 +121,6 @@ export interface CatalogRow {
   profit?: number;
   profitMarginPct?: number;
 }
-
-const CATEGORY_IMAGES: Record<string, string> = Object.fromEntries(SAMPLE_CATEGORIES.map((c) => [c.name, c.imageUrl]));
 
 /* ────────────────────────────── MUESTRA ────────────────────────────── */
 
@@ -415,7 +414,8 @@ function buildWhere(q: CatalogQuery, sources: Record<string, string[]>, onlyCoun
       ],
     });
   }
-  if (q.category && q.category !== 'ALL') and.push({ categoryName: q.category });
+  // Categoría SENCILLA (grupo), la misma que en la app con Supabase
+  if (q.category && q.category !== 'ALL') and.push({ grupo: q.category });
   if (q.minPrice !== undefined) and.push({ costPrice: { gte: q.minPrice } });
   if (q.maxPrice !== undefined) and.push({ costPrice: { lte: q.maxPrice } });
   if (q.shipFrom) and.push({ shipFrom: q.shipFrom });
@@ -485,19 +485,22 @@ export async function queryCatalog(q: CatalogQuery = {}): Promise<CatalogResult>
     return Promise.all([
       prisma.catalogItem.findMany({ where, orderBy: orderFor(q.sort), skip: (page - 1) * pageSize, take: pageSize }),
       prisma.catalogItem.count({ where }),
-      prisma.catalogItem.groupBy({ by: ['categoryName'], where, _count: { _all: true }, orderBy: { _count: { categoryName: 'desc' } }, take: 40 }),
+      prisma.catalogItem.groupBy({ by: ['grupo'], _count: { _all: true } }),
       prisma.catalogItem.aggregate({ where, _min: { costPrice: true }, _max: { costPrice: true }, _count: { _all: true } }),
     ]);
   });
 
-  // Facetas de categoría (incluye las de muestra siempre, para que la navegación
-  // visual esté completa desde el primer día)
-  const counts = new Map<string, number>();
-  for (const g of grouped as any[]) if (g.categoryName) counts.set(String(g.categoryName), Number(g._count?._all ?? 0));
-  const facetNames = new Set<string>([...SAMPLE_CATEGORIES.map((c) => c.name), ...counts.keys()]);
-  const facets: CatalogFacet[] = [...facetNames]
-    .map((name) => ({ name, slug: slugifyCatalog(name), count: counts.get(name) ?? 0, imageUrl: CATEGORY_IMAGES[name] ?? null }))
-    .sort((a, b) => b.count - a.count);
+  // Tarjetas por categoría sencilla (grupo); la foto se busca aparte: la del producto más pedido de cada grupo
+  const fotos = await withSystem('catálogo: fotos de categorías', () =>
+    Promise.all(
+      (grouped as any[])
+        .filter((g) => g.grupo)
+        .map((g) => prisma.catalogItem.findFirst({ where: { grupo: String(g.grupo), imageUrl: { not: null } }, orderBy: { ordersCount: { sort: 'desc', nulls: 'last' } }, select: { imageUrl: true } })),
+    ),
+  ).catch(() => [] as Array<{ imageUrl: string | null } | null>);
+  const facets: CatalogFacet[] = facetasDeGrupos(
+    (grouped as any[]).filter((g) => g.grupo).map((g, i) => ({ id: String(g.grupo), count: Number(g._count?._all ?? 0), imagen: fotos[i]?.imageUrl ?? null })),
+  );
 
   // Estadísticas globales (sin filtros) y por proveedor
   const globalGrouped = await withSystem('catálogo: estadísticas', () =>

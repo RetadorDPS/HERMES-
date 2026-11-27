@@ -14,6 +14,7 @@ import { supabase } from '../supabase/cliente';
 import { computeSellingPrice, DEFAULT_RULE } from '../pricing';
 import type { PricingRuleLike } from '../types';
 import type { CatalogFacet, CatalogQuery, CatalogResult, CatalogRow } from '../catalog';
+import { facetasDeGrupos } from '../catalogo/grupos';
 import type { ProductListItem, StoreView } from '../data';
 
 const COL_USUARIO = 'id,email,name,image,role,plan,timezone,lastLoginAt,emailVerifiedAt,totpEnabledAt,alertSyncFailures,alertStockChanges,alertWebhookErrors,alertBilling,alertOnboarding,createdAt';
@@ -411,15 +412,6 @@ const mapCatalogo = (i: any): CatalogRow => ({
   envioResumen: i.envioResumen ?? null,
 });
 
-const slugCat = (s: string) =>
-  s
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 60);
-
 /* ─────────────── Tipos de cambio (BCE) ─────────────── */
 
 const redondear2 = (n: number) => Math.round(n * 100) / 100;
@@ -551,7 +543,8 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
 
   let consulta: any = c.from('CatalogItem').select(COL_CATALOGO, { count: 'exact' });
   if (q.provider && q.provider !== 'ALL') consulta = consulta.in('provider', String(q.provider).split(',').filter(Boolean));
-  if (q.category && q.category !== 'ALL') consulta = consulta.eq('categoryName', q.category);
+  // Categoría SENCILLA (grupo: hogar, moda, electrónica…), calculada en la base desde la categoría del proveedor y el título
+  if (q.category && q.category !== 'ALL') consulta = consulta.eq('grupo', q.category);
   if (q.minPrice !== undefined) consulta = consulta.gte('costPrice', q.minPrice);
   if (q.maxPrice !== undefined) consulta = consulta.lte('costPrice', q.maxPrice);
   // Almacenes de salida: puede venir una lista separada por comas; sale cualquier producto con existencias en alguno de ellos
@@ -593,7 +586,7 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   const filas: CatalogRow[] = (pag.data as any[]).map(mapCatalogo).map((f) => ({ ...f, isTrending: esTendencia(f.provider, f.ordersCount) }));
   const total = pag.count ?? filas.length;
 
-  const facets: CatalogFacet[] = ((resumen.categorias ?? []) as any[]).map((f) => ({ name: String(f.name), slug: slugCat(String(f.name)), count: Number(f.count), imageUrl: null }));
+  const facets: CatalogFacet[] = facetasDeGrupos(((resumen.grupos ?? []) as any[]).map((f) => ({ id: String(f.id), count: Number(f.count), imagen: f.imagen ? String(f.imagen) : null })));
   const [regla, tasas] = await Promise.all([reglaPredeterminada(), tasasEnEuros()]);
   const precioMin = resumen.precioMin === null || resumen.precioMin === undefined ? 0 : Number(resumen.precioMin);
   const precioMax = resumen.precioMax === null || resumen.precioMax === undefined ? 0 : Number(resumen.precioMax);

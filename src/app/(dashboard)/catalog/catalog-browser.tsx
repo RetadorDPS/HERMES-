@@ -37,6 +37,7 @@ import { CatalogImportDrawer } from './import-dialog';
 import { useSesion } from '@/components/auth/sesion';
 import { FichaProveedor } from '@/components/panel/real/ficha-proveedor';
 import { nombreAlmacen, nombrePais, PAISES_FRECUENTES } from '@/lib/paises';
+import { nombreGrupo } from '@/lib/catalogo/grupos';
 
 export interface CatalogBrowserProps {
   initial: {
@@ -226,7 +227,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
 
   const activeFilters = [
     q && { label: `«${q}»`, clear: () => setQ('') },
-    category && { label: category, clear: () => setCategory('') },
+    category && { label: nombreGrupo(category), clear: () => setCategory('') },
     provider.length > 0 && { label: provider.map((x) => PROVIDER_LABEL[x] ?? x).join(' + '), clear: () => setProvider([]) },
     (minPrice || maxPrice) && { label: `${minPrice || 0}–${maxPrice || '∞'} €`, clear: () => { setMinPrice(''); setMaxPrice(''); } },
     shipFrom.length > 0 && { label: `almacén: ${shipFrom.map(nombreAlmacen).join(' + ')}`, clear: () => setShipFrom([]) },
@@ -312,10 +313,10 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
             <button
               key={f.slug}
               type="button"
-              onClick={() => { setCategory(f.name === category ? '' : f.name); setPage(1); }}
+              onClick={() => { setCategory(f.slug === category ? '' : f.slug); setPage(1); }}
               className={cn(
                 'flex w-[132px] shrink-0 flex-col gap-2 rounded-xl border p-2 text-left transition',
-                category === f.name ? 'border-indigo-400/40 bg-indigo-500/[0.08]' : 'border-white/[0.07] bg-white/[0.02] hover:border-white/20',
+                category === f.slug ? 'border-indigo-400/40 bg-indigo-500/[0.08]' : 'border-white/[0.07] bg-white/[0.02] hover:border-white/20',
               )}
             >
               <span className="h-[72px] overflow-hidden rounded-lg bg-black/30">
@@ -515,7 +516,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       <div className="flex items-center justify-between text-[12px] text-muted-foreground">
         <span className="inline-flex items-center gap-2">
           {loading && <Loader2 className="size-3.5 animate-spin text-indigo-300" />}
-          {formatNumber(meta.total)} productos {category ? `en «${category}»` : ''}{meta.total > items.length ? ` · viendo ${formatNumber(items.length)}` : ''}
+          {formatNumber(meta.total)} productos {category ? `en «${nombreGrupo(category)}»` : ''}{meta.total > items.length ? ` · viendo ${formatNumber(items.length)}` : ''}
         </span>
         <span className="inline-flex items-center gap-2">
           <ArrowDownUp className="size-3.5" />
