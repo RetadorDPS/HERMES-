@@ -6,6 +6,8 @@
 import { supabase } from '../supabase/cliente';
 
 export type ProveedorBusqueda = 'CJ_DROPSHIPPING' | 'ALIEXPRESS';
+/** Orden común: cada proveedor lo traduce a su manera en su propia función */
+export type OrdenBusqueda = 'relevancia' | 'ventas' | 'precio_mayor' | 'precio_menor';
 
 export interface ResultadoBusqueda {
   externalId: string;
@@ -29,6 +31,8 @@ export interface PaginaBusqueda {
   total: number | null;
   hayMas: boolean;
   resultados: ResultadoBusqueda[];
+  /** false = el proveedor no admitió el orden pedido y devolvió su orden normal */
+  ordenAplicado: boolean;
   gastado: number;
   desdeCache: boolean;
 }
@@ -53,8 +57,8 @@ async function invocar<T>(cuerpo: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 
-export async function buscarEnProveedor(proveedor: ProveedorBusqueda, palabra: string, pagina = 1): Promise<PaginaBusqueda> {
-  const d = await invocar<any>({ accion: 'buscar_proveedor', proveedor, palabra, pagina });
+export async function buscarEnProveedor(proveedor: ProveedorBusqueda, palabra: string, pagina = 1, orden: OrdenBusqueda = 'relevancia'): Promise<PaginaBusqueda> {
+  const d = await invocar<any>({ accion: 'buscar_proveedor', proveedor, palabra, pagina, orden });
   return {
     proveedor,
     buscado: String(d.buscado ?? palabra),
@@ -73,6 +77,7 @@ export async function buscarEnProveedor(proveedor: ProveedorBusqueda, palabra: s
       url: String(r.url ?? ''),
       itemId: r.itemId ?? null,
     })),
+    ordenAplicado: d.ordenAplicado !== false,
     gastado: Number(d.gastado ?? 0),
     desdeCache: Boolean(d.desdeCache),
   };

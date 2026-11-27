@@ -103,6 +103,22 @@ function variantesDeAli(skus: any[], paquete: any) {
   });
 }
 
+/*
+ * Búsqueda «como en la web de AliExpress». La búsqueda de la API casa palabras sueltas: si se escribe un modelo de móvil
+ * («Poco F7 Pro», «Galaxy S26 Ultra») salen sobre todo fundas, porque llevan el modelo en el título. La web de AliExpress lo
+ * evita buscando dentro de la categoría del producto; aquí se hace lo mismo cuando la búsqueda es de un teléfono y no de un accesorio.
+ */
+const CATEGORIA_MOVILES = "5090301"; // «Teléfonos móviles» en AliExpress
+const PALABRAS_ACCESORIO = /\b(fundas?|carcasas?|protector(es)?|templado|mica|case|cover|holster|soporte|holder|cables?|cargador(es)?|charger|correas?|strap|pegatinas?|repuestos?|placa|flex|bater[ií]as?|battery|lentes?|auriculares|cascos|earbuds?|buds|reloj|watch|band|pulsera|tablet|pad|tv|altavoz|speaker)\b/i;
+const PALABRAS_MOVIL = /\b(tel[eé]fonos?|m[oó]vil(es)?|celular(es)?|smartphones?)\b/i;
+const MARCAS_MOVIL = /\b(iphone|samsung|galaxy|xiaomi|redmi|poco|huawei|honor|oppo|vivo|realme|oneplus|motorola|moto|nokia|pixel|tecno|infinix|zte|nothing|oukitel|doogee|ulefone|blackview|umidigi|cubot|meizu|nubia|asus|sony|xperia|lg)\b/i;
+/** ¿Busca un teléfono? «teléfono…», o marca + algo con número («Poco F7», «iPhone 16»), y ninguna palabra de accesorio u otro aparato. */
+function buscaUnMovil(texto: string): boolean {
+  if (PALABRAS_ACCESORIO.test(texto)) return false;
+  if (PALABRAS_MOVIL.test(texto)) return true;
+  return MARCAS_MOVIL.test(texto) && /\b[a-z]*\d+[a-z0-9]*\b/i.test(texto);
+}
+
 const MENSAJES: Record<string, string> = {
   "15": "App Key o App Secret incorrectos",
   "16": "Firma inválida: revisa el App Secret",
@@ -415,7 +431,23 @@ Deno.serve(async (req) => {
     const pagina = Math.max(1, Math.min(Number(cuerpo?.pagina ?? 1) || 1, 50));
     const tamano = Math.max(10, Math.min(Number(cuerpo?.tamano ?? 24) || 24, 40));
     // Precio y disponibilidad para EE. UU. (es el precio que cobra Retador al comprar en AliExpress)
-    const r = await ali("aliexpress.ds.text.search", { keyWord: palabra, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina });
+    // Orden común de la app → el de AliExpress (`sortBy`). Si AliExpress no admite ese orden, se repite UNA vez sin orden.
+    const ORDEN_ALI: Record<string, string> = { ventas: "orders,desc", precio_mayor: "min_price,desc", precio_menor: "min_price,asc" };
+    const sortBy = ORDEN_ALI[String(cuerpo?.orden ?? "")];
+    const categoria = buscaUnMovil(palabra) ? CATEGORIA_MOVILES : undefined;
+    const pedirBusqueda = (conOrden: boolean, conCategoria: boolean) =>
+      ali("aliexpress.ds.text.search", { keyWord: palabra, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina, ...(conOrden && sortBy ? { sortBy } : {}), ...(conCategoria && categoria ? { categoryId: categoria } : {}) });
+    const itemsDe = (x: any) => primerArray((x?.datos?.aliexpress_ds_text_search_response ?? x?.datos ?? {})?.data?.products) ?? [];
+    let r = await pedirBusqueda(true, true);
+    let ordenAplicado = Boolean(sortBy);
+    let categoriaAplicada = Boolean(categoria);
+    // Si AliExpress no admite el orden, o dentro de la categoría no hay nada, se repite UNA vez la búsqueda normal
+    if ((sortBy && !r.ok) || (categoria && (!r.ok || !itemsDe(r).length))) {
+      const quitarOrden = Boolean(sortBy) && !r.ok;
+      r = await pedirBusqueda(!quitarOrden, false);
+      if (quitarOrden) ordenAplicado = false;
+      categoriaAplicada = false;
+    }
     if (!r.ok) {
       await marcarError(`AliExpress respondió con error al buscar: ${r.mensaje}`);
       return responder({ ok: false, error: `AliExpress no pudo hacer la búsqueda: ${r.mensaje}`, codigoAli: r.codigo, llamadasAAliExpress: llamadas, ...diagnostico });
@@ -453,6 +485,8 @@ Deno.serve(async (req) => {
       total,
       hayMas: items.length >= tamano,
       resultados,
+      ordenAplicado,
+      categoria: categoriaAplicada ? "moviles" : null,
       forma: resultados.length ? undefined : { raiz: Object.keys(raiz ?? {}), datos: Object.keys(datos ?? {}) },
     });
   }

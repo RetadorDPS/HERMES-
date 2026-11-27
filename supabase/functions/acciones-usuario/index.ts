@@ -4,7 +4,7 @@
  *
  *   completar_ficha {itemId}                 Descarga la ficha completa del producto (variantes, stock, peso, reseñas).
  *   cotizar_envio  {itemId, paises?}         Cotiza el envío del producto a uno o varios países (hasta 12).
- *   buscar_proveedor {proveedor, palabra, pagina?}  Búsqueda en vivo en CJ o AliExpress (una página = 1 del cupo BUSQUEDA; repetida en 24 h no gasta).
+ *   buscar_proveedor {proveedor, palabra, pagina?, orden?}  Búsqueda en vivo en CJ o AliExpress (una página = 1 del cupo BUSQUEDA; repetida en 24 h no gasta).
  *   uso                                      Plan del usuario, límites y lo que lleva gastado (para enseñarlo en pantalla).
  *   elegir_plan {plan}                       Paso obligatorio «Elige tu plan» al registrarse (hoy solo el Gratis; Pro y Premium se contratan en Retador).
  *
@@ -147,7 +147,9 @@ Deno.serve(async (req) => {
     const palabra = String(cuerpo?.palabra ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
     if (palabra.length < 2) return responder({ ok: false, codigo: "datos_invalidos", error: "Escribe al menos 2 letras para buscar" });
     const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.pagina ?? 1)) || 1, 50));
-    const clave = `${normalizarBusqueda(palabra)}|${pagina}`;
+    // Orden común (cada proveedor lo traduce a su manera): relevancia · ventas · precio_mayor · precio_menor
+    const orden = ["ventas", "precio_mayor", "precio_menor"].includes(String(cuerpo?.orden)) ? String(cuerpo.orden) : "relevancia";
+    const clave = `${normalizarBusqueda(palabra)}|${pagina}${orden === "relevancia" ? "" : `|${orden}`}`;
 
     // Marca qué resultados ya están en el catálogo común (así el botón dice «Ya en el catálogo» y abre la ficha)
     const marcar = async (r: any) => {
@@ -164,7 +166,7 @@ Deno.serve(async (req) => {
       return Boolean(r?.hayMas) || (n > 0 && Number.isFinite(total) && total > pagina * n);
     };
     const publica = async (r: any, extra: Record<string, unknown>) =>
-      responder({ ok: true, proveedor, buscado: r?.buscado ?? palabra, pagina, total: r?.total ?? null, hayMas: hayMasDe(r), resultados: await marcar(r), ...extra });
+      responder({ ok: true, proveedor, buscado: r?.buscado ?? palabra, pagina, orden, ordenAplicado: r?.ordenAplicado !== false, total: r?.total ?? null, hayMas: hayMasDe(r), resultados: await marcar(r), ...extra });
 
     const { data: guardada } = await servicio.from("BusquedaProveedor").select("respuesta,creadoEn").eq("proveedor", proveedor).eq("clave", clave).maybeSingle();
     if (guardada && Date.now() - Date.parse(String(guardada.creadoEn)) < CACHE_BUSQUEDA_MS) return await publica(guardada.respuesta, { gastado: 0, desdeCache: true });
@@ -179,7 +181,7 @@ Deno.serve(async (req) => {
         if (!(c.data as any)?.permitido) return responder({ ok: false, codigo: "cuota", error: mensajeDeCuota("BUSQUEDA", c.data), cuota: c.data });
         gastado = true;
       }
-      const r: any = await llamarProveedor(proveedor, { accion: "buscar", palabra, pagina, tamano: 24 });
+      const r: any = await llamarProveedor(proveedor, { accion: "buscar", palabra, pagina, tamano: 24, orden });
       const llamadasReales = Number(r?.llamadasACj ?? r?.llamadasAAliExpress ?? 0);
       if (llamadasReales > 0) await servicio.rpc("sumar_llamadas_proveedor", { p_proveedor: proveedor, p_llamadas: llamadasReales, p_rechazos: r?.ok ? 0 : 1 });
       if (!r?.ok) {
@@ -187,7 +189,7 @@ Deno.serve(async (req) => {
         gastado = false;
         return responder({ ...respuestaPublica(r, esAdmin), ok: false, codigo: "proveedor", devuelto: true, ...(esAdmin && r?.forma ? { forma: r.forma } : {}) });
       }
-      const guardar = { buscado: r.buscado ?? palabra, total: r.total ?? null, hayMas: Boolean(r.hayMas), resultados: Array.isArray(r.resultados) ? r.resultados : [] };
+      const guardar = { buscado: r.buscado ?? palabra, total: r.total ?? null, hayMas: Boolean(r.hayMas), ordenAplicado: orden === "relevancia" || r.ordenAplicado !== false, resultados: Array.isArray(r.resultados) ? r.resultados : [] };
       await servicio.from("BusquedaProveedor").upsert({ proveedor, clave, respuesta: guardar, creadoEn: new Date().toISOString() }, { onConflict: "proveedor,clave" });
       // Limpieza barata: las búsquedas de hace más de 2 días ya no sirven
       await servicio.from("BusquedaProveedor").delete().lt("creadoEn", new Date(Date.now() - 2 * 86_400_000).toISOString());

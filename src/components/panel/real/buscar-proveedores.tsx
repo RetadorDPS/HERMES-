@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { cn, formatNumber } from '@/lib/utils';
 import { buscarEnProveedor, cupoBusqueda, type CupoBusqueda, type ProveedorBusqueda, type ResultadoBusqueda } from '@/lib/real/buscar';
 import { importarPorEnlace } from '@/lib/real/importar';
+import { esAccesorio, palabrasClave, tieneTodas } from '@/lib/real/filtro-busqueda';
 import { Foto } from './foto';
 import { FichaProveedor } from './ficha-proveedor';
 
@@ -39,6 +40,7 @@ const RAPIDAS = [
   'Zapatillas',
   'Herramientas',
 ];
+
 
 /** Máximo de productos que se añaden de una vez (cada uno trae su ficha completa del proveedor, en serie). */
 const MAX_POR_TANDA = 10;
@@ -131,10 +133,23 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
     if (bien > 0) alAnadir?.();
   }
 
+  // Filtros sobre lo que devolvió el proveedor (no gastan búsquedas)
+  const buscaAccesorio = buscado ? esAccesorio(buscado.palabra) : false;
+  // Con las palabras que de verdad se mandaron al proveedor (CJ las recibe traducidas al inglés)
+  const claves = useMemo(() => (buscado ? palabrasClave(buscado.enviado || buscado.palabra) : []), [buscado]);
+  // Orden automático, sin ocultar nada: primero lo que tiene todas tus palabras y no es un accesorio (salvo que busques uno)
+  const encaja = (r: ResultadoBusqueda) => (claves.length < 2 || tieneTodas(r.titulo, claves)) && (buscaAccesorio || !esAccesorio(r.titulo));
+  const visibles = useMemo(() => {
+    const puntos = (r: ResultadoBusqueda) => (claves.length < 2 || tieneTodas(r.titulo, claves) ? 2 : 0) + (buscaAccesorio || !esAccesorio(r.titulo) ? 1 : 0);
+    return resultados.map((r, i) => ({ r, i, p: puntos(r) })).sort((a, b) => b.p - a.p || a.i - b.i).map((x) => x.r);
+  }, [resultados, claves, buscaAccesorio]);
+  const ningunoEncaja = resultados.length > 0 && !resultados.some(encaja);
+
   const errores = useMemo(() => Object.entries(progreso).filter(([, v]) => v.estado === 'error'), [progreso]);
   const anadidos = useMemo(() => Object.values(progreso).filter((v) => v.estado === 'ok').length, [progreso]);
   const nombreProv = (p: ProveedorBusqueda) => PROVEEDORES.find((x) => x.id === p)?.nombre ?? p;
-  const etiquetaPopularidad = (p: ProveedorBusqueda, n: number) => (p === 'ALIEXPRESS' ? `${formatNumber(n)} vendidos` : `${formatNumber(n)} tiendas`);
+  // CJ no informa ventas: informa cuántas tiendas lo han añadido a su catálogo
+  const etiquetaPopularidad = (p: ProveedorBusqueda, n: number) => (p === 'ALIEXPRESS' ? `${formatNumber(n)} vendidos` : `añadido por ${formatNumber(n)} ${n === 1 ? 'tienda' : 'tiendas'}`);
 
   return (
     <div className="space-y-3">
@@ -231,9 +246,15 @@ export function BuscarProveedores({ alAnadir }: { alAnadir?: () => void }) {
         </p>
       )}
 
-      {resultados.length > 0 && (
+      {buscado && !buscando && ningunoEncaja && (
+        <p className="rounded-lg border border-amber-400/20 bg-amber-400/[0.06] px-3 py-2 text-[11.5px] text-amber-100/90">
+          {nombreProv(buscado.proveedor)} no tiene «{buscado.palabra}» a la venta para dropshipping en estos resultados: lo que devuelve son productos relacionados (fundas, accesorios u otros modelos). Puedes probar con «Ver más resultados» o con el otro proveedor.
+        </p>
+      )}
+
+      {visibles.length > 0 && (
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 sm:gap-2 lg:grid-cols-5 xl:grid-cols-6">
-          {resultados.map((r) => {
+          {visibles.map((r) => {
             const estado = progreso[r.externalId];
             const enCatalogo = Boolean(r.itemId);
             const elegido = elegidos.has(r.externalId);

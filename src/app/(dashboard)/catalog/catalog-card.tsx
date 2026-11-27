@@ -247,7 +247,7 @@ export function CatalogCardCompact({ item, onOpen }: { item: CatalogRow; onOpen:
               {envio}
             </span>
           )}
-          {ventas > 0 && <span>{item.provider === 'CJ_DROPSHIPPING' ? `en ${formatNumber(ventas)} tiendas` : textoPopularidad(item.provider, ventas, formatNumber)}</span>}
+          {ventas > 0 && <span title={item.provider === 'CJ_DROPSHIPPING' ? 'CJ no informa ventas: es el número de tiendas que lo han añadido a su catálogo' : 'Unidades vendidas según AliExpress'}>{textoPopularidad(item.provider, ventas, formatNumber)}</span>}
           {item.stock !== null && item.stock !== undefined && item.stock <= 0 && <span className="text-amber-400">sin stock</span>}
         </span>
       </span>

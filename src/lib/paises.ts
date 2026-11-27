@@ -26,7 +26,8 @@ export function nombreAlmacen(codigo: string | null | undefined): string {
  */
 export function textoPopularidad(proveedor: string, n: number, formato: (v: number) => string): string {
   if (proveedor === 'ALIEXPRESS') return `${formato(n)} vendidos`;
-  if (proveedor === 'CJ_DROPSHIPPING') return `${formato(n)} listados por tiendas`;
+  // CJ no informa ventas: informa cuántas tiendas lo han añadido a su catálogo
+  if (proveedor === 'CJ_DROPSHIPPING') return `añadido por ${formato(n)} ${n === 1 ? 'tienda' : 'tiendas'}`;
   return `${formato(n)} pedidos`;
 }
 
