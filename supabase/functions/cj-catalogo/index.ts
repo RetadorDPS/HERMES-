@@ -19,6 +19,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { compararVariantes, vigilarVariantes } from "./cambios.ts";
+import { guardarListado } from "./catalogo-guardar.ts";
 
 const BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 const PROVEEDOR = "CJ_DROPSHIPPING";
@@ -384,7 +385,8 @@ Deno.serve(async (req) => {
     const paginas = Math.max(1, Math.min(Number(cuerpo?.paginas ?? 1), 5));
     const desde = Math.max(1, Number(cuerpo?.paginaInicial ?? 1));
     const pais: string | null = cuerpo?.pais ? String(cuerpo.pais).toUpperCase().slice(0, 2) : null; // sin país = catálogo global
-    const palabra: string | undefined = cuerpo?.palabra ? String(cuerpo.palabra).slice(0, 80) : undefined;
+    // La palabra se puede escribir en español: CJ solo entiende inglés y se traducen las palabras comunes (igual que el buscador)
+    const palabra: string | undefined = cuerpo?.palabra ? traducirParaCj(String(cuerpo.palabra).trim().slice(0, 80)) || undefined : undefined;
     const categoryId: string | undefined = cuerpo?.categoryId ? String(cuerpo.categoryId) : undefined;
     // Orden de CJ: 0 mejor coincidencia · 1 más listados (populares) · 2 precio · 3 fecha · 4 inventario. Por defecto los más populares.
     const orden = Number.isFinite(Number(cuerpo?.orden)) && cuerpo?.orden !== undefined ? Number(cuerpo.orden) : 1;
@@ -392,6 +394,9 @@ Deno.serve(async (req) => {
 
     let recibidos = 0;
     let guardados = 0;
+    let nuevos = 0;
+    let actualizados = 0;
+    let hayMas = true;
     let totalRegistros: number | null = null;
     let primeraForma: string[] = [];
     const avisos: string[] = [];
@@ -417,20 +422,26 @@ Deno.serve(async (req) => {
       recibidos += lista.length;
       const filas = lista.map((i) => normalizarListado(i, pais, nombres)).filter((f) => f.externalId);
       if (filas.length) {
-        const { error } = await servicio.from("CatalogItem").upsert(filas, { onConflict: "provider,externalId" });
-        if (error) {
-          await marcarError(`No se pudo guardar el catálogo: ${error.message}`);
-          return responder({ ok: false, error: `No se pudo guardar el catálogo: ${error.message}`, ...diagnostico });
+        // Lo que ya tiene ficha solo se actualiza en lo ligero (no se le pisan descripción, fotos, stock ni coste): regla común del catálogo
+        const g = await guardarListado(servicio, PROVEEDOR, filas);
+        if (g.error) {
+          await marcarError(`No se pudo guardar el catálogo: ${g.error}`);
+          return responder({ ok: false, error: `No se pudo guardar el catálogo: ${g.error}`, ...diagnostico });
         }
         guardados += filas.length;
+        nuevos += g.nuevos;
+        actualizados += g.actualizados;
         // Descargar por almacén: CJ solo devuelve productos con existencias en ese país, así que se anota el almacén en cada uno
         if (pais) await servicio.rpc("catalogo_anadir_almacen", { p_provider: PROVEEDOR, p_ids: filas.map((f: any) => f.externalId), p_almacen: pais });
       }
-      if (lista.length < tamano) break; // última página
+      if (lista.length < tamano) {
+        hayMas = false; // última página
+        break;
+      }
     }
     return await cerrarOk({
-      mensaje: `${recibidos} recibidos de CJ · ${guardados} guardados`,
-      recibidos, guardados, totalEnCj: totalRegistros, avisos, forma: { claves: primeraForma },
+      mensaje: `${recibidos} recibidos de CJ · ${nuevos} nuevos · ${actualizados} ya estaban`,
+      recibidos, guardados, nuevos, actualizados, hayMas, palabraEnviada: palabra ?? null, totalEnCj: totalRegistros, avisos, forma: { claves: primeraForma },
     });
   }
 

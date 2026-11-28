@@ -550,6 +550,8 @@ export async function consultarCatalogoSupabase(q: CatalogQuery = {}): Promise<C
   // Almacenes de salida: puede venir una lista separada por comas; sale cualquier producto con existencias en alguno de ellos
   if (q.shipFrom) consulta = consulta.overlaps('warehouses', String(q.shipFrom).split(',').filter(Boolean));
   if (q.freeShipping) consulta = consulta.eq('freeShipping', true);
+  // Listos para publicar: ficha completa (marca que pone la base) y envío cotizado a EE. UU., que es lo que pide Retador
+  if (q.readyToPublish) consulta = consulta.eq('fichaCompleta', true).not('envioResumen->US', 'is', null);
   if (q.trending) {
     const clausulas = [...umbralTendencia.entries()].map(([prov, u]) => `and(provider.eq.${prov},ordersCount.gte.${u})`);
     consulta = clausulas.length ? consulta.or(clausulas.join(',')) : consulta.eq('id', '00000000-0000-0000-0000-000000000000');

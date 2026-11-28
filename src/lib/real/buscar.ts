@@ -116,3 +116,27 @@ export async function cotizarEnvio(itemId: string, paises: string[]): Promise<st
   const d = await invocar<any>({ accion: 'cotizar_envio', itemId, paises });
   return String(d?.mensaje ?? 'Envío cotizado');
 }
+
+/**
+ * Completa la ficha de un producto del catálogo por la puerta central (con el cupo del plan; una ficha al día no gasta nada).
+ * Si el proveedor rechazó el producto, lanza el motivo real (la puerta devuelve «ok» con el informe de cada producto).
+ */
+export async function completarFicha(itemId: string): Promise<string> {
+  const d = await invocar<any>({ accion: 'completar_ficha', itemId });
+  const fallo = (Array.isArray(d?.informe) ? d.informe : []).find((i: any) => i && i.ok === false);
+  if (fallo) throw new Error(String(fallo.error ?? 'El proveedor no devolvió la ficha de este producto.'));
+  return String(d?.mensaje ?? 'Ficha completada');
+}
+
+export interface CupoPreparar {
+  ilimitado: boolean;
+  fichas: { restanteVentana: number; restanteDia: number } | null;
+  cotizaciones: { restanteVentana: number; restanteDia: number } | null;
+}
+
+/** Lo que le queda al usuario para completar fichas y cotizar envíos (lo cuenta el servidor). */
+export async function cupoPreparar(): Promise<CupoPreparar> {
+  const d = await invocar<any>({ accion: 'uso' });
+  const leer = (x: any) => (typeof x?.restanteVentana === 'number' && typeof x?.restanteDia === 'number' ? { restanteVentana: x.restanteVentana, restanteDia: x.restanteDia } : null);
+  return { ilimitado: Boolean(d?.ilimitado), fichas: leer(d?.limites?.FICHA), cotizaciones: leer(d?.limites?.COTIZACION_ENVIO) };
+}

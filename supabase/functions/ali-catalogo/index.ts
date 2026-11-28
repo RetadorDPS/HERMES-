@@ -18,6 +18,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { compararVariantes, vigilarVariantes } from "./cambios.ts";
+import { guardarListado } from "./catalogo-guardar.ts";
 
 const GATEWAY = "https://api-sg.aliexpress.com/sync";
 const PROVEEDOR = "ALIEXPRESS";
@@ -110,6 +111,9 @@ function variantesDeAli(skus: any[], paquete: any) {
  * («Poco F7 Pro», «Galaxy S26 Ultra») salen sobre todo fundas, porque llevan el modelo en el título. La web de AliExpress lo
  * evita buscando dentro de la categoría del producto; aquí se hace lo mismo cuando la búsqueda es de un teléfono y no de un accesorio.
  */
+/** Orden común (el que manda la pantalla) traducido al de AliExpress; sin orden = relevancia. */
+const ORDEN_BUSQUEDA_ALI: Record<string, string> = { ventas: "orders,desc", precio_mayor: "min_price,desc", precio_menor: "min_price,asc" };
+
 const CATEGORIA_MOVILES = "5090301"; // «Teléfonos móviles» en AliExpress
 const PALABRAS_ACCESORIO = /\b(fundas?|carcasas?|protector(es)?|templado|mica|case|cover|holster|soporte|holder|cables?|cargador(es)?|charger|correas?|strap|pegatinas?|repuestos?|placa|flex|bater[ií]as?|battery|lentes?|auriculares|cascos|earbuds?|buds|reloj|watch|band|pulsera|tablet|pad|tv|altavoz|speaker)\b/i;
 const PALABRAS_MOVIL = /\b(tel[eé]fonos?|m[oó]vil(es)?|celular(es)?|smartphones?)\b/i;
@@ -203,7 +207,7 @@ Deno.serve(async (req) => {
     const espera = ultimaLlamada + PAUSA_MS - Date.now();
     if (espera > 0) await pausa(espera);
     // El detalle y el envío exigen el access_token de la cuenta autorizada (el feed funciona solo con las claves)
-    if (/^aliexpress\.ds\.(product|freight|text)/.test(metodo) && !negocio.access_token) {
+    if (/^aliexpress\.ds\.(product|freight|text|category)/.test(metodo) && !negocio.access_token) {
       const tk = await tokenVigente();
       if (tk) negocio = { ...negocio, access_token: tk };
     }
@@ -326,6 +330,109 @@ Deno.serve(async (req) => {
   }
 
   /* ───────────────────────── descargar ───────────────────────── */
+  /* ─────────── categorías de AliExpress (para descargar categoría por categoría) ─────────── */
+  if (accion === "categorias") {
+    let r = await ali("aliexpress.ds.category.get", { language: "es" });
+    if (!r.ok) r = await ali("aliexpress.ds.category.get", {});
+    if (!r.ok) return await fallo(`AliExpress no devolvió sus categorías: ${r.mensaje}`, { codigoAli: r.codigo, detalleError: r.crudo });
+    const raiz = r.datos?.aliexpress_ds_category_get_response ?? r.datos ?? {};
+    const nodo = raiz?.resp_result?.result ?? raiz?.result ?? raiz;
+    const crudas: any[] = primerArray(nodo?.categories) ?? primerArray(nodo) ?? [];
+    const leidas = crudas
+      .map((c: any) => ({
+        id: String(c.category_id ?? c.categoryId ?? c.id ?? ""),
+        nombre: String(c.category_name ?? c.categoryName ?? c.name ?? "").trim(),
+        padre: c.parent_category_id ?? c.parentCategoryId ?? c.parent_id ?? null,
+      }))
+      .filter((c) => c.id && c.nombre);
+    if (!leidas.length) return responder({ ok: false, error: "AliExpress devolvió las categorías en un formato que no se pudo leer", forma: Object.keys(nodo ?? {}), ...diagnostico });
+    const nombres = new Map(leidas.map((c) => [c.id, c.nombre]));
+    const filas = leidas.map((c, i) => ({ provider: PROVEEDOR, externalId: c.id, name: c.nombre.slice(0, 120), slug: slugTexto(c.nombre), parentName: c.padre && nombres.get(String(c.padre)) ? nombres.get(String(c.padre)) : null, sortOrder: i, updatedAt: ahoraIso() }));
+    for (let i = 0; i < filas.length; i += 300) {
+      const { error } = await servicio.from("CatalogCategory").upsert(filas.slice(i, i + 300), { onConflict: "provider,externalId" });
+      if (error) return await fallo(`No se pudieron guardar las categorías: ${error.message}`);
+    }
+    return await cerrarOk({ mensaje: `${filas.length} categorías de AliExpress guardadas`, categorias: filas.length });
+  }
+
+  /* ─────────── descargar por PALABRA y/o CATEGORÍA (todo el catálogo de dropshipping, página a página) ─────────── */
+  if (accion === "descargar" && cuerpo?.modo === "busqueda") {
+    const palabra = String(cuerpo?.palabra ?? "").trim().slice(0, 80);
+    const categoryId = cuerpo?.categoryId ? String(cuerpo.categoryId).slice(0, 30) : undefined;
+    const nombreCategoria = cuerpo?.categoryName ? String(cuerpo.categoryName).slice(0, 120) : null;
+    if (!palabra && !categoryId) return responder({ ok: false, error: "Escribe una palabra o elige una categoría de AliExpress", ...diagnostico });
+    const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.paginaInicial ?? 1)) || 1, 500));
+    const tamano = Math.max(10, Math.min(Math.floor(Number(cuerpo?.tamano ?? 50)) || 50, 50));
+    const sortBy = ORDEN_BUSQUEDA_ALI[String(cuerpo?.orden ?? "")];
+    const pedir = (conOrden: boolean, clave: string | undefined) =>
+      ali("aliexpress.ds.text.search", { keyWord: clave, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina, ...(conOrden && sortBy ? { sortBy } : {}), ...(categoryId ? { categoryId } : {}) });
+    let clave: string | undefined = palabra || undefined;
+    let r = await pedir(true, clave);
+    const avisos: string[] = [];
+    // AliExpress a veces contesta «bien» pero con un código propio de error y sin productos (p. ej. «RECOMMEND_ERROR» si se busca solo por categoría)
+    const sinProductosPorError = (x: any) => {
+      const rz = x?.datos?.aliexpress_ds_text_search_response ?? {};
+      const cod = String(rz?.code ?? "00");
+      return x?.ok && cod !== "00" && cod !== "0" && !primerArray((rz?.data ?? {})?.products);
+    };
+    // Solo categoría: AliExpress exige una palabra (comprobado el 28/11/2026: responde «RECOMMEND_ERROR»), así que se usa el nombre de la categoría
+    if ((!r.ok || sinProductosPorError(r)) && !palabra && nombreCategoria) {
+      clave = nombreCategoria;
+      avisos.push("AliExpress pide una palabra para buscar: se usó el nombre de la categoría");
+      r = await pedir(true, clave);
+    }
+    if (!r.ok && sortBy) {
+      avisos.push("AliExpress no aceptó ese orden: se usó el suyo");
+      r = await pedir(false, clave);
+    }
+    if (!r.ok) return await fallo(`AliExpress no pudo hacer la búsqueda: ${r.mensaje}`, { codigoAli: r.codigo });
+    if (sinProductosPorError(r)) {
+      const cod = String(r.datos?.aliexpress_ds_text_search_response?.code ?? "");
+      return responder({ ok: false, error: `AliExpress no devolvió productos para esa búsqueda (respuesta «${cod}»). Prueba con otra palabra o categoría.`, llamadasAAliExpress: llamadas, ...diagnostico });
+    }
+    const raiz = r.datos?.aliexpress_ds_text_search_response ?? r.datos ?? {};
+    const datos = raiz?.data ?? raiz?.result ?? raiz;
+    const items: any[] = primerArray(datos?.products) ?? [];
+    const total = numeroONulo(datos?.totalCount ?? datos?.total_count);
+    const filas = items
+      .map((i: any) => {
+        const id = String(i.itemId ?? i.item_id ?? i.product_id ?? "");
+        const foto = String(i.itemMainPic ?? i.item_main_pic ?? i.product_main_image_url ?? "");
+        const imagen = foto ? (foto.startsWith("//") ? `https:${foto}` : foto) : null;
+        const valoracion = numeroONulo(i.evaluateRate ?? i.evaluate_rate);
+        return {
+          provider: PROVEEDOR,
+          externalId: id,
+          title: String(i.title ?? i.product_title ?? "Producto AliExpress").slice(0, 250),
+          description: "",
+          categoryId: categoryId ?? null,
+          categoryName: nombreCategoria,
+          imageUrl: imagen,
+          images: imagen ? [imagen] : [],
+          currency: MONEDA,
+          costPrice: numeroONulo(i.targetSalePrice ?? i.salePrice ?? i.sale_price ?? i.targetOriginalPrice) ?? 0,
+          stock: null, // la búsqueda no informa del stock: se consulta en la ficha
+          rating: valoracion !== null ? Math.round((valoracion / 20) * 100) / 100 : null,
+          ordersCount: numeroONulo(i.orders ?? i.lastest_volume),
+          shipFrom: null,
+          rawPayload: i,
+          sourceUrl: `https://www.aliexpress.com/item/${id}.html`,
+          source: "api",
+          lastSyncedAt: ahoraIso(),
+          updatedAt: ahoraIso(),
+        };
+      })
+      .filter((f: any) => f.externalId);
+    const g = await guardarListado(servicio, PROVEEDOR, filas);
+    if (g.error) return await fallo(`No se pudo guardar el catálogo: ${g.error}`);
+    // AliExpress entrega 20 por página aunque se le pidan más (comprobado el 28/11/2026): se cuenta con lo que llega de verdad
+    const hayMas = items.length > 0 && (total === null ? items.length >= 20 : pagina * items.length < total);
+    return await cerrarOk({
+      mensaje: `${items.length} recibidos de AliExpress · ${g.nuevos} nuevos · ${g.actualizados} ya estaban`,
+      recibidos: items.length, guardados: filas.length, nuevos: g.nuevos, actualizados: g.actualizados, total, pagina, hayMas, avisos,
+    });
+  }
+
   if (accion === "descargar") {
     // «DS bestseller» no existe en AliExpress: si no se indica feed, se usa el de más vendidos con más productos (se recuerda para no gastar otra llamada)
     let feed = String(cuerpo?.feed ?? ajustes.feedPorDefecto ?? "").slice(0, 120);
@@ -346,6 +453,9 @@ Deno.serve(async (req) => {
     const pais = String(cuerpo?.pais ?? "ES").toUpperCase().slice(0, 2); // país para el que se calculan precio y disponibilidad
     let recibidos = 0;
     let guardados = 0;
+    let nuevos = 0;
+    let actualizados = 0;
+    let hayMas = true;
     const avisos: string[] = [];
     let forma: string[] = [];
     for (let p = desde; p < desde + paginas; p += 1) {
@@ -403,18 +513,21 @@ Deno.serve(async (req) => {
         })
         .filter((f: any) => f.externalId);
       if (filas.length) {
-        const { error } = await servicio.from("CatalogItem").upsert(filas, { onConflict: "provider,externalId" });
-        if (error) return await fallo(`No se pudo guardar el catálogo: ${error.message}`);
+        // Lo que ya tiene ficha solo se actualiza en lo ligero (no se le pisan descripción, fotos ni coste): regla común del catálogo
+        const g = await guardarListado(servicio, PROVEEDOR, filas);
+        if (g.error) return await fallo(`No se pudo guardar el catálogo: ${g.error}`);
         guardados += filas.length;
-        // Si el artículo ya tiene ficha, el coste vuelve a ser el de su variante más barata (el listado trae otro precio y la tarjeta no debe cambiar de número)
-        const { data: ya } = await servicio.from("CatalogItem").select("id,externalId").eq("provider", PROVEEDOR).in("externalId", filas.map((f: any) => f.externalId));
-        const { data: fichas } = await servicio.from("CatalogItemDetail").select("itemId,ficha").in("itemId", (ya ?? []).map((x: any) => x.id));
-        for (const f of fichas ?? []) {
-          const minimo = numeroONulo((f.ficha as any)?.precio?.min);
-          if (minimo !== null) await servicio.from("CatalogItem").update({ costPrice: minimo }).eq("id", f.itemId);
-        }
+        nuevos += g.nuevos;
+        actualizados += g.actualizados;
       }
-      if (items.length < tamano) break;
+      // El listado suele devolver menos de los pedidos (unos 45 de 50) aunque haya más: solo se da por terminado si AliExpress lo
+      // dice, si no llega nada o si ya se pasó del total que informa (antes eso hacía volver siempre a la página 1)
+      const terminado = String(nodo?.is_finished ?? "").toLowerCase() === "true";
+      const totalListado = numeroONulo(nodo?.total_record_count);
+      if (!items.length || terminado || (totalListado !== null && p * tamano >= totalListado)) {
+        hayMas = false;
+        break;
+      }
     }
     // Categorías conocidas a partir de lo descargado
     const { data: conCat } = await servicio.from("CatalogItem").select("categoryId,categoryName").eq("provider", PROVEEDOR).not("categoryId", "is", null).limit(5000);
@@ -426,7 +539,7 @@ Deno.serve(async (req) => {
         { onConflict: "provider,externalId" },
       );
     }
-    return await cerrarOk({ mensaje: `${recibidos} recibidos de AliExpress · ${guardados} guardados`, recibidos, guardados, avisos, forma: { claves: forma }, feed });
+    return await cerrarOk({ mensaje: `${recibidos} recibidos de AliExpress · ${nuevos} nuevos · ${actualizados} ya estaban`, recibidos, guardados, nuevos, actualizados, hayMas, avisos, forma: { claves: forma }, feed });
   }
 
   /* ───────────────────────── buscar (en vivo, una llamada, sin guardar) ───────────────────────── */
@@ -495,7 +608,8 @@ Deno.serve(async (req) => {
       buscado: palabra,
       pagina,
       total,
-      hayMas: normales.length >= tamano || items.length >= tamano,
+      // AliExpress entrega como mucho 20 por página aunque se le pidan más
+      hayMas: normales.length >= Math.min(tamano, 20) || items.length >= Math.min(tamano, 20),
       resultados,
       ordenAplicado,
       categoria: categoriaAplicada ? "moviles" : null,

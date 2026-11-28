@@ -43,6 +43,8 @@ export interface CatalogQuery {
   /** País de destino elegido (código): el catálogo enseña el envío cotizado a ese país */
   shipTo?: string;
   freeShipping?: boolean;
+  /** Solo productos listos para publicar: ficha completa y envío cotizado a EE. UU. (lo que pide Retador) */
+  readyToPublish?: boolean;
   trending?: boolean;
   minRating?: number;
   sort?: CatalogSort;
@@ -420,6 +422,8 @@ function buildWhere(q: CatalogQuery, sources: Record<string, string[]>, onlyCoun
   if (q.maxPrice !== undefined) and.push({ costPrice: { lte: q.maxPrice } });
   if (q.shipFrom) and.push({ shipFrom: q.shipFrom });
   if (q.freeShipping) and.push({ freeShipping: true });
+  // Versión con servidor: la marca de ficha completa (el envío cotizado se comprueba al publicar)
+  if (q.readyToPublish) and.push({ fichaCompleta: true });
   if (q.trending) and.push({ isTrending: true });
   if (q.minRating !== undefined) and.push({ rating: { gte: q.minRating } });
 

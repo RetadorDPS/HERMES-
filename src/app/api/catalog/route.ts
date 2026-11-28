@@ -41,6 +41,7 @@ export async function GET(req: Request) {
       maxPrice: num('max'),
       shipFrom: p.get('shipFrom') ?? undefined,
       freeShipping: p.get('freeShipping') === '1' || p.get('freeShipping') === 'true',
+      readyToPublish: p.get('listos') === '1',
       trending: p.get('trending') === '1' || p.get('trending') === 'true',
       minRating: num('minRating'),
       sort: sortParam && SORTS.includes(sortParam) ? sortParam : 'relevance',

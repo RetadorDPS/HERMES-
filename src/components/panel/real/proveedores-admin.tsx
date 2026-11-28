@@ -47,6 +47,12 @@ interface Respuesta {
   forma?: { claves?: string[] };
   recibidos?: number;
   guardados?: number;
+  nuevos?: number;
+  actualizados?: number;
+  hayMas?: boolean;
+  total?: number | null;
+  pagina?: number;
+  palabraEnviada?: string | null;
   urlRetorno?: string;
   urlAutorizacion?: string;
   autorizada?: boolean;
@@ -87,24 +93,28 @@ async function articulosSinFicha(proveedor: Proveedor, cantidad: number): Promis
 
 const DESTINOS_DEFECTO = 12;
 
-/* ───────── Descarga de CJ por páginas: recuerda por categoría la siguiente página para no repetir siempre las mismas ───────── */
+/* ───────── Descarga por páginas: cada búsqueda recuerda su página para no repetir siempre los mismos productos ───────── */
 
-/** Cada combinación de categoría, orden y palabra tiene su propia página por la que seguir. */
-const claveCursor = (categoria: string, orden = 1, palabra = '') => `hermes-cj-descarga:${categoria || 'todas'}:o${orden}${palabra ? `:${palabra.toLowerCase()}` : ''}`;
-const leerCursor = (categoria: string, orden = 1, palabra = ''): number | null => {
+/** CJ: cada combinación de categoría, orden y palabra tiene su propia página por la que seguir (clave de siempre). */
+const claveCursorCj = (categoria: string, orden = 1, palabra = '') => `hermes-cj-descarga:${categoria || 'todas'}:o${orden}${palabra ? `:${palabra.toLowerCase()}` : ''}`;
+/** AliExpress: por palabra y categoría (con su orden) o por listado. */
+const claveCursorAli = (modo: ModoAli, categoria: string, orden: string, palabra: string, feed: string) =>
+  modo === 'listado' ? `hermes-ali-descarga:listado:${feed || 'defecto'}` : `hermes-ali-descarga:busqueda:${categoria || 'todas'}:${orden || 'relevancia'}${palabra ? `:${palabra.toLowerCase()}` : ''}`;
+
+const leerCursor = (clave: string): number | null => {
   try {
-    const v = Number(localStorage.getItem(claveCursor(categoria, orden, palabra)));
+    const v = Number(localStorage.getItem(clave));
     return Number.isInteger(v) && v >= 1 ? v : null;
   } catch {
     return null;
   }
 };
-const guardarCursor = (categoria: string, pagina: number | null, orden = 1, palabra = '') => {
+const guardarCursor = (clave: string, pagina: number | null) => {
   try {
-    if (pagina === null) localStorage.removeItem(claveCursor(categoria, orden, palabra));
-    else localStorage.setItem(claveCursor(categoria, orden, palabra), String(pagina));
+    if (pagina === null) localStorage.removeItem(clave);
+    else localStorage.setItem(clave, String(pagina));
   } catch {
-    /* sin almacenamiento: la siguiente vez se calcula con lo ya descargado */
+    /* sin almacenamiento en el navegador: se empieza por la página 1 */
   }
 };
 
@@ -117,14 +127,19 @@ async function contarCj(categoria: string): Promise<number> {
   return count ?? 0;
 }
 
-/** Página por la que seguir: la recordada; si no hay, se calcula con lo ya descargado (así no se repiten las primeras páginas). */
-async function paginaSiguiente(categoria: string, tamano: number, orden = 1, palabra = ''): Promise<number> {
-  const guardada = leerCursor(categoria, orden, palabra);
+/** CJ: página por la que seguir. La recordada; si no hay y es la descarga «de siempre», se calcula con lo ya descargado. */
+async function paginaSiguienteCj(categoria: string, orden: number, palabra: string): Promise<number> {
+  const guardada = leerCursor(claveCursorCj(categoria, orden, palabra));
   if (guardada) return guardada;
-  // Con otro orden o con una palabra, lo ya descargado no dice nada sobre esas páginas: se empieza por la primera
   if (orden !== 1 || palabra) return 1;
-  return Math.floor((await contarCj(categoria)) / tamano) + 1;
+  return Math.floor((await contarCj(categoria)) / TAMANO_CJ) + 1;
 }
+
+/** Tamaño de página fijo: así «página 7» es siempre la misma, pidas los que pidas. */
+const TAMANO_CJ = 50;
+/** AliExpress entrega 20 por página en la búsqueda aunque se le pidan más (comprobado el 28/11/2026). */
+const TAMANO_ALI_BUSQUEDA = 20;
+const TAMANO_ALI_LISTADO = 50;
 
 /** Órdenes que ofrece CJ para el listado (el número es el de su API). */
 const ORDENES_CJ = [
@@ -134,10 +149,52 @@ const ORDENES_CJ = [
   { valor: 2, texto: 'Más caros primero' },
 ];
 
-interface CategoriaCj {
+/** Órdenes de la búsqueda de AliExpress (los acepta `ali-catalogo`). */
+const ORDENES_ALI = [
+  { valor: '', texto: 'Los que mejor encajan con la búsqueda' },
+  { valor: 'ventas', texto: 'Más vendidos primero' },
+  { valor: 'precio_menor', texto: 'Más baratos primero' },
+  { valor: 'precio_mayor', texto: 'Más caros primero' },
+];
+
+/** Ideas para variar la descarga (en español: CJ lo traduce solo y AliExpress lo entiende). */
+const IDEAS = ['auriculares', 'reloj inteligente', 'zapatillas', 'vestido', 'juguetes', 'mascotas', 'cocina', 'belleza', 'herramientas', 'coche', 'bebé', 'deporte'];
+
+type ModoAli = 'busqueda' | 'listado';
+
+interface Categoria {
   externalId: string;
   name: string;
   parentName: string | null;
+}
+
+interface Feed {
+  nombre: string;
+  productos: number | null;
+}
+
+/** Selector de categoría con un filtro de texto (CJ tiene cientos y AliExpress más de 500). */
+function SelectorCategoria({ categorias, valor, onChange, disabled, etiqueta }: { categorias: Categoria[]; valor: string; onChange: (id: string) => void; disabled: boolean; etiqueta: string }) {
+  const [filtro, setFiltro] = useState('');
+  const normal = (t: string) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const f = normal(filtro.trim());
+  const visibles = f ? categorias.filter((c) => normal(`${c.parentName ?? ''} ${c.name}`).includes(f) || c.externalId === valor) : categorias;
+  return (
+    <div className="space-y-1.5">
+      <label className="flex flex-wrap items-center gap-2 text-[12px]">
+        {etiqueta}
+        <select value={valor} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="h-9 min-w-0 max-w-full flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]" aria-label={etiqueta}>
+          <option value="">{f ? `Elige entre ${visibles.length} que coinciden` : 'Todas las categorías'}</option>
+          {visibles.map((c) => (
+            <option key={c.externalId} value={c.externalId}>
+              {c.parentName ? `${c.parentName} › ${c.name}` : c.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {categorias.length > 20 && <Input value={filtro} onChange={(e) => setFiltro(e.target.value)} placeholder="Filtrar categorías (por ejemplo: zapatos)" disabled={disabled} className="h-8 text-[12px]" aria-label="Filtrar categorías" />}
+    </div>
+  );
 }
 
 /** Elige, entre los artículos del proveedor con ficha, el MÁS POPULAR al que todavía le faltan cotizaciones de envío. */
@@ -256,22 +313,30 @@ function Resultado({ r }: { r: Respuesta }) {
   );
 }
 
-/** Tarjeta de un proveedor. CJ y AliExpress son independientes: cada uno usa su propia función. */
+/** Tarjeta de un proveedor. CJ y AliExpress son independientes: cada uno usa su propia función, con la MISMA pantalla. */
 function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
   const esCj = proveedor === 'CJ_DROPSHIPPING';
+  const nombre = esCj ? 'CJ' : 'AliExpress';
   const [trabajando, setTrabajando] = useState<Accion | null>(null);
   const [resultado, setResultado] = useState<Respuesta | null>(null);
   // Cuántos artículos procesar en cada pulsación (el usuario elige el número)
-  const [cantidades, setCantidades] = useState({ descargar: esCj ? 150 : 50, detalle: esCj ? 3 : 1, envio: 1, almacen: 50 });
+  const [cantidades, setCantidades] = useState({ descargar: esCj ? 150 : 100, detalle: esCj ? 3 : 1, envio: 1, almacen: 50 });
   const [progreso, setProgreso] = useState<string | null>(null);
   const detener = useRef(false);
-  const [categorias, setCategorias] = useState<CategoriaCj[]>([]);
+  const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [categoriaId, setCategoriaId] = useState('');
   const [seguira, setSeguira] = useState<number | null>(null);
   const [ordenCj, setOrdenCj] = useState(1);
-  const [palabraCj, setPalabraCj] = useState('');
-  const palabraLimpia = palabraCj.trim().slice(0, 80);
-  const LIMITES = { descargar: esCj ? 500 : 150, detalle: 30, envio: 10, almacen: 50 };
+  const [ordenAli, setOrdenAli] = useState('');
+  const [modoAli, setModoAli] = useState<ModoAli>('busqueda');
+  const [feeds, setFeeds] = useState<Feed[]>([]);
+  const [feed, setFeed] = useState('');
+  const [palabra, setPalabra] = useState('');
+  const palabraLimpia = palabra.trim().replace(/\s+/g, ' ').slice(0, 80);
+  const LIMITES = { descargar: esCj ? 500 : 300, detalle: 30, envio: 10, almacen: 50 };
+  const tamanoPagina = esCj ? TAMANO_CJ : modoAli === 'listado' ? TAMANO_ALI_LISTADO : TAMANO_ALI_BUSQUEDA;
+  const porBusqueda = esCj || modoAli === 'busqueda';
+  const claveActual = esCj ? claveCursorCj(categoriaId, ordenCj, palabraLimpia) : claveCursorAli(modoAli, categoriaId, ordenAli, palabraLimpia, feed);
   const fijar = (clave: keyof typeof cantidades, valor: string) => {
     const n = Math.floor(Number(valor));
     setCantidades((c) => ({ ...c, [clave]: Number.isFinite(n) ? Math.min(Math.max(n, 1), LIMITES[clave]) : 1 }));
@@ -288,25 +353,36 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     window.history.replaceState(null, '', window.location.pathname);
   }, [esCj]);
 
-  // Categorías de CJ (salen de «1. Descargar categorías») para llenar el catálogo categoría por categoría
+  // Categorías del proveedor (salen de «1. Descargar categorías») para llenar el catálogo categoría por categoría
   useEffect(() => {
-    if (!esCj) return;
     let vivo = true;
     supabase()
       .from('CatalogCategory')
       .select('externalId,name,parentName')
-      .eq('provider', 'CJ_DROPSHIPPING')
-      .order('parentName', { ascending: true })
+      .eq('provider', proveedor)
+      .order('parentName', { ascending: true, nullsFirst: true })
       .order('name', { ascending: true })
-      .limit(2000)
-      .then(({ data }) => vivo && setCategorias((data ?? []) as CategoriaCj[]));
+      .limit(3000)
+      .then(({ data }) => vivo && setCategorias((data ?? []) as Categoria[]));
     return () => {
       vivo = false;
     };
-  }, [esCj, resultado]);
+  }, [proveedor, resultado]);
+
+  // Listados de AliExpress: se recuerdan en el navegador para no gastar una llamada cada vez
   useEffect(() => {
-    if (esCj) setSeguira(leerCursor(categoriaId, ordenCj, palabraLimpia));
-  }, [esCj, categoriaId, ordenCj, palabraLimpia, resultado]);
+    if (esCj) return;
+    try {
+      const guardados = JSON.parse(localStorage.getItem('hermes-ali-listados') ?? '[]');
+      if (Array.isArray(guardados)) setFeeds(guardados.filter((f) => f && typeof f.nombre === 'string'));
+    } catch {
+      /* sin listados guardados */
+    }
+  }, [esCj]);
+
+  useEffect(() => {
+    setSeguira(leerCursor(claveActual));
+  }, [claveActual, resultado]);
 
   /** Repite una llamada de una en una (con progreso y botón «Detener») y junta el resultado en un mensaje claro. */
   const enSerie = async (total: number, unidad: string, paso: (i: number) => Promise<Respuesta | 'fin'>) => {
@@ -332,19 +408,31 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     else setResultado({ ...(ultima ?? {}), ok: true, mensaje: `${hechos} de ${total} ${unidad} hechos${parada}.${ultima?.mensaje ? ` Último: ${ultima.mensaje}` : ''}` });
   };
 
+  const cargarListados = async () => {
+    const r = await invocar(proveedor, { accion: 'feeds' });
+    if (!r.ok) {
+      setResultado(r);
+      return;
+    }
+    const lista = (r.feeds ?? []).filter((f) => f.nombre).map((f) => ({ nombre: String(f.nombre), productos: f.productos ?? null }));
+    lista.sort((a, b) => (b.productos ?? 0) - (a.productos ?? 0));
+    setFeeds(lista);
+    try {
+      localStorage.setItem('hermes-ali-listados', JSON.stringify(lista));
+    } catch {
+      /* sin almacenamiento: se volverán a pedir */
+    }
+    setResultado({ ok: true, mensaje: `${lista.length} listados de AliExpress disponibles. Elige uno en «Listado».`, llamadasAAliExpress: r.llamadasAAliExpress });
+  };
+
   const ejecutar = async (accion: Accion) => {
     setTrabajando(accion);
     setResultado(null);
     try {
-      if (accion === 'probar' || accion === 'categorias' || accion === 'feeds' || accion === 'sondear' || accion === 'autorizar') setResultado(await invocar(proveedor, { accion }));
-      else if (accion === 'descargar' && esCj) await descargarCj();
-      else if (accion === 'descargar') {
-        // Se reparte en páginas de hasta 50 (CJ) o de hasta 50 (AliExpress), una llamada por página
-        const n = cantidades.descargar;
-        const paginas = Math.ceil(n / 50);
-        const tamano = Math.ceil(n / paginas);
-        await enSerie(paginas, 'páginas', (i) => invocar(proveedor, esCj ? { accion, paginas: 1, tamano, orden: 1, paginaInicial: i + 1 } : { accion, paginas: 1, tamano, paginaInicial: i + 1 }));
-      } else if (accion === 'envio') {
+      if (accion === 'probar' || accion === 'categorias' || accion === 'autorizar') setResultado(await invocar(proveedor, { accion }));
+      else if (accion === 'feeds') await cargarListados();
+      else if (accion === 'descargar') await descargar();
+      else if (accion === 'envio') {
         await enSerie(cantidades.envio, 'productos cotizados', async () => {
           const id = await articuloSinEnvio(proveedor);
           return id ? invocar(proveedor, { accion, ids: [id] }) : 'fin';
@@ -362,58 +450,81 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     }
   };
 
-  /** Descarga de CJ por páginas, SIEMPRE por donde se quedó la vez anterior (por categoría). Una página por llamada, en serie. */
-  const descargarCj = async () => {
+  /**
+   * Descarga por páginas, SIEMPRE por donde se quedó la vez anterior con esa misma búsqueda (categoría, orden, palabra o
+   * listado). Una página por llamada, en serie. El servidor dice cuántos eran NUEVOS y si quedan más páginas.
+   */
+  const descargar = async () => {
     detener.current = false;
-    const n = cantidades.descargar;
-    const paginas = Math.ceil(n / 50);
-    const tamano = Math.ceil(n / paginas);
-    const antes = await contarCj('');
-    let pagina = await paginaSiguiente(categoriaId, tamano, ordenCj, palabraLimpia);
-    const desdePagina = pagina;
-    let guardados = 0;
-    let recibidos = 0;
-    let llamadas = 0;
-    let fin: string | null = null;
-    let fallo: string | null = null;
-    for (let i = 0; i < paginas; i += 1) {
-      if (detener.current) break;
-      setProgreso(`Descargando de CJ, página ${pagina} (${i + 1} de ${paginas})…`);
-      const r = await invocar('CJ_DROPSHIPPING', { accion: 'descargar', paginas: 1, tamano, orden: ordenCj, paginaInicial: pagina, ...(palabraLimpia ? { palabra: palabraLimpia } : {}), ...(categoriaId ? { categoryId: categoriaId } : {}) });
-      if (!r.ok) {
-        fallo = r.error ?? 'Falló una llamada';
-        break;
-      }
-      llamadas += r.llamadasACj ?? 1;
-      const hubo = r.recibidos ?? 0;
-      recibidos += hubo;
-      guardados += r.guardados ?? 0;
-      if (hubo === 0) {
-        fin = 'Ya descargaste todos los productos de esta categoría. La próxima vez empezará otra vez desde la página 1.';
-        guardarCursor(categoriaId, null, ordenCj, palabraLimpia);
-        break;
-      }
-      pagina += 1;
-      guardarCursor(categoriaId, pagina, ordenCj, palabraLimpia);
-      if (hubo < tamano) {
-        fin = 'Era la última página de esta categoría. La próxima vez empezará otra vez desde la página 1.';
-        guardarCursor(categoriaId, null, ordenCj, palabraLimpia);
-        break;
-      }
-    }
-    setProgreso(null);
-    const despues = await contarCj('').catch(() => antes);
-    const nuevos = Math.max(0, despues - antes);
-    const soloActualizados = Math.max(0, guardados - nuevos);
-    const parada = detener.current ? ' (detenido por ti)' : '';
-    if (fallo) {
-      setResultado({ ok: false, error: `${fallo} — se guardaron ${guardados} productos (${nuevos} nuevos)${parada}.`, llamadasACj: llamadas });
+    if (!esCj && modoAli === 'busqueda' && !palabraLimpia && !categoriaId) {
+      setResultado({ ok: false, error: 'Escribe una palabra o elige una categoría de AliExpress (o cambia a «Listados de AliExpress»).' });
       return;
     }
-    const resumen = recibidos
-      ? `Páginas ${desdePagina} a ${Math.max(desdePagina, pagina - (fin ? 0 : 1))}: ${recibidos} recibidos de CJ · ${nuevos} NUEVOS · ${soloActualizados} que ya tenías y solo se actualizaron${parada}.${nuevos === 0 ? ' Todo lo que devolvió CJ ya estaba en tu catálogo: prueba otra categoría, otro orden (por ejemplo «Más nuevos») o una palabra.' : ''}`
-      : '';
-    setResultado({ ok: true, mensaje: `${resumen} ${fin ?? ''}`.trim() || `Sin productos nuevos${parada}.`, llamadasACj: llamadas });
+    const clave = claveActual;
+    const tamano = tamanoPagina;
+    const paginas = Math.max(1, Math.ceil(cantidades.descargar / tamano));
+    const nombreCategoria = categorias.find((c) => c.externalId === categoriaId)?.name;
+    let pagina = esCj ? await paginaSiguienteCj(categoriaId, ordenCj, palabraLimpia) : (leerCursor(clave) ?? 1);
+    const desde = pagina;
+    let recibidos = 0;
+    let nuevos = 0;
+    let yaEstaban = 0;
+    let llamadas = 0;
+    let total: number | null = null;
+    let palabraEnviada: string | null = null;
+    let fin = false;
+    let fallo: string | null = null;
+    const avisos = new Set<string>();
+    for (let i = 0; i < paginas; i += 1) {
+      if (detener.current) break;
+      setProgreso(`Descargando de ${nombre}, página ${pagina} (${i + 1} de ${paginas})…`);
+      const cuerpo: Record<string, unknown> = esCj
+        ? { accion: 'descargar', paginas: 1, tamano, orden: ordenCj, paginaInicial: pagina, ...(palabraLimpia ? { palabra: palabraLimpia } : {}), ...(categoriaId ? { categoryId: categoriaId } : {}) }
+        : modoAli === 'listado'
+          ? { accion: 'descargar', paginas: 1, tamano, paginaInicial: pagina, ...(feed ? { feed } : {}) }
+          : { accion: 'descargar', modo: 'busqueda', tamano, paginaInicial: pagina, ...(ordenAli ? { orden: ordenAli } : {}), ...(palabraLimpia ? { palabra: palabraLimpia } : {}), ...(categoriaId ? { categoryId: categoriaId, categoryName: nombreCategoria } : {}) };
+      const r = await invocar(proveedor, cuerpo);
+      if (!r.ok) {
+        // Pasada la última página, AliExpress contesta «sin productos»: eso es el final de la búsqueda, no un fallo
+        if (i > 0 && /no devolvi[oó] productos/i.test(r.error ?? '')) {
+          fin = true;
+          guardarCursor(clave, null);
+        } else fallo = r.error ?? 'Falló una llamada';
+        break;
+      }
+      llamadas += r.llamadasACj ?? r.llamadasAAliExpress ?? 1;
+      recibidos += r.recibidos ?? 0;
+      nuevos += r.nuevos ?? 0;
+      yaEstaban += r.actualizados ?? 0;
+      if (i === 0) {
+        total = r.totalEnCj ?? r.total ?? null;
+        palabraEnviada = r.palabraEnviada ?? null;
+      }
+      for (const a of r.avisos ?? []) avisos.add(a);
+      pagina += 1;
+      if (r.hayMas === false || !r.recibidos) {
+        fin = true;
+        guardarCursor(clave, null);
+        break;
+      }
+      guardarCursor(clave, pagina);
+    }
+    setProgreso(null);
+    const parada = detener.current ? ' (detenido por ti)' : '';
+    const llamadasCampo = esCj ? { llamadasACj: llamadas } : { llamadasAAliExpress: llamadas };
+    if (fallo) {
+      setResultado({ ok: false, error: `${fallo}${recibidos ? ` — antes se recibieron ${recibidos} (${nuevos} nuevos)` : ''}${parada}.`, ...llamadasCampo });
+      return;
+    }
+    const hasta = Math.max(desde, pagina - 1);
+    const partes: string[] = [];
+    if (recibidos) partes.push(`Página${hasta > desde ? `s ${desde} a ${hasta}` : ` ${desde}`}: ${recibidos} recibidos de ${nombre} · ${nuevos} NUEVOS · ${yaEstaban} que ya tenías${parada}.`);
+    else partes.push(`${nombre} no devolvió productos${parada}.`);
+    if (total) partes.push(`${nombre} tiene ${total.toLocaleString('es-ES')} productos con esta búsqueda.`);
+    if (palabraEnviada && esCj && palabraEnviada !== palabraLimpia.toLowerCase()) partes.push(`CJ solo entiende inglés: buscó «${palabraEnviada}».`);
+    if (fin) partes.push('Llegaste al final: la próxima vez esta búsqueda empezará otra vez por la página 1.');
+    if (recibidos && nuevos === 0) partes.push('Todo lo recibido ya estaba en tu catálogo: prueba otra categoría, otro orden o una palabra (debajo tienes ideas).');
+    setResultado({ ok: true, mensaje: partes.join(' '), avisos: [...avisos], ...llamadasCampo });
   };
 
   /** Descarga de CJ por almacén: solo productos con existencias en ese país, anotando el almacén en cada uno. */
@@ -421,7 +532,8 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     setTrabajando('descargar');
     setResultado(null);
     try {
-      setResultado(await invocar(proveedor, { accion: 'descargar', paginas: 1, tamano: cantidades.almacen, orden: 1, pais }));
+      const r = await invocar(proveedor, { accion: 'descargar', paginas: 1, tamano: cantidades.almacen, orden: 1, pais });
+      setResultado(r.ok ? { ok: true, mensaje: `Almacén de ${nombrePais(pais)}: ${r.recibidos ?? 0} recibidos · ${r.nuevos ?? 0} NUEVOS · ${r.actualizados ?? 0} que ya tenías.`, llamadasACj: r.llamadasACj } : r);
     } catch (e) {
       setResultado({ ok: false, error: (e as Error).message });
     } finally {
@@ -459,92 +571,147 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
     </div>
   );
 
+  const selectorClase = 'h-9 min-w-0 max-w-full flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]';
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Catálogo de proveedores · {esCj ? 'CJ Dropshipping' : 'AliExpress'}</CardTitle>
         <CardDescription>
-          Usa {esCj ? 'la clave guardada' : 'las claves guardadas'} de la plataforma. Las llamadas van una a una, con pausa entre ellas.
+          Usa {esCj ? 'la clave guardada' : 'las claves guardadas'} de la plataforma. Las llamadas van una a una, con pausa entre ellas. Como administrador no tienes límite de plan.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           {boton('probar', esCj ? 'Probar la clave' : 'Probar las claves')}
-          {esCj ? boton('categorias', '1. Descargar categorías') : boton('feeds', '1. Ver los feeds disponibles')}
+          {boton('categorias', '1. Descargar categorías')}
+          {!esCj && boton('autorizar', 'Autorizar la cuenta de AliExpress')}
         </div>
-        <div className="space-y-2 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
-          <p className="text-[12px] font-medium">Cuántos quieres en cada pulsación</p>
-          {esCj && (
-            <div className="space-y-1.5 rounded-lg border border-white/[0.07] p-2">
-              <label className="flex flex-wrap items-center gap-2 text-[12px]">
-                Categoría de CJ para «2. Descargar productos»
-                <select
-                  value={categoriaId}
-                  onChange={(e) => setCategoriaId(e.target.value)}
+
+        <div className="space-y-2.5 rounded-lg border border-white/[0.07] bg-white/[0.02] p-3">
+          <p className="text-[12px] font-medium">2. Descargar productos de {nombre}</p>
+          {!esCj && (
+            <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Cómo descargar de AliExpress">
+              {(
+                [
+                  ['busqueda', 'Por palabra o categoría'],
+                  ['listado', 'Listados de AliExpress'],
+                ] as const
+              ).map(([valor, texto]) => (
+                <button
+                  key={valor}
+                  type="button"
+                  role="radio"
+                  aria-checked={modoAli === valor}
                   disabled={trabajando !== null}
-                  className="h-9 min-w-0 max-w-full flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]"
-                  aria-label="Categoría de CJ"
+                  onClick={() => setModoAli(valor)}
+                  className={`min-h-9 rounded-md border px-2 py-1.5 text-[12px] ${modoAli === valor ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100' : 'border-white/10 text-muted-foreground'}`}
                 >
-                  <option value="">Todas las categorías</option>
-                  {categorias.map((c) => (
-                    <option key={c.externalId} value={c.externalId}>
-                      {c.parentName ? `${c.parentName} › ${c.name}` : c.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p className="text-[11px] text-muted-foreground">
-                {seguira ? `Seguirá desde la página ${seguira}. ` : 'Empezará por donde dejaste lo ya descargado. '}
-                {seguira && (
-                  <button
-                    type="button"
-                    className="text-indigo-300 underline-offset-2 hover:underline"
-                    disabled={trabajando !== null}
-                    onClick={() => {
-                      guardarCursor(categoriaId, 1, ordenCj, palabraLimpia);
-                      setSeguira(1);
-                    }}
-                  >
-                    Empezar desde el principio
-                  </button>
-                )}
-                {categorias.length === 0 && ' Pulsa «1. Descargar categorías» para ver la lista de categorías.'}
-              </p>
+                  {texto}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {porBusqueda && (
+            <>
+              <SelectorCategoria categorias={categorias} valor={categoriaId} onChange={setCategoriaId} disabled={trabajando !== null} etiqueta={`Categoría de ${nombre}`} />
+              {categorias.length === 0 && <p className="text-[11px] text-muted-foreground">Pulsa «1. Descargar categorías» para ver la lista de categorías.</p>}
               <label className="flex flex-wrap items-center gap-2 text-[12px]">
                 Orden
-                <select value={ordenCj} onChange={(e) => setOrdenCj(Number(e.target.value))} disabled={trabajando !== null} className="h-9 min-w-0 flex-1 rounded-md border border-white/10 bg-[#0e1220] px-2 text-[13px]" aria-label="Orden de la descarga de CJ">
-                  {ORDENES_CJ.map((o) => (
-                    <option key={o.valor} value={o.valor}>
-                      {o.texto}
+                {esCj ? (
+                  <select value={ordenCj} onChange={(e) => setOrdenCj(Number(e.target.value))} disabled={trabajando !== null} className={selectorClase} aria-label="Orden de la descarga de CJ">
+                    {ORDENES_CJ.map((o) => (
+                      <option key={o.valor} value={o.valor}>
+                        {o.texto}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select value={ordenAli} onChange={(e) => setOrdenAli(e.target.value)} disabled={trabajando !== null} className={selectorClase} aria-label="Orden de la descarga de AliExpress">
+                    {ORDENES_ALI.map((o) => (
+                      <option key={o.valor} value={o.valor}>
+                        {o.texto}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </label>
+              <label className="flex flex-wrap items-center gap-2 text-[12px]">
+                Palabra {esCj ? '(opcional)' : categoriaId ? '(opcional)' : ''}
+                <Input value={palabra} onChange={(e) => setPalabra(e.target.value)} placeholder="por ejemplo: zapatillas, sofá, funda iPhone" disabled={trabajando !== null} className="h-9 min-w-0 flex-1" aria-label={`Palabra para buscar en ${nombre}`} />
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {IDEAS.map((idea) => (
+                  <button
+                    key={idea}
+                    type="button"
+                    disabled={trabajando !== null}
+                    onClick={() => setPalabra(idea)}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] ${palabraLimpia === idea ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100' : 'border-white/10 text-muted-foreground hover:text-foreground'}`}
+                  >
+                    {idea}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Puedes escribir en español{esCj ? ' (CJ solo entiende inglés: se traduce solo)' : ''}. Cada combinación de categoría, orden y palabra sigue por su propia página: así cada descarga trae productos distintos.
+              </p>
+            </>
+          )}
+
+          {!esCj && modoAli === 'listado' && (
+            <>
+              <label className="flex flex-wrap items-center gap-2 text-[12px]">
+                Listado
+                <select value={feed} onChange={(e) => setFeed(e.target.value)} disabled={trabajando !== null || feeds.length === 0} className={selectorClase} aria-label="Listado de AliExpress">
+                  <option value="">{feeds.length ? 'El de más vendidos (por defecto)' : 'Primero carga los listados'}</option>
+                  {feeds.map((f) => (
+                    <option key={f.nombre} value={f.nombre}>
+                      {f.nombre}
+                      {f.productos ? ` · ${f.productos.toLocaleString('es-ES')}` : ''}
                     </option>
                   ))}
                 </select>
               </label>
-              <label className="flex flex-wrap items-center gap-2 text-[12px]">
-                Buscar por palabra (en inglés, opcional)
-                <Input value={palabraCj} onChange={(e) => setPalabraCj(e.target.value)} placeholder="por ejemplo: sneakers, sofa, dress" disabled={trabajando !== null} className="h-9 min-w-0 flex-1" aria-label="Palabra para buscar en CJ" />
-              </label>
-              <p className="text-[11px] text-muted-foreground">Si descargas siempre «los más populares» CJ te devuelve casi siempre los mismos. Cambia el orden, la categoría o busca una palabra para traer productos distintos.</p>
-            </div>
+              <div className="flex flex-wrap items-center gap-2">{boton('feeds', feeds.length ? 'Actualizar los listados' : 'Cargar los listados')}</div>
+              <p className="text-[11px] text-muted-foreground">
+                Los listados son selecciones que prepara AliExpress y suelen traer pocos productos (unas decenas). Para tener todo el catálogo y variedad, usa «Por palabra o categoría».
+              </p>
+            </>
           )}
-          <div className="grid gap-2 sm:grid-cols-3">
-            {cantidad('descargar', esCj ? '2. Descargar productos de CJ' : '2. Descargar productos más vendidos', 'productos', `Máx. ${LIMITES.descargar}. Una llamada por cada 50.`)}
-            {cantidad('detalle', '3. Completar fichas', 'fichas', `Máx. ${LIMITES.detalle}. Una llamada por ficha (la más popular primero).`)}
-            {cantidad('envio', '4. Cotizar envío mundial', 'productos', `Máx. ${LIMITES.envio}. Cada producto hace hasta ${esCj ? '30 llamadas a CJ (1 por segundo)' : '12 llamadas a AliExpress'}.`, 'gradient')}
+
+          <p className="text-[11px] text-muted-foreground">
+            {seguira && seguira > 1 ? `Seguirá desde la página ${seguira}. ` : 'Empezará por la página 1. '}
+            {seguira && seguira > 1 && (
+              <button
+                type="button"
+                className="text-indigo-300 underline-offset-2 hover:underline"
+                disabled={trabajando !== null}
+                onClick={() => {
+                  guardarCursor(claveActual, 1);
+                  setSeguira(1);
+                }}
+              >
+                Empezar desde el principio
+              </button>
+            )}
+          </p>
+          {cantidad('descargar', `Descargar de ${nombre}`, 'productos', `Máx. ${LIMITES.descargar} por pulsación. Una llamada por cada ${tamanoPagina}, de una en una.`, 'gradient')}
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          {cantidad('detalle', '3. Completar fichas', 'fichas', `Máx. ${LIMITES.detalle}. Una llamada por ficha (la más popular primero).`)}
+          {cantidad('envio', '4. Cotizar envío mundial', 'productos', `Máx. ${LIMITES.envio}. Cada producto hace hasta ${esCj ? '30 llamadas a CJ (1 por segundo)' : '12 llamadas a AliExpress'}.`)}
+        </div>
+        {progreso && (
+          <div className="flex flex-wrap items-center gap-2 text-[12px] text-indigo-200">
+            <Loader2 className="size-3.5 animate-spin" /> {progreso}
+            <Button size="sm" variant="outline" className="h-7" onClick={() => (detener.current = true)}>
+              Detener
+            </Button>
           </div>
-          {progreso && (
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-indigo-200">
-              <Loader2 className="size-3.5 animate-spin" /> {progreso}
-              <Button size="sm" variant="outline" className="h-7" onClick={() => (detener.current = true)}>
-                Detener
-              </Button>
-            </div>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {!esCj && boton('autorizar', '5. Autorizar la cuenta de AliExpress')}
-          {!esCj && boton('sondear', 'Sondear el feed (máx. 5 llamadas)')}
-        </div>
+        )}
         {esCj && (
           <div className="space-y-1.5">
             <p className="text-[12px] text-muted-foreground">
@@ -567,7 +734,7 @@ function TarjetaProveedor({ proveedor }: { proveedor: Proveedor }) {
         <p className="text-[12px] text-muted-foreground">
           {esCj
             ? 'Orden recomendado: categorías, productos y fichas. El envío se cotiza desde cada almacén con stock hasta 12 países principales (España, EE. UU., México, Reino Unido, Alemania, Francia, Italia, Canadá, Australia, Brasil, Colombia y Chile).'
-            : 'Orden recomendado: probar, descargar y completar una ficha. AliExpress todavía no está comprobado con tus claves: si algo falla, el mensaje de error dice exactamente qué responde AliExpress.'}
+            : 'Orden recomendado: categorías, productos y fichas. La cuenta autorizada de AliExpress hace falta para completar fichas y cotizar envíos.'}
         </p>
         {resultado && <Resultado r={resultado} />}
       </CardContent>

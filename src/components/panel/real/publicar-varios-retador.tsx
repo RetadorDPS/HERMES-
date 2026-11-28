@@ -7,16 +7,20 @@
  * publicar un producto (`src/lib/retador/plan-publicacion.ts`): variantes con existencias y código válido, precio con la
  * regla de margen y nunca bajo el mínimo de Retador, descripción y fotos del proveedor y categoría sugerida. La persona
  * revisa la lista, puede cambiar la categoría o quitar productos y pulsa «Publicar»; el servidor vuelve a comprobarlo todo.
+ *
+ * Si a un producto le falta la ficha o el envío, aquí mismo se completa: la persona dice a dónde quiere vender y se completa la
+ * ficha y se cotiza el envío a esos países (EE. UU. siempre, porque Retador lo pide), de uno en uno y con el cupo de su plan.
  */
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AlertCircle, CheckCircle2, Loader2, Send, Truck, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, Lock, Send, Truck, X } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { DEFAULT_RULE } from '@/lib/pricing';
 import type { CatalogRow } from '@/lib/catalog';
 import { reglaPredeterminada } from '@/lib/real/datos';
-import { cotizarEnvio } from '@/lib/real/buscar';
+import { completarFicha, cotizarEnvio, cupoPreparar, type CupoPreparar } from '@/lib/real/buscar';
+import { nombrePais, PAISES_PRINCIPALES } from '@/lib/paises';
 import { llamarTienda, obtenerTiendaRetador, type CategoriaRetador, type TiendaRetador } from '@/lib/real/retador';
 import { planPublicacion, type PlanPublicacion, type Preparacion } from '@/lib/retador/plan-publicacion';
 import { cn } from '@/lib/utils';
@@ -41,6 +45,12 @@ type Fila = {
 
 const usd = (n: number) => `${n.toFixed(2)} USD`;
 const faltaEnvio = (f: Fila) => f.estado === 'no' && /envío cotizado/i.test(f.mensaje ?? '');
+const faltaFicha = (f: Fila) => f.estado === 'no' && /completar la ficha/i.test(f.mensaje ?? '');
+/** Lo que se puede arreglar aquí mismo: la ficha o el envío. Lo demás (sin stock, sin fotos…) no depende de la persona. */
+const sePuedePreparar = (f: Fila) => faltaFicha(f) || faltaEnvio(f);
+/** Países a elegir para vender: Cuba primero (se calcula con el tramo hasta EE. UU.) y después los principales. */
+const PAISES_VENTA = ['CU', 'US', ...PAISES_PRINCIPALES.filter((p) => p !== 'US')];
+const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function PublicarVariosEnRetador({ items, maximo = MAX_PUBLICAR_VARIOS, onClose }: { items: CatalogRow[]; maximo?: number; onClose: () => void }) {
   const tope = Math.max(1, Math.min(maximo, MAX_PUBLICAR_VARIOS));
@@ -51,6 +61,10 @@ export function PublicarVariosEnRetador({ items, maximo = MAX_PUBLICAR_VARIOS, o
   const [trabajando, setTrabajando] = useState<null | 'cotizando' | 'publicando'>(null);
   const [precioAuto, setPrecioAuto] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // A dónde quiere vender (EE. UU. siempre: Retador lo pide para publicar)
+  const [paises, setPaises] = useState<string[]>(['US']);
+  const [cupo, setCupo] = useState<CupoPreparar | null>(null);
+  const [avance, setAvance] = useState<string | null>(null);
 
   const cambiar = (id: string, parche: Partial<Fila>) => setFilas((xs) => xs.map((f) => (f.item.id === id ? { ...f, ...parche } : f)));
 
@@ -100,29 +114,71 @@ export function PublicarVariosEnRetador({ items, maximo = MAX_PUBLICAR_VARIOS, o
   const opciones = useMemo(() => categorias.flatMap((c) => c.subcategorias.map((s) => ({ valor: `${c.cat}|${s}`, texto: `${c.nombre} › ${s}` }))), [categorias]);
   const elegidas = filas.filter((f) => f.estado === 'listo' && f.incluir);
   const sinCategoria = elegidas.filter((f) => !f.categoria);
-  const conFaltaEnvio = filas.filter(faltaEnvio);
+  const porPreparar = filas.filter(sePuedePreparar);
+  const sinFicha = porPreparar.filter(faltaFicha).length;
   const hechas = filas.filter((f) => f.estado === 'hecho').length;
   const fallidas = filas.filter((f) => f.estado === 'error').length;
   const terminado = !trabajando && (hechas > 0 || fallidas > 0);
 
-  /** Cotiza el envío a EE. UU. de los que lo necesitan (de uno en uno) y vuelve a prepararlos. */
-  async function cotizarLosQueFaltan() {
+  // Cupo para completar fichas y cotizar envíos (solo hace falta si hay algo que preparar)
+  useEffect(() => {
+    if (preparando || !porPreparar.length || cupo) return;
+    cupoPreparar().then(setCupo).catch(() => undefined);
+  }, [preparando, porPreparar.length, cupo]);
+
+  const cambiarPais = (pais: string) => {
+    if (pais === 'US') return;
+    setPaises((xs) => (xs.includes(pais) ? xs.filter((x) => x !== pais) : [...xs, pais]));
+  };
+
+  /** Una llamada a la puerta central; si el proveedor está ocupado con otra consulta se espera un poco y se reintenta una vez. */
+  async function conReintento<T>(paso: () => Promise<T>): Promise<T> {
+    try {
+      return await paso();
+    } catch (e) {
+      if (!/otra consulta al proveedor/i.test((e as Error).message)) throw e;
+      await esperar(5000);
+      return await paso();
+    }
+  }
+
+  /**
+   * Completa lo que falta (ficha y envío a los países elegidos) de los productos que lo necesitan, DE UNO EN UNO (nunca en
+   * paralelo contra el proveedor), y los vuelve a preparar. Si se llega al límite del plan se para y se dice.
+   */
+  async function prepararLoQueFalta() {
     if (!tienda) return;
     setTrabajando('cotizando');
     setError(null);
     const regla = await reglaPredeterminada().catch(() => null);
-    for (const f of conFaltaEnvio) {
-      cambiar(f.item.id, { estado: 'preparando', mensaje: 'Cotizando el envío…' });
+    // Cuba se calcula con el tramo del proveedor hasta EE. UU., que ya va siempre
+    const destinos = ['US', ...new Set(paises.filter((p) => p !== 'US' && p !== 'CU'))];
+    const lista = filas.filter(sePuedePreparar);
+    let n = 0;
+    for (const f of lista) {
+      n += 1;
+      setAvance(`Preparando ${n} de ${lista.length}…`);
       try {
-        await cotizarEnvio(f.item.id, [PAIS_ENVIO_PUBLICAR]);
+        if (faltaFicha(f)) {
+          cambiar(f.item.id, { estado: 'preparando', mensaje: 'Completando la ficha…' });
+          await conReintento(() => completarFicha(f.item.id));
+        }
+        cambiar(f.item.id, { estado: 'preparando', mensaje: `Cotizando el envío a ${destinos.length === 1 ? nombrePais('US') : `${destinos.length} países`}…` });
+        await conReintento(() => cotizarEnvio(f.item.id, destinos));
       } catch (e) {
-        cambiar(f.item.id, { estado: 'no', mensaje: (e as Error).message });
-        // El límite del plan no se va a arreglar con el siguiente: se para aquí
-        if (/l[ií]mite/i.test((e as Error).message)) break;
+        const texto = (e as Error).message;
+        cambiar(f.item.id, { estado: 'no', mensaje: texto });
+        // El límite del plan no se arregla con el siguiente: se para aquí y se dice claro
+        if (/l[ií]mite|sube de plan|prueba para/i.test(texto)) {
+          setError(`${texto} Los productos que faltan se quedan sin preparar; no se ha gastado nada por ellos.`);
+          break;
+        }
         continue;
       }
       await preparar(tienda, f.item, regla);
     }
+    setAvance(null);
+    setCupo(null); // se vuelve a leer lo que queda
     setTrabajando(null);
   }
 
@@ -165,7 +221,7 @@ export function PublicarVariosEnRetador({ items, maximo = MAX_PUBLICAR_VARIOS, o
               {items.length > tope && ` (tu plan publica hasta ${tope} a la vez; los demás, en la siguiente tanda)`}
             </p>
           </div>
-          <button onClick={onClose} disabled={trabajando === 'publicando'} aria-label="Cerrar" className="rounded-md p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground disabled:opacity-40">
+          <button onClick={onClose} disabled={Boolean(trabajando)} aria-label="Cerrar" className="rounded-md p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground disabled:opacity-40">
             <X className="size-4" />
           </button>
         </header>
@@ -193,15 +249,61 @@ export function PublicarVariosEnRetador({ items, maximo = MAX_PUBLICAR_VARIOS, o
                 categoría sugerida. El comprador paga el envío aparte. Si quieres cambiar algo más, publica ese producto desde su ficha.
               </p>
 
-              {conFaltaEnvio.length > 0 && !trabajando && !preparando && (
-                <Alert variant="info" title={`${conFaltaEnvio.length} ${conFaltaEnvio.length === 1 ? 'producto necesita' : 'productos necesitan'} el envío cotizado`}>
-                  Retador pide el envío hasta su almacén de EE. UU. antes de publicar. Se cotiza con tu plan (lo ya cotizado no gasta nada).
-                  <div className="mt-2">
-                    <Button size="sm" variant="outline" onClick={cotizarLosQueFaltan}>
-                      <Truck className="size-4" /> Cotizar el envío y revisar otra vez
-                    </Button>
+              {trabajando === 'cotizando' && avance && (
+                <div className="space-y-1 rounded-xl border border-indigo-400/25 bg-indigo-500/[0.06] p-3">
+                  <p className="flex items-center gap-2 text-[12px] text-indigo-200">
+                    <Loader2 className="size-4 animate-spin" /> {avance}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">Se hace de uno en uno para no saturar al proveedor. No cierres esta ventana.</p>
+                </div>
+              )}
+              {porPreparar.length > 0 && !preparando && !trabajando && (
+                <div className="space-y-2.5 rounded-xl border border-indigo-400/25 bg-indigo-500/[0.06] p-3">
+                  <p className="text-[12.5px] font-medium">
+                    {porPreparar.length === 1 ? 'A 1 producto le falta' : `A ${porPreparar.length} productos les falta`}{' '}
+                    {sinFicha === porPreparar.length ? 'la ficha y el envío' : sinFicha > 0 ? 'la ficha o el envío' : 'el envío cotizado'}
+                  </p>
+                  <p className="text-[11.5px] leading-relaxed text-muted-foreground">Se completa aquí mismo, de uno en uno. Dinos a dónde quieres vender y se cotiza el envío a esos países.</p>
+                  <div>
+                    <p className="mb-1.5 text-[12px] font-medium">¿A dónde quieres vender?</p>
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Países donde quieres vender">
+                      {PAISES_VENTA.map((pais) => {
+                        const fijo = pais === 'US';
+                        const marcado = fijo || paises.includes(pais);
+                        return (
+                          <button
+                            key={pais}
+                            type="button"
+                            aria-pressed={marcado}
+                            disabled={fijo || Boolean(trabajando)}
+                            onClick={() => cambiarPais(pais)}
+                            className={cn(
+                              'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px]',
+                              marcado ? 'border-indigo-400/60 bg-indigo-500/20 text-indigo-100' : 'border-white/10 text-muted-foreground hover:text-foreground',
+                              fijo && 'cursor-default',
+                            )}
+                          >
+                            {fijo && <Lock className="size-3" />}
+                            {nombrePais(pais)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                      EE. UU. va siempre: Retador lo pide para publicar.{paises.includes('CU') && ' Para Cuba se usa ese mismo tramo hasta EE. UU., así que no gasta más.'}
+                    </p>
                   </div>
-                </Alert>
+                  <p className="text-[11px] leading-snug text-muted-foreground">
+                    {cupo?.ilimitado
+                      ? 'Tu cuenta no tiene límite para completar fichas ni cotizar envíos.'
+                      : `Cada ficha gasta 1 de tu plan y cada país nuevo de cada producto, 1 cotización; lo que ya está al día no gasta nada.${
+                          cupo?.fichas && cupo?.cotizaciones ? ` Hoy te quedan ${cupo.fichas.restanteDia} fichas y ${cupo.cotizaciones.restanteDia} cotizaciones.` : ''
+                        }`}
+                  </p>
+                  <Button size="sm" variant="gradient" onClick={prepararLoQueFalta}>
+                    <Truck className="size-4" /> Completar y cotizar {porPreparar.length === 1 ? 'este producto' : `estos ${porPreparar.length}`}
+                  </Button>
+                </div>
               )}
 
               <ul className="space-y-2">

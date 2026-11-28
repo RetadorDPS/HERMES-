@@ -120,6 +120,8 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     }
   }, []);
   const [freeShipping, setFreeShipping] = useState(false);
+  // Solo los que ya tienen ficha y envío a EE. UU. (lo que pide Retador para publicar)
+  const [listos, setListos] = useState(false);
   const [trending, setTrending] = useState(false);
   const [minRating, setMinRating] = useState('');
   const [sort, setSort] = useState(ORDEN_INICIAL);
@@ -140,6 +142,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       if (shipFrom.length) p.set('shipFrom', shipFrom.join(','));
       if (destino) p.set('shipTo', destino);
       if (freeShipping) p.set('freeShipping', '1');
+      if (listos) p.set('listos', '1');
       if (trending) p.set('trending', '1');
       if (minRating) p.set('minRating', minRating);
       p.set('sort', sort);
@@ -147,7 +150,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
       p.set('pageSize', String(pageSize));
       return p.toString();
     },
-    [q, category, provider, minPrice, maxPrice, shipFrom, destino, freeShipping, trending, minRating, sort, pageSize],
+    [q, category, provider, minPrice, maxPrice, shipFrom, destino, freeShipping, listos, trending, minRating, sort, pageSize],
   );
 
   // `anadir` = carga continua: se suman los de la página siguiente sin repetir ninguno
@@ -241,6 +244,7 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
     (minPrice || maxPrice) && { label: `${minPrice || 0}–${maxPrice || '∞'} €`, clear: () => { setMinPrice(''); setMaxPrice(''); } },
     shipFrom.length > 0 && { label: `almacén: ${shipFrom.map(nombreAlmacen).join(' + ')}`, clear: () => setShipFrom([]) },
     freeShipping && { label: 'envío gratis', clear: () => setFreeShipping(false) },
+    listos && { label: 'listos para publicar', clear: () => setListos(false) },
     trending && { label: 'top ventas', clear: () => setTrending(false) },
     minRating && { label: `≥ ${minRating}★`, clear: () => setMinRating('') },
   ].filter(Boolean) as { label: string; clear: () => void }[];
@@ -511,6 +515,10 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
               <Truck className="size-3.5 text-indigo-300" /> Solo con envío gratis a algún destino cotizado
             </label>
             <label className="inline-flex cursor-pointer items-center gap-2 text-[12px]">
+              <input type="checkbox" checked={listos} onChange={(e) => { setListos(e.target.checked); setPage(1); }} className="size-3.5 accent-indigo-500" />
+              Solo listos para publicar (con ficha y envío a EE. UU. cotizado)
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2 text-[12px]">
               <input type="checkbox" checked={trending} onChange={(e) => { setTrending(e.target.checked); setPage(1); }} className="size-3.5 accent-indigo-500" />
               <span title="El 20 % de productos con más pedidos de su proveedor" className="inline-flex items-center gap-2"><Flame className="size-3.5 text-orange-300" /> Solo top ventas (el 20 % más pedido de cada proveedor)</span>
             </label>
@@ -538,6 +546,18 @@ export function CatalogBrowser({ initial, credentials, isAdmin, ruleName, totalC
           <p className="min-w-0 text-[11.5px] text-muted-foreground">
             {eligiendo ? `Toca los productos que quieras publicar (hasta ${maxElegir}).` : 'Publica varios productos en Retador de una vez.'}
           </p>
+          <button
+            type="button"
+            aria-pressed={listos}
+            title="Con la ficha completa y el envío a EE. UU. cotizado. Los demás también se pueden elegir: al publicar se completa lo que falte."
+            onClick={() => {
+              setListos((x) => !x);
+              setPage(1);
+            }}
+            className={`h-8 shrink-0 rounded-md border px-2.5 text-[12px] ${listos ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200' : 'border-white/10 text-muted-foreground hover:text-foreground'}`}
+          >
+            {listos ? '✓ Listos para publicar' : 'Solo listos'}
+          </button>
           <Button
             size="sm"
             variant={eligiendo ? 'outline' : 'default'}

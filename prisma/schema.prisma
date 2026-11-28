@@ -786,6 +786,8 @@ model CatalogItem {
   /// País desde el que se envía (almacén). Vacío = no informado.
   shipFrom        String?
   freeShipping    Boolean      @default(false)
+  /// Ficha del proveedor con variantes: la calcula la base con un disparador desde CatalogItemDetail
+  fichaCompleta   Boolean      @default(false)
   isTrending      Boolean      @default(false)
   tags            String[]
   /// Variantes, envíos y reseñas normalizados (mismo formato que el importador)
