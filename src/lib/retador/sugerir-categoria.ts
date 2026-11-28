@@ -125,27 +125,39 @@ function normalizar(texto: string): string {
 }
 
 /**
- * Propone una categoría de Retador. La categoría del proveedor pesa el doble que el título (es más fiable que un título largo con
- * palabras de relleno). Devuelve `null` si nada encaja o si lo que encaja no está en la lista que informa Retador.
+ * Propone una categoría de Retador. Pesos: el ÚLTIMO nivel de la categoría del proveedor (lo más concreto) y el título valen
+ * 2 cada uno; los niveles de arriba solo 0,5 (son muy generales: «Home, Garden & Furniture» hacía que una pirámide decorativa
+ * guardada por CJ en «Home Storage › Home Office Storage» saliera como «Muebles»). En empate gana la regla que encaja con el
+ * TÍTULO (dice qué es el producto) y, si sigue el empate, la que va antes (más concreta). Devuelve `null` si nada encaja o si lo
+ * que encaja no está en la lista que informa Retador.
  */
 export function sugerirCategoria(categorias: CategoriaRetador[], titulo: string, categoriaProveedor?: string | null): SugerenciaCategoria | null {
-  const deCategoria = normalizar(categoriaProveedor ?? '');
+  const niveles = String(categoriaProveedor ?? '').split(/\s*(?:>|›|\/)\s*/).filter(Boolean);
+  const hoja = normalizar(niveles[niveles.length - 1] ?? '');
+  const arriba = normalizar(niveles.slice(0, -1).join(' '));
+  const deCategoria = `${arriba} ${hoja}`;
   const deTitulo = normalizar(titulo);
-  let mejor: { puntos: number; indice: number } | null = null;
+  let mejor: { puntos: number; deTitulo: number; indice: number } | null = null;
 
   REGLAS.forEach((regla, indice) => {
     const destino = categorias.find((c) => c.cat === regla.cat);
     if (!destino || !destino.subcategorias.includes(regla.subcat)) return; // solo lo que existe en Retador
     let puntos = 0;
+    let enTitulo = 0;
     for (const p of regla.palabras) {
       const clave = normalizar(p).trimEnd();
       const conEspacio = p.endsWith(' ');
       const aparece = (texto: string) => (conEspacio ? texto.includes(clave + ' ') : texto.includes(clave));
-      if (aparece(deCategoria)) puntos += 2;
-      if (aparece(deTitulo)) puntos += 1;
+      if (aparece(hoja)) puntos += 2;
+      else if (aparece(arriba)) puntos += 0.5;
+      if (aparece(deTitulo)) {
+        puntos += 2;
+        enTitulo += 1;
+      }
     }
-    // A igualdad de puntos gana la regla que va antes (más concreta)
-    if (puntos > 0 && (!mejor || puntos > mejor.puntos)) mejor = { puntos, indice };
+    if (puntos <= 0) return;
+    const gana = !mejor || puntos > mejor.puntos || (puntos === mejor.puntos && enTitulo > mejor.deTitulo);
+    if (gana) mejor = { puntos, deTitulo: enTitulo, indice };
   });
 
   const existe = (cat: string, subcat: string) => categorias.find((c) => c.cat === cat && c.subcategorias.includes(subcat));
@@ -154,7 +166,7 @@ export function sugerirCategoria(categorias: CategoriaRetador[], titulo: string,
     const otros = existe('otros', 'Varios');
     return otros ? { cat: 'otros', nombreCat: otros.nombre, subcat: 'Varios', porDefecto: true } : null;
   }
-  const regla = REGLAS[(mejor as { puntos: number; indice: number }).indice];
+  const regla = REGLAS[(mejor as { puntos: number; deTitulo: number; indice: number }).indice];
   let cat = regla.cat;
   let subcat = regla.subcat;
   const texto = `${deCategoria} ${deTitulo}`;

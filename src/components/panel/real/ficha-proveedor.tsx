@@ -195,7 +195,11 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
   };
 
   /** Cotiza un país. Para Cuba se consulta el tramo del proveedor hasta EE. UU. (el cálculo de Cuba lo usa), sin que haga falta explicarlo. */
-  const cotizarPais = (c: string) => ejecutarCj('envio', { paises: [c === 'CU' ? 'US' : c] });
+  const cotizarPais = async (c: string) => {
+    await ejecutarCj('envio', { paises: [c === 'CU' ? 'US' : c] });
+    setDestino(c);
+    setOtroPais('');
+  };
 
   /* ── datos derivados ── */
   const imagenes: string[] = useMemo(() => {
@@ -214,7 +218,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     return [...s].filter((c) => c !== 'CU').sort((a, b) => pais(a).localeCompare(pais(b), 'es'));
   }, [porOrigen, sinServicioGlobal]);
   // Cuba va siempre la primera de la lista (para quien vende o compra allí); no se elige por defecto salvo que el usuario ya la eligiera en el catálogo
-  const destinos = useMemo(() => ['CU', ...destinosReales], [destinosReales]);
+  const destinos = useMemo(() => [...new Set(['CU', ...destinosReales, ...(destino ? [destino] : [])])], [destinosReales, destino]);
   const guardado = useMemo(() => {
     try {
       return window.localStorage.getItem('hermes-destino') || '';
@@ -429,6 +433,14 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                             </li>
                           ))}
                         </ul>
+                      ) : !sinServicioGlobal[destinoActivo] && !filasEnvio.sinServicio.length ? (
+                        <div className="space-y-2 text-[12px]">
+                          <p className="text-muted-foreground">El envío a {pais(destinoActivo)} todavía no está cotizado para este producto.</p>
+                          <Button size="sm" variant="gradient" disabled={trabajando !== null} onClick={() => cotizarPais(destinoActivo)}>
+                            {trabajando === 'envio' && <Loader2 className="size-4 animate-spin" />}
+                            Cotizar envío a {pais(destinoActivo)}
+                          </Button>
+                        </div>
                       ) : (
                         <Alert variant="warning" title={`${nombreProveedor} no envía este artículo a ${pais(destinoActivo)}`}>
                           {(ficha?.variantes ?? []).some((v: any) => (stockPorOrigen(v, item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj').total ?? 0) > 0)

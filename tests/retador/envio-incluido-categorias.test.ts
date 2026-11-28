@@ -52,4 +52,10 @@ assert.equal(s('USB C cable fast', 'Chargers'), 'electronica/Cables y adaptadore
 assert.equal(s('Depiladora eléctrica de doble cabezal para mujer'), 'belleza/Depilación y afeitado');
 assert.equal(s('Pet Hair Remover', 'Pet Hair Removers & Combs'), 'mascotas/Accesorios');
 assert.equal(s('Objeto raro sin pistas', 'Misc'), 'otros/Varios*');
+// Caso real (28/11/2026): CJ guarda una pirámide decorativa en «Home, Garden & Furniture › Home Storage › Home Office Storage»;
+// el nivel de arriba («Furniture») no debe mandar sobre lo que dice el título («Decoration»)
+assert.equal(s('Pyramid Decoration Natural Crystal Gravel Energy Tower', 'Home, Garden & Furniture > Home Storage > Home Office Storage'), 'hogar/Decoración');
+assert.equal(s('Pyramid Decoration Natural Crystal Gravel Energy Tower', 'Home Office Storage'), 'hogar/Decoración');
+// Un mueble de verdad sigue siendo mueble
+assert.equal(s('Wooden coffee table for living room', 'Home, Garden & Furniture > Furniture > Living Room Furniture'), 'hogar/Muebles');
 console.log('categorías: ok');
