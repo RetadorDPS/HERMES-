@@ -158,7 +158,7 @@ const ORDENES_ALI = [
 ];
 
 /** Ideas para variar la descarga (en español: CJ lo traduce solo y AliExpress lo entiende). */
-const IDEAS = ['auriculares', 'reloj inteligente', 'zapatillas', 'vestido', 'juguetes', 'mascotas', 'cocina', 'belleza', 'herramientas', 'coche', 'bebé', 'deporte'];
+const IDEAS = ['teléfonos móviles', 'auriculares', 'reloj inteligente', 'zapatillas', 'vestido', 'juguetes', 'mascotas', 'cocina', 'belleza', 'herramientas', 'coche', 'bebé', 'deporte'];
 
 type ModoAli = 'busqueda' | 'listado';
 

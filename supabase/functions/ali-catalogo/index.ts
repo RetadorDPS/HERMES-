@@ -364,11 +364,16 @@ Deno.serve(async (req) => {
     const pagina = Math.max(1, Math.min(Math.floor(Number(cuerpo?.paginaInicial ?? 1)) || 1, 500));
     const tamano = Math.max(10, Math.min(Math.floor(Number(cuerpo?.tamano ?? 50)) || 50, 50));
     const sortBy = ORDEN_BUSQUEDA_ALI[String(cuerpo?.orden ?? "")];
+    // Igual que el buscador: si se busca un TELÉFONO (y no un accesorio) y no se eligió categoría, se busca dentro de
+    // «Teléfonos móviles», como hace la web de AliExpress; si no, «smartphone» o «Samsung S24» traen sobre todo fundas.
+    const movil = !categoryId && palabra && buscaUnMovil(palabra);
+    const categoriaBusqueda = categoryId ?? (movil ? CATEGORIA_MOVILES : undefined);
+    const nombreGuardado = nombreCategoria ?? (movil ? "Teléfonos móviles" : null);
     const pedir = (conOrden: boolean, clave: string | undefined) =>
-      ali("aliexpress.ds.text.search", { keyWord: clave, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina, ...(conOrden && sortBy ? { sortBy } : {}), ...(categoryId ? { categoryId } : {}) });
-    let clave: string | undefined = palabra || undefined;
+      ali("aliexpress.ds.text.search", { keyWord: clave, local: "es_ES", countryCode: "US", currency: MONEDA, pageSize: tamano, pageIndex: pagina, ...(conOrden && sortBy ? { sortBy } : {}), ...(categoriaBusqueda ? { categoryId: categoriaBusqueda } : {}) });
+    let clave: string | undefined = (movil && SOLO_PALABRAS_MOVIL.test(palabra) ? "smartphone" : palabra) || undefined;
     let r = await pedir(true, clave);
-    const avisos: string[] = [];
+    const avisos: string[] = movil ? ["Búsqueda de teléfonos: se buscó dentro de la categoría «Teléfonos móviles» para no traer fundas"] : [];
     // AliExpress a veces contesta «bien» pero con un código propio de error y sin productos (p. ej. «RECOMMEND_ERROR» si se busca solo por categoría)
     const sinProductosPorError = (x: any) => {
       const rz = x?.datos?.aliexpress_ds_text_search_response ?? {};
@@ -405,8 +410,8 @@ Deno.serve(async (req) => {
           externalId: id,
           title: String(i.title ?? i.product_title ?? "Producto AliExpress").slice(0, 250),
           description: "",
-          categoryId: categoryId ?? null,
-          categoryName: nombreCategoria,
+          categoryId: categoriaBusqueda ?? null,
+          categoryName: nombreGuardado,
           imageUrl: imagen,
           images: imagen ? [imagen] : [],
           currency: MONEDA,
@@ -723,13 +728,29 @@ Deno.serve(async (req) => {
   /* ───────────────────────── detalle (ficha completa) ───────────────────────── */
   if (accion === "detalle") {
     const ids: string[] = (Array.isArray(cuerpo?.ids) ? cuerpo.ids : []).map(String).slice(0, 2);
-    const pais = String(cuerpo?.pais ?? "ES").toUpperCase().slice(0, 2);
+    // Por defecto EE. UU.: es el país con el que cobra Retador y donde AliExpress vende más productos para dropshipping.
+    // Muchos productos (p. ej. teléfonos de la versión de EE. UU.) no devuelven variantes para España y otros al revés:
+    // si el primer país no trae variantes se prueba UNA vez con el otro (como mucho 2 llamadas por ficha).
+    const paisPedido = String(cuerpo?.pais ?? "US").toUpperCase().slice(0, 2);
     if (!ids.length) return responder({ ok: false, error: "Indica al menos un artículo", ...diagnostico });
     const { data: items } = await servicio.from("CatalogItem").select("id,externalId,title,description").eq("provider", PROVEEDOR).in("id", ids);
     const informe: any[] = [];
+    const skusDe = (x: any) => {
+      const n = x?.datos?.aliexpress_ds_product_get_response?.result ?? x?.datos?.aliexpress_ds_product_get_response ?? {};
+      return lista(n.ae_item_sku_info_dtos?.ae_item_sku_info_d_t_o ?? n.ae_item_sku_info_dtos);
+    };
     for (const item of items ?? []) {
       const pid = String(item.externalId);
-      const r = await ali("aliexpress.ds.product.get", { product_id: pid, target_currency: MONEDA, target_language: "ES", country: pais, ship_to_country: pais });
+      let pais = paisPedido;
+      let r = await ali("aliexpress.ds.product.get", { product_id: pid, target_currency: MONEDA, target_language: "ES", country: pais, ship_to_country: pais });
+      if (r.ok && !skusDe(r).length) {
+        const otro = pais === "US" ? "ES" : "US";
+        const r2 = await ali("aliexpress.ds.product.get", { product_id: pid, target_currency: MONEDA, target_language: "ES", country: otro, ship_to_country: otro });
+        if (r2.ok && skusDe(r2).length) {
+          r = r2;
+          pais = otro;
+        }
+      }
       if (!r.ok) {
         if (filaNuevaId && filaNuevaId === item.id) await servicio.from("CatalogItem").delete().eq("id", item.id);
         informe.push({ id: item.id, ok: false, error: `Detalle: ${r.mensaje}`, codigoAli: r.codigo });
@@ -745,9 +766,10 @@ Deno.serve(async (req) => {
       const imagenes = sinRepetidos(lista(media.image_urls).map(String));
       const peso = numeroONulo(paquete.gross_weight); // kg
       const variantes = variantesDeAli(skus, paquete);
-      if (filaNuevaId && filaNuevaId === item.id && !variantes.length) {
-        await servicio.from("CatalogItem").delete().eq("id", item.id);
-        informe.push({ id: item.id, ok: false, error: "AliExpress no devolvió variantes de ese producto: puede estar retirado o no estar disponible para el dropshipping." });
+      // Sin variantes no hay ficha: no se guarda una vacía (ni se pisa la que hubiera) y se dice el motivo real
+      if (!variantes.length) {
+        if (filaNuevaId && filaNuevaId === item.id) await servicio.from("CatalogItem").delete().eq("id", item.id);
+        informe.push({ id: item.id, ok: false, error: "AliExpress no tiene ahora este producto a la venta para dropshipping (no devolvió ninguna variante ni para EE. UU. ni para España). Puede estar agotado o retirado." });
         continue;
       }
       const precios = variantes.map((v) => v.precio).filter((p): p is number => p !== null);
@@ -785,7 +807,7 @@ Deno.serve(async (req) => {
         resenas: { total: totalResenas, media: valoracion, lista: [] },
         enlace: `https://www.aliexpress.com/item/${pid}.html`,
         fuentes: { detalle: true, variantes: variantes.length > 0, inventario: stockTotal > 0, resenas: totalResenas !== null },
-        avisos: variantes.length ? [] : ["AliExpress no devolvió variantes: puede hacer falta la autorización de la cuenta"],
+        avisos: [] as string[],
         actualizado: ahoraIso(),
       };
       const { error: eDet } = await servicio.from("CatalogItemDetail").upsert({ itemId: item.id, ficha, raw: { ...((previa?.raw as any) ?? {}), producto: nodo }, fetchedAt: ahoraIso() }, { onConflict: "itemId" });
@@ -821,7 +843,13 @@ Deno.serve(async (req) => {
     const { data: item } = await servicio.from("CatalogItem").select("externalId").eq("id", id).maybeSingle();
     if (!det || !item) return responder({ ok: false, error: "Primero hay que completar la ficha de este artículo", ...diagnostico });
     const ficha: any = det.ficha ?? {};
-    const sku = (ficha.variantes ?? []).filter((v: any) => v?.vid).sort((a: any, b: any) => (a.precio ?? 1e9) - (b.precio ?? 1e9))[0];
+    // Se cotiza con una variante que TENGA existencias (la más barata de ellas): con una agotada AliExpress no devuelve ningún
+    // método de envío y el producto parecía «sin envío» aunque otra variante sí se pudiera mandar (pasó con el POCO X8 Pro Max).
+    const conVid = (ficha.variantes ?? []).filter((v: any) => v?.vid);
+    const existencias = (v: any) => (Array.isArray(v?.stock) ? v.stock.reduce((a: number, x: any) => a + (typeof x?.total === "number" ? x.total : 0), 0) : 0);
+    const porPrecio = (a: any, b: any) => (a.precio ?? 1e9) - (b.precio ?? 1e9);
+    const sku = [...conVid.filter((v: any) => existencias(v) > 0)].sort(porPrecio)[0] ?? [...conVid].sort(porPrecio)[0];
+    const sinExistencias = conVid.length > 0 && conVid.every((v: any) => existencias(v) <= 0);
     // El almacén de salida NO se supone: lo dice AliExpress en cada cotización (`ship_from_country`) y puede cambiar según el destino.
     const envio: any = { origen: ficha.envio?.origen ?? null, porOrigen: { ...(ficha.envio?.porOrigen ?? {}) }, sinServicio: { ...(ficha.envio?.sinServicio ?? {}) } };
     const crudoEnvio: Record<string, any> = { ...(((det.raw as any)?.envio) ?? {}) };
@@ -866,7 +894,7 @@ Deno.serve(async (req) => {
         };
       });
       if (!opciones.length) {
-        envio.sinServicio[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), error: "AliExpress no devolvió ningún método de envío para este país" };
+        envio.sinServicio[destino] = { variante: sku?.vid ?? null, actualizado: ahoraIso(), error: sinExistencias ? "AliExpress no tiene existencias de este producto ahora mismo y no ofrece envío" : "AliExpress no devolvió ningún método de envío para este país" };
         for (const o of Object.keys(envio.porOrigen)) delete envio.porOrigen[o][destino];
         continue;
       }

@@ -21,6 +21,7 @@ import { ElegirDestino, type DestinoPublicacion } from './destino-publicacion';
 import { PublicarEnRetador } from './publicar-retador';
 import Link from 'next/link';
 import { envioACuba } from '@/lib/retador/envio-cuba';
+import { stockPorOrigen } from '../../../../supabase/functions/_compartido/retador-stock';
 import { obtenerTiendaRetador } from '@/lib/real/retador';
 
 /* ───────────── utilidades de presentación ───────────── */
@@ -130,7 +131,9 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
       if (b.error) throw new Error(b.error.message);
       if (!a.data) throw new Error('No se encontró el artículo');
       setItem(a.data);
-      setFicha((b.data as any)?.ficha ?? null);
+      const leida = (b.data as any)?.ficha ?? null;
+      // Una ficha sin variantes no sirve (ni para el envío ni para publicar): se trata como «por completar»
+      setFicha(leida && Array.isArray(leida.variantes) && leida.variantes.length ? leida : null);
       setEsAdmin(perfil?.perfil?.role === 'ADMIN');
       setFoto(0);
     } catch (e) {
@@ -180,7 +183,13 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
     } else if (avisosProveedor.length) {
       extraTexto = ` Avisos del proveedor: ${avisosProveedor.slice(0, 2).join(' · ')}.`;
     }
-    setAviso(`${data.mensaje ?? 'Hecho'}.${extraTexto}`.replace('..', '.'));
+    // «Ya estaban consultados»: si esos países no tienen envío, se dice claro (antes parecía que el botón no hacía nada)
+    const pedidos: string[] = accion === 'envio' ? (Array.isArray(cuerpo.paises) ? (cuerpo.paises as string[]) : []) : [];
+    const sinEnvio = pedidos.filter((c) => ficha?.envio?.sinServicio?.[c]);
+    if (data.yaAlDia && pedidos.length && sinEnvio.length === pedidos.length) {
+      const prov = item?.provider === 'ALIEXPRESS' ? 'AliExpress' : 'CJ';
+      setAviso(`${prov} ya respondió hace poco que no envía este producto a ${sinEnvio.map((c) => nombrePais(c)).join(', ')}. No se ha gastado nada de tu cupo.`);
+    } else setAviso(`${data.mensaje ?? 'Hecho'}.${extraTexto}`.replace('..', '.'));
     await cargar(itemId);
     void cargarUso();
   };
@@ -396,7 +405,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                   </div>
 
                   {destinoActivo === 'CU' ? (
-                    <EnvioACubaPanel ficha={ficha} proveedor={item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj'} tarifa={tarifaRetador} esAdmin={esAdmin} trabajando={trabajando === 'envio'} onCotizar={() => cotizarPais('CU')} />
+                    <EnvioACubaPanel ficha={ficha} proveedor={item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj'} nombreProveedor={nombreProveedor} tarifa={tarifaRetador} esAdmin={esAdmin} trabajando={trabajando === 'envio'} onCotizar={() => cotizarPais('CU')} />
                   ) : destinosReales.length === 0 ? (
                     <p className="text-[12px] text-muted-foreground">Todavía no se ha cotizado el envío de este artículo.</p>
                   ) : (
@@ -422,7 +431,9 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                         </ul>
                       ) : (
                         <Alert variant="warning" title={`${nombreProveedor} no envía este artículo a ${pais(destinoActivo)}`}>
-                          Ningún almacén con stock tiene servicio de envío a ese país. No lo ofrezcas allí.
+                          {(ficha?.variantes ?? []).some((v: any) => (stockPorOrigen(v, item?.provider === 'ALIEXPRESS' ? 'aliexpress' : 'cj').total ?? 0) > 0)
+                            ? 'Ningún almacén con stock tiene servicio de envío a ese país. No lo ofrezcas allí.'
+                            : `${nombreProveedor} no tiene existencias de este producto ahora mismo: por eso no ofrece envío. Vuelve a cotizar cuando las tenga.`}
                         </Alert>
                       )}
                       {filasEnvio.sinServicio.length > 0 && filasEnvio.filas.length > 0 && (
@@ -608,7 +619,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-[12px] text-muted-foreground">Este artículo no tiene reseñas en CJ.</p>
+                    <p className="text-[12px] text-muted-foreground">Este artículo no tiene reseñas en {nombreProveedor}.</p>
                   )}
                 </section>
               )}
@@ -664,7 +675,7 @@ export function FichaProveedor({ itemId, onClose }: { itemId: string | null; onC
 }
 
 /** Explicación del envío a Cuba (solo se ve cuando el usuario elige Cuba como destino). */
-function EnvioACubaPanel({ ficha, proveedor, tarifa, esAdmin, trabajando, onCotizar }: { ficha: any; proveedor: 'cj' | 'aliexpress'; tarifa: { hubUsdPorLibra: number; diasHubCuba: [number, number] } | null; esAdmin: boolean; trabajando: boolean; onCotizar: () => void }) {
+function EnvioACubaPanel({ ficha, proveedor, nombreProveedor, tarifa, esAdmin, trabajando, onCotizar }: { ficha: any; proveedor: 'cj' | 'aliexpress'; nombreProveedor: string; tarifa: { hubUsdPorLibra: number; diasHubCuba: [number, number] } | null; esAdmin: boolean; trabajando: boolean; onCotizar: () => void }) {
   const r = useMemo(() => envioACuba(ficha, proveedor, tarifa), [ficha, proveedor, tarifa]);
   const rango = (min: number, max: number) => (min === max ? usd(min) : `${usd(min)} – ${usd(max)}`);
   if (!r.ok) {
@@ -680,6 +691,22 @@ function EnvioACubaPanel({ ficha, proveedor, tarifa, esAdmin, trabajando, onCoti
         </p>
       );
     }
+    // El envío a Cuba sale del tramo hasta EE. UU.: si el proveedor no tiene existencias o no envía a EE. UU., no hay nada que cotizar
+    const variantes: any[] = Array.isArray(ficha?.variantes) ? ficha.variantes : [];
+    const conExistencias = variantes.some((v) => (stockPorOrigen(v, proveedor).total ?? 0) > 0);
+    const usCotizado = Object.values((ficha?.envio?.porOrigen ?? {}) as Record<string, any>).some((m) => (m?.US?.opciones ?? []).length > 0);
+    const usSinEnvio = Boolean(ficha?.envio?.sinServicio?.US) && !usCotizado;
+    if (!conExistencias) {
+      return <p className="text-[12px] text-amber-200/90">{nombreProveedor} no tiene existencias de este producto ahora mismo, así que no se puede enviar a Cuba. Vuelve a mirarlo más adelante.</p>;
+    }
+    if (usSinEnvio) {
+      return (
+        <p className="text-[12px] text-amber-200/90">
+          No se puede enviar a Cuba: el envío a Cuba pasa por EE. UU. y {nombreProveedor} no envía este producto a EE. UU.
+        </p>
+      );
+    }
+    if (usCotizado) return <p className="text-[12px] text-amber-200/90">No se puede calcular el envío a Cuba: falta {r.falta}.</p>;
     return (
       <div className="space-y-2 text-[12px]">
         <p className="text-muted-foreground">El envío a Cuba todavía no está cotizado para este producto.</p>
